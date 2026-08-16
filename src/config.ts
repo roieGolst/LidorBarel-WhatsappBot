@@ -36,6 +36,34 @@ const configSchema = z.object({
 
   /** Redis connection string — BullMQ queues only, never authoritative state. */
   redisUrl: z.url({ protocol: /^rediss?$/ }),
+
+  // --- Meta WhatsApp Cloud API ---------------------------------------------
+  //
+  // Optional as a group: the app runs without them so the conversation workflow
+  // can be developed and tested against a fake transport. `assertWhatsAppConfig`
+  // turns a missing value into a clear failure at the point of use instead of a
+  // confusing 401 from Meta.
+
+  /** App secret, used to verify the X-Hub-Signature-256 header on webhooks. */
+  metaAppSecret: z.string().min(1).optional(),
+
+  /**
+   * Shared secret echoed during Meta's webhook subscription handshake.
+   * Chosen by us, not issued by Meta.
+   */
+  metaWebhookVerifyToken: z.string().min(1).optional(),
+
+  /** Long-lived access token for the WhatsApp Business Account. */
+  metaAccessToken: z.string().min(1).optional(),
+
+  /** Phone number id of the bot's WhatsApp number (not the number itself). */
+  metaPhoneNumberId: z.string().min(1).optional(),
+
+  /** Graph API version, e.g. `v21.0`. Pinned so Meta cannot change it under us. */
+  metaGraphApiVersion: z
+    .string()
+    .regex(/^v\d+\.\d+$/)
+    .default('v21.0'),
 });
 
 export type Config = z.infer<typeof configSchema>;
@@ -54,6 +82,11 @@ function readEnv(env: NodeJS.ProcessEnv): Record<string, unknown> {
     timezone: env.APP_TIMEZONE,
     databaseUrl: env.DATABASE_URL,
     redisUrl: env.REDIS_URL,
+    metaAppSecret: env.META_APP_SECRET,
+    metaWebhookVerifyToken: env.META_WEBHOOK_VERIFY_TOKEN,
+    metaAccessToken: env.META_ACCESS_TOKEN,
+    metaPhoneNumberId: env.META_PHONE_NUMBER_ID,
+    metaGraphApiVersion: env.META_GRAPH_API_VERSION,
   };
 }
 
@@ -65,6 +98,11 @@ const ENV_VAR_NAMES: Record<keyof Config, string> = {
   timezone: 'APP_TIMEZONE',
   databaseUrl: 'DATABASE_URL',
   redisUrl: 'REDIS_URL',
+  metaAppSecret: 'META_APP_SECRET',
+  metaWebhookVerifyToken: 'META_WEBHOOK_VERIFY_TOKEN',
+  metaAccessToken: 'META_ACCESS_TOKEN',
+  metaPhoneNumberId: 'META_PHONE_NUMBER_ID',
+  metaGraphApiVersion: 'META_GRAPH_API_VERSION',
 };
 
 export class ConfigError extends Error {

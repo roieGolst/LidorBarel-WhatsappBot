@@ -19,6 +19,9 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "check": "npm run typecheck && npm run lint && npm run format:check && npm run test",
+    "db:generate": "drizzle-kit generate",
+    "db:migrate": "drizzle-kit migrate",
+    "db:studio": "drizzle-kit studio",
     "db:up": "docker compose up -d",
     "db:down": "docker compose down",
     "db:logs": "docker compose logs -f"

@@ -1,6 +1,6 @@
 import { eq } from 'drizzle-orm';
 import { normalizePhone } from '../../domain/phone.js';
-import type { Database } from '../client.js';
+import type { DbClient } from '../client.js';
 import { contacts, optOuts } from '../schema.js';
 
 export type Contact = typeof contacts.$inferSelect;
@@ -27,7 +27,7 @@ export interface ContactInput {
  * @throws {InvalidPhoneNumberError} if the number cannot be normalized.
  */
 export async function findContactByPhone(
-  db: Database,
+  db: DbClient,
   phone: string,
 ): Promise<Contact | undefined> {
   const normalized = normalizePhone(phone);
@@ -58,7 +58,7 @@ export async function findContactByPhone(
  * Consent is never silently downgraded: see {@link mergeConsent}.
  */
 export async function upsertContactByPhone(
-  db: Database,
+  db: DbClient,
   input: ContactInput,
 ): Promise<Contact> {
   const phone = normalizePhone(input.phone);

@@ -1,6 +1,6 @@
 import { eq } from 'drizzle-orm';
 import { normalizePhone } from '../../domain/phone.js';
-import type { Database } from '../client.js';
+import type { DbClient } from '../client.js';
 import { contacts, optOuts } from '../schema.js';
 
 export type OptOut = typeof optOuts.$inferSelect;
@@ -32,7 +32,7 @@ export type OptOutSource =
  * is when the person first asked.
  */
 export async function recordOptOut(
-  db: Database,
+  db: DbClient,
   phone: string,
   source: OptOutSource,
   reason?: string,
@@ -63,7 +63,7 @@ export async function recordOptOut(
  * Reads `opt_outs` rather than `contacts.do_not_contact` because it is the
  * durable record: a contact row can be deleted or re-imported, this cannot.
  */
-export async function isOptedOut(db: Database, phone: string): Promise<boolean> {
+export async function isOptedOut(db: DbClient, phone: string): Promise<boolean> {
   const normalized = normalizePhone(phone);
   const [found] = await db
     .select({ id: optOuts.id })
@@ -81,7 +81,7 @@ export async function isOptedOut(db: Database, phone: string): Promise<boolean> 
  * the person to have actively agreed again.
  */
 export async function reverseOptOut(
-  db: Database,
+  db: DbClient,
   phone: string,
   consentSource: string,
   consentText: string,

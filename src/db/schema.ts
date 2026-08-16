@@ -1,4 +1,3 @@
-import { sql } from 'drizzle-orm';
 import {
   boolean,
   index,
@@ -237,9 +236,10 @@ export const listings = pgTable(
   },
   (table) => [
     // Re-importing the same external listing updates rather than duplicates.
-    uniqueIndex('listings_source_external_id_unique')
-      .on(table.source, table.externalListingId)
-      .where(sql`${table.externalListingId} IS NOT NULL`),
+    uniqueIndex('listings_source_external_id_unique').on(
+      table.source,
+      table.externalListingId,
+    ),
     index('listings_contact_idx').on(table.contactId),
     index('listings_property_idx').on(table.propertyId),
   ],
@@ -353,9 +353,7 @@ export const messages = pgTable(
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => [
-    uniqueIndex('messages_provider_message_id_unique')
-      .on(table.providerMessageId)
-      .where(sql`${table.providerMessageId} IS NOT NULL`),
+    uniqueIndex('messages_provider_message_id_unique').on(table.providerMessageId),
     index('messages_conversation_idx').on(table.conversationId, table.createdAt),
   ],
 );
@@ -428,9 +426,7 @@ export const campaignReferrals = pgTable(
     receivedAt: timestamp('received_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => [
-    uniqueIndex('campaign_referrals_external_lead_unique')
-      .on(table.externalLeadId)
-      .where(sql`${table.externalLeadId} IS NOT NULL`),
+    uniqueIndex('campaign_referrals_external_lead_unique').on(table.externalLeadId),
     index('campaign_referrals_contact_idx').on(table.contactId),
   ],
 );

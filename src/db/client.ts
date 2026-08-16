@@ -5,6 +5,19 @@ import * as schema from './schema.js';
 
 export type Database = ReturnType<typeof createDatabase>;
 
+/** Transaction handle, as passed to the `db.transaction()` callback. */
+export type Transaction = Parameters<Parameters<Database['transaction']>[0]>[0];
+
+/**
+ * Anything capable of running queries: the connection pool or a transaction.
+ *
+ * Repositories take this rather than `Database` so they compose inside a
+ * transaction without casting. Several operations — recording an inbound
+ * message, or writing an opt-out — must commit as a unit, and a repository that
+ * insisted on the pool would silently run outside the caller's transaction.
+ */
+export type DbClient = Database | Transaction;
+
 /**
  * Creates a database handle.
  *

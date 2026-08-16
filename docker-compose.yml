@@ -1,0 +1,49 @@
+# Local development infrastructure.
+#
+# Both services bind to 127.0.0.1 only — they must never be reachable from
+# outside the host. In production the app container joins this network and
+# these ports are not published at all.
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: lidor-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-lidor}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-lidor_dev_password}
+      POSTGRES_DB: ${POSTGRES_DB:-lidor_bot}
+    ports:
+      - '127.0.0.1:${POSTGRES_PORT:-5432}:5432'
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test:
+        [
+          'CMD-SHELL',
+          'pg_isready -U ${POSTGRES_USER:-lidor} -d ${POSTGRES_DB:-lidor_bot}',
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    container_name: lidor-redis
+    restart: unless-stopped
+    # appendonly keeps BullMQ delayed jobs (follow-ups) across restarts.
+    # Postgres remains authoritative for the schedule regardless.
+    command: redis-server --appendonly yes
+    ports:
+      - '127.0.0.1:${REDIS_PORT:-6379}:6379'
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  postgres_data:
+  redis_data:

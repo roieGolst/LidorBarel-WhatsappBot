@@ -1,0 +1,39 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+*.tsbuildinfo
+
+# Environment and secrets — never commit these
+.env
+.env.local
+.env.*.local
+*.pem
+*.key
+secrets/
+
+# Google service account / OAuth credentials
+credentials.json
+token.json
+
+# Test and coverage output
+coverage/
+.vitest/
+
+# Logs
+*.log
+npm-debug.log*
+logs/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editors
+.vscode/
+.idea/
+*.swp
+
+# Local database volumes
+.docker-data/

@@ -1,0 +1,10 @@
+// Build configuration: same settings, but tests are excluded from `dist/`.
+// The base tsconfig.json still includes them so `npm run typecheck` and ESLint
+// cover test files too.
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "tsBuildInfoFile": "./dist/.tsbuildinfo.build"
+  },
+  "exclude": ["node_modules", "dist", "src/**/*.test.ts"]
+}

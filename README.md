@@ -13,13 +13,13 @@ Cold outbound outreach is deliberately **out of scope**. See
 
 ## Status
 
-Milestone 0 of 9 — repository and foundations.
+Milestone 2 of 9 — inbound WhatsApp channel.
 
 | # | Milestone | Status |
 |---|-----------|--------|
-| 0 | Repo and foundations | In progress |
-| 1 | Data layer | Not started |
-| 2 | Inbound WhatsApp channel | Not started |
+| 0 | Repo and foundations | Done |
+| 1 | Data layer | Done |
+| 2 | Inbound WhatsApp channel | Done |
 | 3 | Conversation workflow (LangGraph) | Not started |
 | 4 | Outbound sending and opt-out | Not started |
 | 5 | Monday.com sync | Not started |

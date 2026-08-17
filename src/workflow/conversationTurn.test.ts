@@ -8,6 +8,7 @@ import {
   type ConversationStage,
 } from '../db/repositories/conversations.js';
 import { recentMessages, recordInboundMessage } from '../db/repositories/messages.js';
+import { recordOptOut } from '../db/repositories/optOuts.js';
 import { conversations, optOuts } from '../db/schema.js';
 import { setupTestDatabase, truncateAll } from '../db/testing.js';
 import { FakeLlmClient } from '../llm/fake.js';
@@ -186,6 +187,31 @@ describe('conversationTurn', () => {
 
     const contact = await findContactById(db, conversation!.contactId);
     expect(contact?.doNotContact).toBe(true);
+    expect(contact?.consentStatus).toBe('opted_out');
+  });
+
+  it('leaves an already opted-out contact in silence', async () => {
+    const llm = new FakeLlmClient([]); // must never be called
+    const channel = new FakeChannel();
+    const { conversationId, phone } = await seed({ inbound: 'עוד הודעה' });
+
+    // The contact opted out on a previous turn.
+    await recordOptOut(db, phone, 'classifier');
+
+    const result = await workflow({ db, llm, channel }).invoke(
+      conversationId,
+      config(conversationId),
+    );
+
+    expect(result.sent).toBe(false);
+    expect(result.action).toBe('skipped_opted_out');
+    expect(llm.requests).toHaveLength(0); // no classification, no cost
+    expect(channel.sent).toHaveLength(0);
+
+    const outbound = (await recentMessages(db, conversationId)).filter(
+      (m) => m.direction === 'outbound',
+    );
+    expect(outbound).toHaveLength(0);
   });
 
   it('sends the regenerated reply, never the one that failed validation', async () => {

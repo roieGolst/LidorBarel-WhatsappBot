@@ -110,7 +110,7 @@ export async function persistTurn(db: Database, input: PersistTurnInput): Promis
 
       await tx
         .update(contacts)
-        .set({ doNotContact: true, updatedAt: at })
+        .set({ doNotContact: true, consentStatus: 'opted_out', updatedAt: at })
         .where(eq(contacts.id, input.contactId));
     }
   });

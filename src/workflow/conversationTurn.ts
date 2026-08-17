@@ -7,8 +7,10 @@ import {
   type ConversationStage,
 } from '../db/repositories/conversations.js';
 import { recentMessages } from '../db/repositories/messages.js';
+import { isOptedOut } from '../db/repositories/optOuts.js';
 import type { LlmClient, LlmMessage } from '../llm/client.js';
 import type { WhatsAppChannel } from '../whatsapp/channel.js';
+import { guardedSend } from '../whatsapp/guardedSend.js';
 import { classifyAndExtract } from './classify.js';
 import { decideTransition, type KnownFacts } from './decide.js';
 import { generateValidatedReply } from './generate.js';
@@ -46,6 +48,8 @@ export interface TurnContext {
   known: KnownFacts;
   contactId: string;
   contactPhone: string;
+  /** True when this contact already opted out — the turn does nothing. */
+  optedOut: boolean;
   /** The latest inbound message — the turn we are responding to. */
   currentText: string;
   /** Turns before the current one, for classification context. */
@@ -58,6 +62,8 @@ export interface TurnResult {
   stage: ConversationStage;
   text: string;
   action: string;
+  /** False when the turn sent nothing — an opted-out contact is left in silence. */
+  sent: boolean;
 }
 
 /**
@@ -96,6 +102,7 @@ export async function loadContext(
     known: conversation.extracted ?? {},
     contactId: contact.id,
     contactPhone: contact.phone,
+    optedOut: await isOptedOut(db, contact.phone),
     currentText: last.content,
     classifyHistory: turns.slice(0, -1),
     turns,
@@ -129,8 +136,10 @@ export function createConversationWorkflow(
     }) => generateValidatedReply(deps.llm, args),
   );
 
+  // Every outbound message goes through guardedSend, so opt-out enforcement
+  // cannot be bypassed by this send path (§6).
   const send = task('ct_send', (args: { to: string; text: string }) =>
-    deps.channel.sendText(args.to, args.text),
+    guardedSend(deps.db, deps.channel, args.to, args.text),
   );
 
   const persist = task('ct_persist', (args: PersistTurnInput) =>
@@ -141,6 +150,13 @@ export function createConversationWorkflow(
     { name: 'conversationTurn', checkpointer },
     async (conversationId: string): Promise<TurnResult> => {
       const ctx = await load(conversationId);
+
+      // A contact who already opted out is left in silence — no reply is
+      // generated and nothing is sent. The acknowledgement of the opt-out itself
+      // went out on the turn that recorded it, before this became true.
+      if (ctx.optedOut) {
+        return { stage: ctx.stage, action: 'skipped_opted_out', text: '', sent: false };
+      }
 
       const { analysis } = await classify({
         text: ctx.currentText,
@@ -169,7 +185,12 @@ export function createConversationWorkflow(
         providerMessageId: sent.providerMessageId,
       });
 
-      return { stage: decision.nextStage, text: reply.text, action: decision.action };
+      return {
+        stage: decision.nextStage,
+        text: reply.text,
+        action: decision.action,
+        sent: true,
+      };
     },
   );
 }

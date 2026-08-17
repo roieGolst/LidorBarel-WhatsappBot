@@ -95,11 +95,16 @@ export function createConversationQueue(redisUrl: string): ConversationQueue {
         {
           // Coalesce concurrent turns for one conversation (see doc comment).
           jobId: conversationId,
-          // Free the job id once done so the next inbound can enqueue.
+          // Free the job id when the turn finishes — on success OR once its
+          // retries are exhausted — so the conversation's next inbound can
+          // always enqueue a fresh turn. A *retained* failed job would keep the
+          // id occupied and, through the dedup above, silently swallow every
+          // later message for that conversation: a transient blip (an expired
+          // token, a momentary outage) would permanently mute the lead. The
+          // failure is still captured by the worker's `failed` handler
+          // (conversationWorker.ts), so nothing is lost by not retaining it.
           removeOnComplete: true,
-          // Keep a bounded history of failures for debugging without unbounded
-          // growth.
-          removeOnFail: { count: 100 },
+          removeOnFail: true,
           // A turn is checkpointed durable execution: a retry resumes from the
           // last checkpoint rather than re-sending, so bounded retries are safe
           // for a transient LLM/Meta/Redis blip.

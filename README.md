@@ -13,7 +13,7 @@ Cold outbound outreach is deliberately **out of scope**. See
 
 ## Status
 
-Milestone 3 of 9 — conversation workflow.
+Milestone 4 of 9 — outbound sending and opt-out.
 
 | # | Milestone | Status |
 |---|-----------|--------|
@@ -21,12 +21,18 @@ Milestone 3 of 9 — conversation workflow.
 | 1 | Data layer | Done |
 | 2 | Inbound WhatsApp channel | Done |
 | 3 | Conversation workflow (LangGraph) | Done |
-| 4 | Outbound sending and opt-out | Not started |
+| 4 | Outbound sending and opt-out | In progress |
 | 5 | Monday.com sync | Not started |
 | 6 | Appointments and Calendar | Not started |
 | 7 | Follow-ups | Not started |
 | 8 | Admin panel | Not started |
 | 9 | Simulation and hardening | Not started |
+
+Milestone 4's core is in: opt-out is enforced on every outbound send, free-form
+replies go through the real WhatsApp Cloud API, and send-window state is tracked.
+The window-aware **template** fallback and proactive (business-initiated)
+outreach are deferred until Meta Business verification and approved message
+templates are in place — external items, by design.
 
 ## Requirements
 

@@ -24,6 +24,19 @@ const TERMINAL_STAGES = [
 /** The 24-hour WhatsApp customer service window, in milliseconds. */
 const SERVICE_WINDOW_MS = 24 * 60 * 60 * 1000;
 
+/** Loads a conversation by id. */
+export async function getConversationById(
+  db: DbClient,
+  id: string,
+): Promise<Conversation | undefined> {
+  const [found] = await db
+    .select()
+    .from(conversations)
+    .where(eq(conversations.id, id))
+    .limit(1);
+  return found;
+}
+
 /** Returns the contact's open conversation, if they have one. */
 export async function findActiveConversation(
   db: DbClient,

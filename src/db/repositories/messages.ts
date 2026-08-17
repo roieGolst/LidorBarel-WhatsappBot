@@ -1,8 +1,30 @@
-import { eq } from 'drizzle-orm';
+import { desc, eq } from 'drizzle-orm';
 import type { DbClient } from '../client.js';
 import { messages } from '../schema.js';
 
 export type Message = typeof messages.$inferSelect;
+
+/**
+ * Returns a conversation's most recent messages, oldest first.
+ *
+ * Bounded so a long-running conversation does not send an ever-growing history
+ * to the model. Ordered ascending here so callers can map it straight into a
+ * chronological transcript.
+ */
+export async function recentMessages(
+  db: DbClient,
+  conversationId: string,
+  limit = 12,
+): Promise<Message[]> {
+  const rows = await db
+    .select()
+    .from(messages)
+    .where(eq(messages.conversationId, conversationId))
+    // Take the newest `limit`, then present them oldest-first.
+    .orderBy(desc(messages.createdAt))
+    .limit(limit);
+  return rows.sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime());
+}
 
 export interface InboundMessageInput {
   conversationId: string;

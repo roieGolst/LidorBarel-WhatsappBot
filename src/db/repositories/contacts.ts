@@ -39,6 +39,15 @@ export async function findContactByPhone(
   return found;
 }
 
+/** Loads a contact by id. */
+export async function findContactById(
+  db: DbClient,
+  id: string,
+): Promise<Contact | undefined> {
+  const [found] = await db.select().from(contacts).where(eq(contacts.id, id)).limit(1);
+  return found;
+}
+
 /**
  * Creates a contact, or updates the existing one with the same phone number.
  *

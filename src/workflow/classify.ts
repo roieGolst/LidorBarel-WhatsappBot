@@ -1,0 +1,166 @@
+import { z } from 'zod';
+import {
+  CLASSIFIER_MODEL,
+  ESCALATION_MODEL,
+  type LlmClient,
+  type LlmModel,
+  type LlmUsage,
+} from '../llm/client.js';
+
+/**
+ * `classifyAndExtract` — the workflow's one LLM classification step (§5.1).
+ *
+ * The rule this file exists to enforce: **the model returns structured JSON and
+ * nothing else.** It never names a stage and never decides a transition;
+ * `decideTransition` (plain TypeScript, no model call) owns every transition, so
+ * a hallucinated stage is structurally impossible. What the model produces here
+ * is an *observation* — an intent, a confidence, and any screening fields it
+ * could extract — that pure code then acts on.
+ *
+ * Anything the model returns is untrusted until it parses against
+ * {@link analysisSchema}. Unparseable output is not an error to throw; it is a
+ * low-confidence `UNCLEAR` result that routes the conversation to a clarifying
+ * question or escalation, exactly as a genuinely ambiguous message would.
+ */
+
+/** The intents the classifier may report. */
+export const INTENTS = [
+  'ANSWER',
+  'OBJECTION',
+  'FAQ',
+  'OPT_OUT',
+  'OFF_TOPIC',
+  'UNCLEAR',
+] as const;
+
+// Screening-answer enums. Values are fixed tokens (not Hebrew label text) so the
+// Monday sync can map them to label IDs without depending on wording — matching
+// on ID, never text, is correctness-critical (see the plan's column mapping).
+const sellIntent = z.enum(['ready', 'not_sure', 'not_selling']); // Q1
+const timeline = z.enum(['immediate', 'within_month', 'still_checking', 'no_urgency']); // Q3
+const currentlyMarketed = z.enum(['no', 'privately', 'with_agent']); // Q4
+
+/**
+ * Screening facts extracted from a message. Every field is optional — the model
+ * reports only what the person actually said. Unknown keys are stripped rather
+ * than rejected, so a stray field the model invents cannot fail an otherwise
+ * good classification.
+ */
+export const extractedSchema = z.object({
+  sellIntent: sellIntent.optional(),
+  neighborhood: z.string().min(1).optional(), // Q2, free text; mapped to a dropdown later
+  timeline: timeline.optional(),
+  currentlyMarketed: currentlyMarketed.optional(),
+});
+
+export const analysisSchema = z.object({
+  intent: z.enum(INTENTS),
+  confidence: z.number().min(0).max(1),
+  extracted: extractedSchema.default({}),
+  needsEscalation: z.boolean().default(false),
+});
+
+export type Analysis = z.infer<typeof analysisSchema>;
+
+/**
+ * The result when the model's output cannot be parsed.
+ *
+ * `UNCLEAR` with zero confidence and an escalation flag means `decideTransition`
+ * will ask a clarifying question or hand off rather than guess a transition from
+ * garbage — the safe reading of "we don't understand this".
+ */
+export const UNCLEAR_ANALYSIS: Analysis = {
+  intent: 'UNCLEAR',
+  confidence: 0,
+  extracted: {},
+  needsEscalation: true,
+};
+
+const SYSTEM_PROMPT = `You are the classification stage of an inbound WhatsApp bot for a real estate agent in Beer Sheva, Israel. Leads write in Hebrew, often informally, with typos, slang, or voice-to-text artifacts.
+
+Your ONLY job is to read the latest message (with the conversation as context) and return a single JSON object describing it. You do not reply to the person and you do not decide what happens next — you only observe.
+
+Return JSON with exactly these fields:
+- "intent": one of "ANSWER" (answering a screening question or giving property info), "OBJECTION" (pushback, doubt, or a concern), "FAQ" (a general question about the service, fees, or process), "OPT_OUT" (any request to stop, unsubscribe, or not be contacted — including indirect phrasings like "תפסיקו", "אל תפנו אליי", "מוריד אתכם"), "OFF_TOPIC" (unrelated), or "UNCLEAR" (you cannot tell).
+- "confidence": a number from 0 to 1.
+- "extracted": an object with any of these you can determine from the message, omitting the rest:
+    - "sellIntent": "ready" | "not_sure" | "not_selling"
+    - "neighborhood": the Beer Sheva neighborhood named, as free text
+    - "timeline": "immediate" | "within_month" | "still_checking" | "no_urgency"
+    - "currentlyMarketed": "no" | "privately" | "with_agent"
+- "needsEscalation": true if the message shows anger, frustration, or something a bot should not handle alone.
+
+Rules:
+- Output ONLY the JSON object. No prose, no code fences, no explanation.
+- Never invent extracted values. If the message does not clearly state a field, omit it.
+- Prefer "UNCLEAR" with low confidence over guessing.`;
+
+export interface ClassifyInput {
+  /** The inbound message to classify. */
+  text: string;
+  /** Prior turns for context, oldest first. Omit for the first message. */
+  history?: { role: 'user' | 'assistant'; content: string }[];
+  /**
+   * Use the stronger model. Set after a low-confidence turn, a detected
+   * objection, or a validator rejection — never as the default (§7).
+   */
+  escalate?: boolean;
+}
+
+export interface ClassifyResult {
+  analysis: Analysis;
+  usage: LlmUsage;
+  /** True when the model's output failed to parse and the safe fallback was used. */
+  fallback: boolean;
+}
+
+/** Classifies one inbound message into an {@link Analysis}. */
+export async function classifyAndExtract(
+  llm: LlmClient,
+  input: ClassifyInput,
+): Promise<ClassifyResult> {
+  const model: LlmModel = input.escalate ? ESCALATION_MODEL : CLASSIFIER_MODEL;
+
+  const { text, usage } = await llm.complete({
+    model,
+    system: SYSTEM_PROMPT,
+    messages: [...(input.history ?? []), { role: 'user', content: input.text }],
+    // Classification JSON is tiny; this is a generous ceiling, not a target.
+    maxTokens: 512,
+  });
+
+  const parsed = parseAnalysis(text);
+  return {
+    analysis: parsed ?? UNCLEAR_ANALYSIS,
+    usage,
+    fallback: parsed === undefined,
+  };
+}
+
+/**
+ * Parses model output into an {@link Analysis}, or `undefined` if it cannot.
+ *
+ * Tolerant of the ways a model wraps JSON — code fences, a leading sentence —
+ * but never tolerant of the *shape*: the result must satisfy the schema, or it
+ * is treated as unparseable. Exported for direct testing.
+ */
+export function parseAnalysis(raw: string): Analysis | undefined {
+  const json = extractJsonObject(raw);
+  if (json === undefined) return undefined;
+
+  const result = analysisSchema.safeParse(json);
+  return result.success ? result.data : undefined;
+}
+
+/** Extracts the first JSON object from text that may wrap or precede it. */
+function extractJsonObject(raw: string): unknown {
+  const start = raw.indexOf('{');
+  const end = raw.lastIndexOf('}');
+  if (start === -1 || end <= start) return undefined;
+
+  try {
+    return JSON.parse(raw.slice(start, end + 1));
+  } catch {
+    return undefined;
+  }
+}

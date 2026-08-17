@@ -64,6 +64,16 @@ const configSchema = z.object({
     .string()
     .regex(/^v\d+\.\d+$/)
     .default('v21.0'),
+
+  // --- Anthropic (LLM) ------------------------------------------------------
+  //
+  // Optional as a group so the app still boots for tests and simulation, which
+  // drive the conversation workflow through a fake LLM client. The workflow
+  // throws a clear error at the point it first needs the key, rather than
+  // letting a missing value surface as a confusing 401 from Anthropic.
+
+  /** API key for the Anthropic Messages API used by the conversation workflow. */
+  anthropicApiKey: z.string().min(1).optional(),
 });
 
 export type Config = z.infer<typeof configSchema>;
@@ -87,6 +97,7 @@ function readEnv(env: NodeJS.ProcessEnv): Record<string, unknown> {
     metaAccessToken: env.META_ACCESS_TOKEN,
     metaPhoneNumberId: env.META_PHONE_NUMBER_ID,
     metaGraphApiVersion: env.META_GRAPH_API_VERSION,
+    anthropicApiKey: env.ANTHROPIC_API_KEY,
   };
 }
 
@@ -103,6 +114,7 @@ const ENV_VAR_NAMES: Record<keyof Config, string> = {
   metaAccessToken: 'META_ACCESS_TOKEN',
   metaPhoneNumberId: 'META_PHONE_NUMBER_ID',
   metaGraphApiVersion: 'META_GRAPH_API_VERSION',
+  anthropicApiKey: 'ANTHROPIC_API_KEY',
 };
 
 export class ConfigError extends Error {

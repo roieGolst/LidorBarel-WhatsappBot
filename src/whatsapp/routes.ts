@@ -1,7 +1,8 @@
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import type { Config } from '../config.js';
 import type { Database } from '../db/client.js';
-import { ingestEvents } from './ingest.js';
+import type { TurnProducer } from '../queue/conversationQueue.js';
+import { ingestEvents, type IngestResult } from './ingest.js';
 import { extractEvents, webhookEnvelopeSchema } from './payload.js';
 import { isValidSignature, verifySubscription } from './signature.js';
 
@@ -13,6 +14,42 @@ interface RawBodyRequest extends FastifyRequest {
 export interface WebhookRouteOptions {
   db: Database;
   config: Config;
+  /**
+   * Where a persisted inbound message triggers its reply. Optional: when the
+   * conversation worker is disabled (missing LLM/Meta credentials), the webhook
+   * still ingests messages durably — it simply has nowhere to hand them off, so
+   * no turn is enqueued. Injected rather than imported so the route is testable
+   * with a fake producer and no live Redis.
+   */
+  producer?: TurnProducer;
+}
+
+/**
+ * Enqueues a conversation turn for every result that warrants one.
+ *
+ * Only a freshly-stored inbound message qualifies: a status event has no
+ * conversation, a duplicate was already handled on its first delivery (so a
+ * redelivered webhook must not double-enqueue), and a skipped event was never
+ * stored. Enqueuing is best-effort and must never turn a successful ingestion
+ * into a webhook failure: the message is already durable in Postgres, and
+ * returning non-2xx would make Meta redeliver a payload our idempotent
+ * ingestion now treats as a duplicate — which would never re-enqueue, silently
+ * stranding the message. So a producer failure is logged, not thrown.
+ */
+async function enqueueTurns(
+  producer: TurnProducer,
+  results: IngestResult[],
+  request: FastifyRequest,
+): Promise<void> {
+  for (const result of results) {
+    if (result.duplicate || result.skipped || !result.conversationId) continue;
+
+    try {
+      await producer.enqueueTurn(result.conversationId);
+    } catch (err) {
+      request.log.error({ err }, 'failed to enqueue conversation turn');
+    }
+  }
 }
 
 /**
@@ -23,7 +60,7 @@ export interface WebhookRouteOptions {
  */
 export function registerWhatsAppRoutes(
   app: FastifyInstance,
-  { db, config }: WebhookRouteOptions,
+  { db, config, producer }: WebhookRouteOptions,
 ): void {
   app.get('/webhooks/whatsapp', (request, reply) => {
     if (!config.metaWebhookVerifyToken) {
@@ -87,6 +124,12 @@ export function registerWhatsAppRoutes(
     // Generating replies is NOT done here: an LLM call is far too slow for a
     // webhook and belongs on a queue (M3).
     const results = await ingestEvents(db, events);
+
+    // Hand each newly-stored inbound to the worker. This is a quick Redis push,
+    // so it keeps the fast 200; the slow LLM turn happens off the request path.
+    if (producer) {
+      await enqueueTurns(producer, results, request);
+    }
 
     const duplicates = results.filter((r) => r.duplicate).length;
     const skipped = results.filter((r) => r.skipped).length;

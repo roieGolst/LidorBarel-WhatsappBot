@@ -3,6 +3,7 @@ import type { FastifyInstance } from 'fastify';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { parseConfig, type Config } from '../config.js';
 import type { Database } from '../db/client.js';
+import type { TurnProducer } from '../queue/conversationQueue.js';
 import { conversations, messages } from '../db/schema.js';
 import { setupTestDatabase, truncateAll } from '../db/testing.js';
 import { buildServer } from '../server.js';
@@ -83,6 +84,44 @@ function textMessagePayload(id = 'wamid.TEST', from = '972501234567') {
       },
     ],
   };
+}
+
+function statusPayload(id = 'wamid.SENT', status = 'delivered') {
+  return {
+    object: 'whatsapp_business_account',
+    entry: [
+      {
+        id: 'WABA_ID',
+        changes: [
+          {
+            field: 'messages',
+            value: {
+              messaging_product: 'whatsapp',
+              metadata: { phone_number_id: 'PHONE_ID' },
+              statuses: [
+                {
+                  id,
+                  status,
+                  timestamp: '1755331200',
+                  recipient_id: '972501234567',
+                },
+              ],
+            },
+          },
+        ],
+      },
+    ],
+  };
+}
+
+/** Records every enqueue so a test can assert exactly what was handed off. */
+class RecordingProducer implements TurnProducer {
+  readonly enqueued: string[] = [];
+
+  enqueueTurn(conversationId: string): Promise<void> {
+    this.enqueued.push(conversationId);
+    return Promise.resolve();
+  }
 }
 
 describe('GET /webhooks/whatsapp', () => {
@@ -229,6 +268,65 @@ describe('POST /webhooks/whatsapp', () => {
       entry: [],
     });
     expect(response.statusCode).toBe(200);
+  });
+});
+
+describe('POST /webhooks/whatsapp — enqueueing turns', () => {
+  let producer: RecordingProducer;
+  let enqueueApp: FastifyInstance;
+
+  beforeAll(async () => {
+    producer = new RecordingProducer();
+    enqueueApp = buildServer({ db, config, producer });
+    await enqueueApp.ready();
+  });
+
+  afterAll(async () => {
+    await enqueueApp.close();
+  });
+
+  beforeEach(() => {
+    producer.enqueued.length = 0;
+  });
+
+  function post(body: unknown) {
+    const payload = JSON.stringify(body);
+    return enqueueApp.inject({
+      method: 'POST',
+      url: '/webhooks/whatsapp',
+      headers: {
+        'content-type': 'application/json',
+        'x-hub-signature-256': `sha256=${createHmac('sha256', APP_SECRET).update(payload).digest('hex')}`,
+      },
+      payload,
+    });
+  }
+
+  it('enqueues exactly one turn for a non-duplicate inbound', async () => {
+    const response = await post(textMessagePayload('wamid.ENQ1'));
+    expect(response.statusCode).toBe(200);
+
+    // The enqueued id is the conversation the message was stored against.
+    const [conversation] = await db.select().from(conversations);
+    expect(producer.enqueued).toEqual([conversation!.id]);
+  });
+
+  it('does not enqueue on redelivery of the same webhook', async () => {
+    const payload = textMessagePayload('wamid.ENQ_DUP');
+
+    await post(payload);
+    expect(producer.enqueued).toHaveLength(1);
+
+    // The redelivery is a duplicate at ingestion, so it must not enqueue a
+    // second turn — otherwise Meta's retries would double-reply.
+    await post(payload);
+    expect(producer.enqueued).toHaveLength(1);
+  });
+
+  it('does not enqueue for a delivery-status event', async () => {
+    const response = await post(statusPayload());
+    expect(response.statusCode).toBe(200);
+    expect(producer.enqueued).toHaveLength(0);
   });
 });
 

@@ -1,12 +1,19 @@
 import Fastify, { type FastifyInstance } from 'fastify';
 import type { Config } from './config.js';
 import type { Database } from './db/client.js';
+import type { TurnProducer } from './queue/conversationQueue.js';
 import { buildLoggerOptions } from './logger.js';
 import { registerWhatsAppRoutes } from './whatsapp/routes.js';
 
 export interface ServerOptions {
   db: Database;
   config: Config;
+  /**
+   * Producer the webhook uses to enqueue conversation turns. Optional so the
+   * server boots (and tests run) without a live queue; absent, inbound messages
+   * are still ingested but no reply is triggered.
+   */
+  producer?: TurnProducer;
 }
 
 /**
@@ -15,7 +22,7 @@ export interface ServerOptions {
  * Returned unstarted so tests can drive it through `app.inject()` without
  * binding a port.
  */
-export function buildServer({ db, config }: ServerOptions): FastifyInstance {
+export function buildServer({ db, config, producer }: ServerOptions): FastifyInstance {
   const app = Fastify({
     // Options rather than an instance, so Fastify builds its own child logger
     // while keeping the same redaction rules.
@@ -53,7 +60,7 @@ export function buildServer({ db, config }: ServerOptions): FastifyInstance {
     return { status: 'ok' };
   });
 
-  registerWhatsAppRoutes(app, { db, config });
+  registerWhatsAppRoutes(app, { db, config, ...(producer ? { producer } : {}) });
 
   return app;
 }

@@ -1,8 +1,20 @@
 import 'dotenv/config';
+import type { PostgresSaver } from '@langchain/langgraph-checkpoint-postgres';
 import { ConfigError, getConfig, type Config } from './config.js';
 import { closeDatabase, getDatabase } from './db/client.js';
+import { AnthropicLlmClient } from './llm/client.js';
 import { getLogger } from './logger.js';
+import {
+  createConversationQueue,
+  type ConversationQueue,
+} from './queue/conversationQueue.js';
+import {
+  createConversationWorker,
+  type ConversationWorker,
+} from './queue/conversationWorker.js';
 import { buildServer } from './server.js';
+import { createCheckpointer } from './workflow/checkpointer.js';
+import { createCloudApiChannel } from './whatsapp/cloudApiChannel.js';
 
 /** Loads configuration, reporting problems clearly before the logger exists. */
 function loadConfig(): Config {
@@ -19,19 +31,96 @@ function loadConfig(): Config {
   }
 }
 
+/** The queue-side resources, present only when the worker could be built. */
+interface ConversationPipeline {
+  queue: ConversationQueue;
+  worker: ConversationWorker;
+  checkpointer: PostgresSaver;
+}
+
+/**
+ * Builds the conversation pipeline — checkpointer, queue, and worker — or
+ * returns `undefined` when it cannot.
+ *
+ * The Meta and Anthropic credentials are optional as a group (see `config.ts`)
+ * so the app boots for local development and tests against fakes. When they are
+ * absent the reply worker simply cannot exist: there is no LLM to think with and
+ * no transport to send through. Rather than crash, the app logs a clear warning
+ * and runs webhook ingestion only — inbound messages are still stored durably,
+ * they just are not answered until credentials are supplied and the process is
+ * restarted.
+ *
+ * The queue is created *together with* the worker rather than always: with no
+ * worker to drain it, enqueuing would only pile unconsumed jobs into Redis. So a
+ * credential-less boot ingests without enqueuing, which is exactly what the
+ * webhook route's optional producer expresses.
+ */
+async function buildConversationPipeline(
+  config: Config,
+  db: ReturnType<typeof getDatabase>,
+  log: ReturnType<typeof getLogger>,
+): Promise<ConversationPipeline | undefined> {
+  if (!config.anthropicApiKey || !config.metaAccessToken || !config.metaPhoneNumberId) {
+    log.warn(
+      'conversation worker disabled: missing ANTHROPIC_API_KEY / Meta credentials',
+    );
+    return undefined;
+  }
+
+  let checkpointer: PostgresSaver | undefined;
+  let queue: ConversationQueue | undefined;
+  let worker: ConversationWorker | undefined;
+  try {
+    const llm = new AnthropicLlmClient(config.anthropicApiKey);
+    const channel = createCloudApiChannel();
+
+    checkpointer = createCheckpointer();
+    // Idempotent (IF NOT EXISTS); safe on every boot, and this is the caller
+    // that owns deciding when.
+    await checkpointer.setup();
+
+    queue = createConversationQueue(config.redisUrl);
+    worker = createConversationWorker(
+      config.redisUrl,
+      { db, llm, channel },
+      checkpointer,
+    );
+
+    return { queue, worker, checkpointer };
+  } catch (error) {
+    // A partial build must not leak connections. Anything constructed before the
+    // failure is torn down before we fall back to ingestion-only.
+    log.warn({ err: error }, 'conversation worker disabled: failed to construct');
+    if (worker) await worker.close();
+    if (queue) await queue.close();
+    if (checkpointer) await checkpointer.end();
+    return undefined;
+  }
+}
+
 async function main(): Promise<void> {
   const config = loadConfig();
   const log = getLogger();
   const db = getDatabase();
-  const app = buildServer({ db, config });
+
+  const pipeline = await buildConversationPipeline(config, db, log);
+  const app = buildServer({
+    db,
+    config,
+    ...(pipeline ? { producer: pipeline.queue } : {}),
+  });
 
   /**
-   * Stops accepting connections, finishes in-flight requests, then closes the
-   * database.
+   * Stops accepting connections, finishes in-flight work, then releases
+   * resources.
    *
-   * Order matters: a webhook being ingested when the signal arrives must be
-   * allowed to commit. Dropping it mid-transaction would rely on Meta's retry
-   * to recover a message we had already accepted.
+   * Order matters. The server closes first so no new webhook can enqueue. The
+   * worker closes next and drains the turn it is mid-flight on — that turn still
+   * needs the checkpointer and the database — so those are released only after
+   * the worker has stopped. A webhook being ingested when the signal arrives is
+   * likewise allowed to commit before the database closes; dropping it
+   * mid-transaction would rely on Meta's retry to recover a message we had
+   * already accepted.
    */
   let shuttingDown = false;
   const shutdown = (signal: string): void => {
@@ -42,6 +131,11 @@ async function main(): Promise<void> {
     void (async () => {
       try {
         await app.close();
+        if (pipeline) {
+          await pipeline.worker.close();
+          await pipeline.queue.close();
+          await pipeline.checkpointer.end();
+        }
         await closeDatabase();
         log.info('shutdown complete');
         process.exit(0);
@@ -71,6 +165,7 @@ async function main(): Promise<void> {
       nodeEnv: config.nodeEnv,
       timezone: config.timezone,
       whatsappConfigured: Boolean(config.metaAppSecret && config.metaAccessToken),
+      conversationWorker: pipeline ? 'enabled' : 'disabled',
     },
     'server started',
   );

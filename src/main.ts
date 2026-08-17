@@ -3,6 +3,7 @@ import type { PostgresSaver } from '@langchain/langgraph-checkpoint-postgres';
 import { ConfigError, getConfig, type Config } from './config.js';
 import { closeDatabase, getDatabase } from './db/client.js';
 import { AnthropicLlmClient } from './llm/client.js';
+import { StubLlmClient } from './llm/stubClient.js';
 import { getLogger } from './logger.js';
 import {
   createConversationQueue,
@@ -60,9 +61,15 @@ async function buildConversationPipeline(
   db: ReturnType<typeof getDatabase>,
   log: ReturnType<typeof getLogger>,
 ): Promise<ConversationPipeline | undefined> {
-  if (!config.anthropicApiKey || !config.metaAccessToken || !config.metaPhoneNumberId) {
+  // The reply worker needs a transport to send through and a model to think
+  // with. Meta credentials supply the first; the second is either the Anthropic
+  // key or `LLM_MODE=stub` (a local, no-cost stand-in for development). Missing
+  // either, the app runs ingestion-only rather than crashing — inbound messages
+  // are still stored durably, just not answered until a restart with the config.
+  const llmReady = config.llmMode === 'stub' || Boolean(config.anthropicApiKey);
+  if (!config.metaAccessToken || !config.metaPhoneNumberId || !llmReady) {
     log.warn(
-      'conversation worker disabled: missing ANTHROPIC_API_KEY / Meta credentials',
+      'conversation worker disabled: needs Meta credentials plus ANTHROPIC_API_KEY (or LLM_MODE=stub)',
     );
     return undefined;
   }
@@ -71,7 +78,11 @@ async function buildConversationPipeline(
   let queue: ConversationQueue | undefined;
   let worker: ConversationWorker | undefined;
   try {
-    const llm = new AnthropicLlmClient(config.anthropicApiKey);
+    // Guaranteed by the guard above: in live mode the Anthropic key is present.
+    const llm =
+      config.llmMode === 'stub'
+        ? new StubLlmClient()
+        : new AnthropicLlmClient(config.anthropicApiKey!);
     const channel = createCloudApiChannel();
 
     checkpointer = createCheckpointer();
@@ -166,6 +177,7 @@ async function main(): Promise<void> {
       timezone: config.timezone,
       whatsappConfigured: Boolean(config.metaAppSecret && config.metaAccessToken),
       conversationWorker: pipeline ? 'enabled' : 'disabled',
+      llmMode: config.llmMode,
     },
     'server started',
   );

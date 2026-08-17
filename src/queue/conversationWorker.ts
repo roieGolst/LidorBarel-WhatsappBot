@@ -5,6 +5,7 @@ import { getLogger } from '../logger.js';
 import {
   createConversationWorkflow,
   type ConversationDeps,
+  type TurnResult,
 } from '../workflow/conversationTurn.js';
 import {
   CONVERSATION_QUEUE_NAME,
@@ -34,9 +35,9 @@ export async function processTurn(
   deps: ConversationDeps,
   checkpointer: BaseCheckpointSaver,
   conversationId: string,
-): Promise<void> {
+): Promise<TurnResult> {
   const workflow = createConversationWorkflow(deps, checkpointer);
-  await workflow.invoke(conversationId, {
+  return workflow.invoke(conversationId, {
     configurable: { thread_id: conversationId },
   });
 }
@@ -76,7 +77,21 @@ export function createConversationWorker(
   const worker = new Worker<ConversationJobData>(
     CONVERSATION_QUEUE_NAME,
     async (job: Job<ConversationJobData>) => {
-      await processTurn(deps, checkpointer, job.data.conversationId);
+      const { conversationId } = job.data;
+      logger.info({ conversationId }, 'processing conversation turn');
+      // Success is otherwise silent — with no log a working turn looks identical
+      // to nothing happening. The conversation id, stage, action, and whether a
+      // message was sent are safe to log; the transcript never is.
+      const result = await processTurn(deps, checkpointer, conversationId);
+      logger.info(
+        {
+          conversationId,
+          stage: result.stage,
+          action: result.action,
+          sent: result.sent,
+        },
+        'conversation turn processed',
+      );
     },
     { connection, concurrency: 1 },
   );

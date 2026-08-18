@@ -74,16 +74,6 @@ const configSchema = z.object({
 
   /** API key for the Anthropic Messages API used by the conversation workflow. */
   anthropicApiKey: z.string().min(1).optional(),
-
-  /**
-   * Which LLM backend the conversation workflow uses.
-   *
-   * `live` calls the real Anthropic API. `stub` swaps in a local, deterministic
-   * client that answers without any network call — for developing and testing
-   * the WhatsApp round trip (webhook → worker → reply) without spending API
-   * tokens on every message. In `stub` mode `ANTHROPIC_API_KEY` is not required.
-   */
-  llmMode: z.enum(['live', 'stub']).default('live'),
 });
 
 export type Config = z.infer<typeof configSchema>;
@@ -108,7 +98,6 @@ function readEnv(env: NodeJS.ProcessEnv): Record<string, unknown> {
     metaPhoneNumberId: env.META_PHONE_NUMBER_ID,
     metaGraphApiVersion: env.META_GRAPH_API_VERSION,
     anthropicApiKey: env.ANTHROPIC_API_KEY,
-    llmMode: env.LLM_MODE,
   };
 }
 
@@ -126,7 +115,6 @@ const ENV_VAR_NAMES: Record<keyof Config, string> = {
   metaPhoneNumberId: 'META_PHONE_NUMBER_ID',
   metaGraphApiVersion: 'META_GRAPH_API_VERSION',
   anthropicApiKey: 'ANTHROPIC_API_KEY',
-  llmMode: 'LLM_MODE',
 };
 
 export class ConfigError extends Error {

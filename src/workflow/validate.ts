@@ -14,24 +14,40 @@
  */
 
 /**
- * Words the bot must never use. Salesy pressure (`מבצע`, `זול`, `דחוף`),
- * over-promising (`מבטיח`), and false certainty (`בטוח`, `בודאות`, `חייב`) all
- * read as a pushy agent rather than the senior, trustworthy voice the spec wants.
+ * Words the bot must never use — the spec's full forbidden list (§10). Salesy
+ * pressure (`מבצע`, `זול`, `דחוף`, `מציאה`), over-promising (`מבטיח`, `תתחייב`,
+ * `נסגור`) and false certainty (`בטוח`, `בוודאות`, `חייב`) all read as a pushy
+ * agent rather than the senior, trustworthy voice the spec wants. Preferred
+ * phrasings instead: אבדוק · אעריך · על סמך הנתונים · לפי מצב השוק · המטרה היא ·
+ * אסטרטגיית מכירה · חשיפה רחבה · הערכת שווי.
  */
 export const BANNED_WORDS = [
   'מבצע', // "deal/sale"
   'זול', // "cheap"
+  'מציאה', // "a steal / bargain"
   'דחוף', // "urgent"
   'בטוח', // "certain/guaranteed"
-  'בודאות', // "with certainty"
+  'בוודאות', // "with certainty" (spec spelling)
+  'בודאות', // "with certainty" (defective spelling)
   'חייב', // "must"
   'מבטיח', // "promise"
+  'תתחייב', // "commit yourself"
+  'נסגור', // "we'll close (the deal)"
 ] as const;
 
-/** Banned multi-word expressions, matched anywhere in the text. */
+/**
+ * Banned multi-word expressions, matched anywhere in the text. Includes the
+ * on-property price framings the spec forbids (`יקר מדי`, `מקסימום מחיר` — prefer
+ * "המחיר הגבוה ביותר שהשוק מאפשר").
+ */
 export const BANNED_PHRASES = [
   'מאה אחוז', // "a hundred percent"
   'אין סיכוי', // "no chance"
+  'רק היום', // "today only"
+  'יקר מדי', // "too expensive" (about the property)
+  'אי אפשר', // "impossible"
+  'אין מה לעשות', // "nothing to be done"
+  'מקסימום מחיר', // "maximum price" — over-promising the outcome
 ] as const;
 
 /**

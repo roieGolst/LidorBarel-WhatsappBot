@@ -1,0 +1,2 @@
+ALTER TYPE "public"."conversation_stage" ADD VALUE 'screening_sell_intent' BEFORE 'screening_neighborhood';--> statement-breakpoint
+ALTER TYPE "public"."conversation_stage" ADD VALUE 'screening_timeline' BEFORE 'screening_currently_marketed';

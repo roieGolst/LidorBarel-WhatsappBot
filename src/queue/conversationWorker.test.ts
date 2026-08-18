@@ -65,9 +65,9 @@ async function seed(inbound: string): Promise<{ conversationId: string; phone: s
 
 describe('processTurn', () => {
   it('advances the conversation and sends a reply for a queued turn', async () => {
+    // Screening is deterministic, so only the classifier runs on this turn.
     const llm = new FakeLlmClient([
       '{"intent":"ANSWER","confidence":0.9,"extracted":{}}',
-      'שלום! באיזו שכונה נמצא הנכס?',
     ]);
     const channel = new FakeChannel();
     const { conversationId, phone } = await seed('היי, ראיתי את המודעה');
@@ -79,15 +79,16 @@ describe('processTurn', () => {
     const conversation = await getConversationById(db, conversationId);
     expect(conversation?.stage).toBe('screening_neighborhood');
 
-    // A reply went out on the channel and was persisted as an outbound message.
-    expect(channel.sent).toHaveLength(1);
-    expect(channel.sent[0]?.to).toBe(phone);
-    expect(channel.sent[0]?.text).toBe('שלום! באיזו שכונה נמצא הנכס?');
+    // The first response opens with welcome → intro video → the question, all to
+    // the right recipient, all persisted.
+    expect(channel.sent).toHaveLength(3);
+    expect(channel.sent.every((m) => m.to === phone)).toBe(true);
+    expect(channel.sent.at(-1)?.kind).toBe('list');
 
     const outbound = (await recentMessages(db, conversationId)).filter(
       (m) => m.direction === 'outbound',
     );
-    expect(outbound).toHaveLength(1);
-    expect(outbound[0]?.body).toBe('שלום! באיזו שכונה נמצא הנכס?');
+    expect(outbound).toHaveLength(3);
+    expect(outbound.at(-1)?.body).toBe('באיזו שכונה נמצא הנכס?');
   });
 });

@@ -1,6 +1,6 @@
 import type { Database } from '../db/client.js';
 import { isOptedOut } from '../db/repositories/optOuts.js';
-import type { OutboundResult, WhatsAppChannel } from './channel.js';
+import type { OutboundResult } from './channel.js';
 
 /**
  * Thrown when a send is attempted to a contact who has opted out.
@@ -21,18 +21,19 @@ export class OptedOutError extends Error {
  * The one choke point every outbound message passes through.
  *
  * Opt-out enforcement lives here so it cannot be forgotten by a single caller
- * (§6). Every send path — this milestone's free-form replies, and M4's templates
- * and M7's follow-ups to come — sends through this function, and the opt-out
- * check reads the durable `opt_outs` record, not a cached flag.
+ * (§6). It is generic over the send: the caller supplies a thunk that performs
+ * the actual channel call (text, video, buttons, a list, or a future template),
+ * and this function decides — from the durable `opt_outs` record, not a cached
+ * flag — whether that thunk is allowed to run at all. That keeps a single place
+ * enforcing the rule no matter which message shape is being sent.
  */
 export async function guardedSend(
   db: Database,
-  channel: WhatsAppChannel,
   to: string,
-  text: string,
+  send: () => Promise<OutboundResult>,
 ): Promise<OutboundResult> {
   if (await isOptedOut(db, to)) {
     throw new OptedOutError(to);
   }
-  return channel.sendText(to, text);
+  return send();
 }

@@ -1,3 +1,6 @@
+import { writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { CloudApiChannel } from './cloudApiChannel.js';
 
@@ -96,5 +99,102 @@ describe('CloudApiChannel', () => {
     await expect(channel.sendText('+972521234501', 'hi')).rejects.toThrow(
       /without a message id/,
     );
+  });
+
+  it('builds an interactive reply-button payload', async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ messages: [{ id: 'wamid.B' }] }));
+    const channel = new CloudApiChannel(CREDENTIALS);
+
+    await channel.sendButtons('+972521234501', 'האם הנכס משווק כרגע?', [
+      { id: 'marketed:no', title: 'לא' },
+      { id: 'marketed:privately', title: 'כן, באופן פרטי' },
+    ]);
+
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(JSON.parse(init.body as string)).toEqual({
+      messaging_product: 'whatsapp',
+      to: '+972521234501',
+      type: 'interactive',
+      interactive: {
+        type: 'button',
+        body: { text: 'האם הנכס משווק כרגע?' },
+        action: {
+          buttons: [
+            { type: 'reply', reply: { id: 'marketed:no', title: 'לא' } },
+            {
+              type: 'reply',
+              reply: { id: 'marketed:privately', title: 'כן, באופן פרטי' },
+            },
+          ],
+        },
+      },
+    });
+  });
+
+  it('builds an interactive list payload with a section of rows', async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ messages: [{ id: 'wamid.L' }] }));
+    const channel = new CloudApiChannel(CREDENTIALS);
+
+    await channel.sendList('+972521234501', 'באיזו שכונה נמצא הנכס?', 'בחירת שכונה', [
+      { id: 'neighborhood:ramot', title: 'שכונת רמות' },
+      { id: 'neighborhood:alef_tet', title: 'שכונות א׳–ט׳', description: 'א׳–ט׳' },
+    ]);
+
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(JSON.parse(init.body as string)).toEqual({
+      messaging_product: 'whatsapp',
+      to: '+972521234501',
+      type: 'interactive',
+      interactive: {
+        type: 'list',
+        body: { text: 'באיזו שכונה נמצא הנכס?' },
+        action: {
+          button: 'בחירת שכונה',
+          sections: [
+            {
+              rows: [
+                { id: 'neighborhood:ramot', title: 'שכונת רמות' },
+                {
+                  id: 'neighborhood:alef_tet',
+                  title: 'שכונות א׳–ט׳',
+                  description: 'א׳–ט׳',
+                },
+              ],
+            },
+          ],
+        },
+      },
+    });
+  });
+
+  it('uploads a video for a media id, then sends it — and caches the id', async () => {
+    const filePath = join(tmpdir(), `intro-${Date.now()}.mp4`);
+    await writeFile(filePath, Buffer.from([0, 1, 2, 3]));
+
+    fetchMock
+      .mockResolvedValueOnce(jsonResponse({ id: 'media-999' })) // upload
+      .mockResolvedValueOnce(jsonResponse({ messages: [{ id: 'wamid.V1' }] })) // send
+      .mockResolvedValueOnce(jsonResponse({ messages: [{ id: 'wamid.V2' }] })); // second send
+
+    const channel = new CloudApiChannel(CREDENTIALS);
+    const first = await channel.sendVideo('+972521234501', filePath);
+    expect(first.providerMessageId).toBe('wamid.V1');
+
+    // Upload hit the /media endpoint; the message referenced the returned id.
+    const [uploadUrl] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(uploadUrl).toBe('https://graph.facebook.com/v21.0/1234567890/media');
+    const [, sendInit] = fetchMock.mock.calls[1] as [string, RequestInit];
+    expect(JSON.parse(sendInit.body as string)).toMatchObject({
+      type: 'video',
+      video: { id: 'media-999' },
+    });
+
+    // Second send reuses the cached media id — no second upload.
+    await channel.sendVideo('+972521234501', filePath);
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    const uploadCalls = fetchMock.mock.calls.filter(([u]) =>
+      String(u).endsWith('/media'),
+    );
+    expect(uploadCalls).toHaveLength(1);
   });
 });

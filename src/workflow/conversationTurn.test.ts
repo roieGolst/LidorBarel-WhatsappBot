@@ -13,7 +13,7 @@ import {
 } from '../db/repositories/conversations.js';
 import { recentMessages, recordInboundMessage } from '../db/repositories/messages.js';
 import { recordOptOut } from '../db/repositories/optOuts.js';
-import { conversations, optOuts } from '../db/schema.js';
+import { conversations, messages, optOuts } from '../db/schema.js';
 import { setupTestDatabase, truncateAll } from '../db/testing.js';
 import { FakeLlmClient } from '../llm/fake.js';
 import type { PostgresSaver } from '@langchain/langgraph-checkpoint-postgres';
@@ -21,6 +21,7 @@ import { FakeChannel } from '../whatsapp/fakeChannel.js';
 import { createCheckpointer } from './checkpointer.js';
 import { createConversationWorkflow, type ConversationDeps } from './conversationTurn.js';
 import type { KnownFacts } from './decide.js';
+import { INTRO_VIDEO_PATH, WELCOME_MESSAGE } from './interactive.js';
 import { persistTurn, type PersistTurnInput } from './persist.js';
 import { testDatabaseUrl } from '../db/testing.js';
 
@@ -65,6 +66,11 @@ interface SeedOptions {
    * direct-message all-four path.
    */
   entryPoint?: EntryPoint;
+  /**
+   * A prior outbound reply to record before the inbound, so the turn is not the
+   * bot's first response — which suppresses the opening welcome/video sequence.
+   */
+  priorReply?: string;
 }
 
 /** Creates a contact + conversation and stores one inbound message. */
@@ -88,6 +94,17 @@ async function seed(
       .where(eq(conversations.id, conversation.id));
   }
 
+  if (options.priorReply) {
+    await db.insert(messages).values({
+      conversationId: conversation.id,
+      direction: 'outbound',
+      body: options.priorReply,
+      providerMessageId: `seed-out-${conversation.id}`,
+      deliveryStatus: 'sent',
+      createdAt: new Date(Date.now() - 1000),
+    });
+  }
+
   await recordInboundMessage(db, {
     conversationId: conversation.id,
     providerMessageId: `in-${conversation.id}`,
@@ -107,10 +124,11 @@ function config(conversationId: string) {
 }
 
 describe('conversationTurn', () => {
-  it('asks the first screening question on a new conversation', async () => {
+  it('opens with welcome + intro video, then the first question as a list', async () => {
+    // Only the classifier runs — a screening question is deterministic, not
+    // model-written, so no generate call is made.
     const llm = new FakeLlmClient([
       '{"intent":"ANSWER","confidence":0.9,"extracted":{}}',
-      'שלום! באיזו שכונה נמצא הנכס?',
     ]);
     const channel = new FakeChannel();
     const { conversationId } = await seed({ inbound: 'היי, ראיתי את המודעה' });
@@ -122,18 +140,60 @@ describe('conversationTurn', () => {
 
     expect(result.stage).toBe('screening_neighborhood');
     expect(result.action).toBe('ask_neighborhood');
+    expect(result.text).toBe('באיזו שכונה נמצא הנכס?');
 
-    const conversation = await getConversationById(db, conversationId);
-    expect(conversation?.stage).toBe('screening_neighborhood');
+    // welcome text → intro video → neighborhood list, in that order.
+    expect(channel.sent).toHaveLength(3);
+    const [welcome, video, question] = channel.sent;
+    expect(welcome).toMatchObject({ kind: 'text', text: WELCOME_MESSAGE });
+    expect(video).toMatchObject({ kind: 'video', filePath: INTRO_VIDEO_PATH });
+    expect(question?.kind).toBe('list');
+    if (question?.kind === 'list') {
+      expect(question.body).toBe('באיזו שכונה נמצא הנכס?');
+      expect(question.rows.map((r) => r.id)).toContain('neighborhood:ramot');
+    }
 
-    expect(channel.sent).toHaveLength(1);
-    expect(channel.sent[0]?.text).toBe('שלום! באיזו שכונה נמצא הנכס?');
+    // The classifier ran; the generator did not.
+    expect(llm.requests).toHaveLength(1);
 
     const outbound = (await recentMessages(db, conversationId)).filter(
       (m) => m.direction === 'outbound',
     );
-    expect(outbound).toHaveLength(1);
-    expect(outbound[0]?.body).toBe(result.text);
+    expect(outbound).toHaveLength(3);
+    expect(outbound.at(-1)?.body).toBe(result.text);
+  });
+
+  it('sends a three-option screening question as buttons', async () => {
+    // A returning turn (Q4) after the neighborhood is known — no opening sequence.
+    const llm = new FakeLlmClient([
+      '{"intent":"ANSWER","confidence":0.9,"extracted":{}}',
+    ]);
+    const channel = new FakeChannel();
+    const { conversationId } = await seed({
+      inbound: 'רמות',
+      stage: 'screening_neighborhood',
+      extracted: { neighborhood: 'רמות' },
+      priorReply: 'באיזו שכונה נמצא הנכס?',
+    });
+
+    const result = await workflow({ db, llm, channel }).invoke(
+      conversationId,
+      config(conversationId),
+    );
+
+    expect(result.action).toBe('ask_currently_marketed');
+    // No opening sequence on a later turn: just the one buttons message.
+    expect(channel.sent).toHaveLength(1);
+    const [question] = channel.sent;
+    expect(question?.kind).toBe('buttons');
+    if (question?.kind === 'buttons') {
+      expect(question.body).toBe('האם הנכס משווק כרגע?');
+      expect(question.buttons.map((b) => b.id)).toEqual([
+        'marketed:no',
+        'marketed:privately',
+        'marketed:with_agent',
+      ]);
+    }
   });
 
   it('qualifies once both screening answers are in', async () => {
@@ -145,6 +205,7 @@ describe('conversationTurn', () => {
       inbound: 'עדיין לא שיווקתי',
       stage: 'screening_currently_marketed',
       extracted: { neighborhood: 'רמות' },
+      priorReply: 'האם הנכס משווק כרגע?',
     });
 
     const result = await workflow({ db, llm, channel: new FakeChannel() }).invoke(
@@ -167,6 +228,7 @@ describe('conversationTurn', () => {
       inbound: 'יש לי כבר מתווך',
       stage: 'screening_currently_marketed',
       extracted: { neighborhood: 'נווה זאב' },
+      priorReply: 'האם הנכס משווק כרגע?',
     });
 
     const result = await workflow({ db, llm, channel: new FakeChannel() }).invoke(
@@ -228,21 +290,30 @@ describe('conversationTurn', () => {
   });
 
   it('sends the regenerated reply, never the one that failed validation', async () => {
+    // Only model-written replies (here, an FAQ answer) go through the
+    // validate → regenerate path; screening questions are canned, so they cannot.
+    const clean = 'נשמח לעזור, אפשר לפרט מה חשוב לך לדעת?';
     const llm = new FakeLlmClient([
-      '{"intent":"ANSWER","confidence":0.9,"extracted":{}}',
+      '{"intent":"FAQ","confidence":0.9}',
       'יש לנו מבצע דחוף בשבילך!', // banned words → rejected
-      'שמחתי לשמוע, באיזו שכונה הנכס?', // clean retry
+      clean, // clean retry
     ]);
     const channel = new FakeChannel();
-    const { conversationId } = await seed({ inbound: 'מעוניין למכור' });
+    const { conversationId } = await seed({
+      inbound: 'כמה עולה לעבוד איתכם?',
+      stage: 'engaged',
+      priorReply: 'שלום', // not the first response → no opening sequence
+    });
 
     const result = await workflow({ db, llm, channel }).invoke(
       conversationId,
       config(conversationId),
     );
 
-    expect(result.text).toBe('שמחתי לשמוע, באיזו שכונה הנכס?');
-    expect(channel.sent[0]?.text).toBe('שמחתי לשמוע, באיזו שכונה הנכס?');
+    expect(result.text).toBe(clean);
+    const last = channel.sent.at(-1);
+    expect(last?.kind).toBe('text');
+    if (last?.kind === 'text') expect(last.text).toBe(clean);
   });
 
   it('persistTurn is idempotent by the outbound message id (replay-safe)', async () => {
@@ -260,20 +331,18 @@ describe('conversationTurn', () => {
         escalate: false,
       },
       mergedExtracted: {},
-      reply: {
-        text: 'באיזו שכונה נמצא הנכס?',
-        usage: [
-          {
-            model: 'claude-haiku-4-5',
-            inputTokens: 1,
-            outputTokens: 1,
-            cacheReadTokens: 0,
-          },
-        ],
-        regenerated: false,
-        fellBack: false,
-      },
-      providerMessageId: 'out-replayed',
+      outbound: [
+        {
+          body: 'באיזו שכונה נמצא הנכס?',
+          providerMessageId: 'out-replayed',
+          llmModel: 'claude-haiku-4-5',
+          inputTokens: 1,
+          outputTokens: 1,
+          cacheReadTokens: 0,
+        },
+      ],
+      regenerated: false,
+      fellBack: false,
     };
 
     // The same turn committed twice — as a redelivery or a retry would — must

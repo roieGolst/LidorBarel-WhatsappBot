@@ -1,9 +1,15 @@
-import { readFile } from 'node:fs/promises';
+import { readFile, stat } from 'node:fs/promises';
 import { basename } from 'node:path';
 import { z } from 'zod';
 import { getConfig } from '../config.js';
 import { getLogger } from '../logger.js';
-import type { ListRow, OutboundResult, ReplyButton, WhatsAppChannel } from './channel.js';
+import type {
+  ListRow,
+  MediaCache,
+  OutboundResult,
+  ReplyButton,
+  WhatsAppChannel,
+} from './channel.js';
 
 /**
  * The credentials a {@link CloudApiChannel} needs to reach Meta.
@@ -53,16 +59,17 @@ export class CloudApiChannel implements WhatsAppChannel {
   private readonly logger = getLogger();
 
   /**
-   * Uploaded-media ids, keyed by local file path. WhatsApp needs a media id (or a
-   * public URL) rather than a raw file, and an id from `POST /media` is reusable
-   * across sends, so the intro clip is uploaded once per process and reused. The
-   * cache is intentionally in-memory: Meta retains uploaded media for ~30 days,
-   * and a process restart simply re-uploads — cheap, and it self-heals if an id
-   * ever expires.
+   * In-memory uploaded-media ids, keyed by an asset key (`<path>:<mtimeMs>`).
+   * WhatsApp needs a media id rather than a raw file, and an id from `POST /media`
+   * is reusable, so the intro clip is uploaded once and reused. The optional
+   * {@link MediaCache} extends this across process restarts.
    */
   private readonly mediaIds = new Map<string, string>();
 
-  constructor(private readonly credentials: CloudApiCredentials) {}
+  constructor(
+    private readonly credentials: CloudApiCredentials,
+    private readonly cache?: MediaCache,
+  ) {}
 
   sendText(to: string, text: string): Promise<OutboundResult> {
     return this.postMessage({ to, type: 'text', text: { body: text } });
@@ -130,10 +137,23 @@ export class CloudApiChannel implements WhatsAppChannel {
     });
   }
 
-  /** Uploads a file for a media id, memoized by path. */
+  /**
+   * Uploads a file for a media id, memoized in-process and (if configured) in the
+   * durable {@link MediaCache}. Keyed by path + modified-time, so replacing the
+   * file forces exactly one fresh upload.
+   */
   private async uploadMediaCached(filePath: string, mimeType: string): Promise<string> {
-    const cached = this.mediaIds.get(filePath);
-    if (cached) return cached;
+    const { mtimeMs } = await stat(filePath);
+    const key = `${filePath}:${mtimeMs}`;
+
+    const inMemory = this.mediaIds.get(key);
+    if (inMemory) return inMemory;
+
+    const persisted = await this.cache?.get(key);
+    if (persisted) {
+      this.mediaIds.set(key, persisted);
+      return persisted;
+    }
 
     const { accessToken, phoneNumberId, graphApiVersion } = this.credentials;
     const url = `https://graph.facebook.com/${graphApiVersion}/${phoneNumberId}/media`;
@@ -157,7 +177,8 @@ export class CloudApiChannel implements WhatsAppChannel {
         `WhatsApp Cloud API media upload returned no id: ${parsed.error.message}`,
       );
     }
-    this.mediaIds.set(filePath, parsed.data.id);
+    this.mediaIds.set(key, parsed.data.id);
+    await this.cache?.set(key, parsed.data.id);
     return parsed.data.id;
   }
 
@@ -217,7 +238,7 @@ export class CloudApiChannel implements WhatsAppChannel {
  * @throws {Error} if any required Meta credential is missing, naming the
  *   variables (never their values).
  */
-export function createCloudApiChannel(): CloudApiChannel {
+export function createCloudApiChannel(cache?: MediaCache): CloudApiChannel {
   const config = getConfig();
 
   const missing: string[] = [];
@@ -230,11 +251,14 @@ export function createCloudApiChannel(): CloudApiChannel {
     );
   }
 
-  return new CloudApiChannel({
-    // Non-null asserted: the guard above proves both are present, but the
-    // optional-by-group typing cannot narrow across the array check.
-    accessToken: config.metaAccessToken!,
-    phoneNumberId: config.metaPhoneNumberId!,
-    graphApiVersion: config.metaGraphApiVersion,
-  });
+  return new CloudApiChannel(
+    {
+      // Non-null asserted: the guard above proves both are present, but the
+      // optional-by-group typing cannot narrow across the array check.
+      accessToken: config.metaAccessToken!,
+      phoneNumberId: config.metaPhoneNumberId!,
+      graphApiVersion: config.metaGraphApiVersion,
+    },
+    cache,
+  );
 }

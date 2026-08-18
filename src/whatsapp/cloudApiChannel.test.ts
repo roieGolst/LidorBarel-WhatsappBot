@@ -197,4 +197,42 @@ describe('CloudApiChannel', () => {
     );
     expect(uploadCalls).toHaveLength(1);
   });
+
+  it('reuses a durably-cached media id without uploading (survives a restart)', async () => {
+    const filePath = join(tmpdir(), `intro-cache-${Date.now()}.mp4`);
+    await writeFile(filePath, Buffer.from([9, 9, 9]));
+
+    // A store already populated by a previous process run.
+    const store = new Map<string, string>();
+    const cache = {
+      get: (key: string) => Promise.resolve(store.get(key)),
+      set: (key: string, id: string) => {
+        store.set(key, id);
+        return Promise.resolve();
+      },
+    };
+
+    // First channel uploads once and writes through to the durable cache.
+    fetchMock
+      .mockResolvedValueOnce(jsonResponse({ id: 'media-persist' }))
+      .mockResolvedValueOnce(jsonResponse({ messages: [{ id: 'wamid.P1' }] }));
+    await new CloudApiChannel(CREDENTIALS, cache).sendVideo('+972521234501', filePath);
+    expect(store.size).toBe(1);
+
+    // A fresh channel (as after a restart) finds the id in the cache — no upload.
+    fetchMock.mockReset();
+    fetchMock.mockResolvedValue(jsonResponse({ messages: [{ id: 'wamid.P2' }] }));
+    const result = await new CloudApiChannel(CREDENTIALS, cache).sendVideo(
+      '+972521234501',
+      filePath,
+    );
+
+    expect(result.providerMessageId).toBe('wamid.P2');
+    expect(fetchMock).toHaveBeenCalledTimes(1); // send only, no /media upload
+    const [, sendInit] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(JSON.parse(sendInit.body as string)).toMatchObject({
+      type: 'video',
+      video: { id: 'media-persist' },
+    });
+  });
 });

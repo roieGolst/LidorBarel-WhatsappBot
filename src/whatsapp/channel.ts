@@ -61,3 +61,13 @@ export interface OutboundResult {
   /** Provider (Meta) message id, stored against the outbound `messages` row. */
   providerMessageId: string;
 }
+
+/**
+ * A durable store for Meta media ids, so an uploaded file (the intro clip) is not
+ * re-uploaded on every process restart. Injected into the channel; a missing one
+ * just means in-memory caching only (uploads once per process).
+ */
+export interface MediaCache {
+  get(key: string): Promise<string | undefined>;
+  set(key: string, mediaId: string): Promise<void>;
+}

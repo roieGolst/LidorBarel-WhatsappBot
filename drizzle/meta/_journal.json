@@ -29,6 +29,13 @@
       "when": 1787063970597,
       "tag": "0003_cool_lockheed",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1787064724185,
+      "tag": "0004_hot_bullseye",
+      "breakpoints": true
     }
   ]
 }

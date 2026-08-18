@@ -528,3 +528,21 @@ export const events = pgTable(
     ),
   ],
 );
+
+/**
+ * Durable cache of media uploaded to Meta's WhatsApp Cloud API.
+ *
+ * Uploading a file (the ~7 MB intro clip) returns a reusable media id; sending by
+ * id skips re-uploading the bytes. The id survives ~30 days on Meta's side, so we
+ * persist it here keyed by a stable asset key (the file path plus its modified
+ * time — a new file changes the key and forces one fresh upload) and reuse it
+ * across process restarts and deploys.
+ */
+export const mediaUploads = pgTable('media_uploads', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  /** Stable key for the local asset: `<path>:<mtimeMs>`. */
+  assetKey: text('asset_key').notNull().unique(),
+  /** The Meta media id to send by. */
+  mediaId: text('media_id').notNull(),
+  uploadedAt: timestamp('uploaded_at', { withTimezone: true }).notNull().defaultNow(),
+});

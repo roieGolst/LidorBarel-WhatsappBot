@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 import type { TurnAction } from './decide.js';
 import {
   INTRO_VIDEO_PATH,
+  MAIN_MENU,
+  mainMenuChoiceFor,
   screeningQuestionFor,
   WELCOME_MESSAGE,
 } from './interactive.js';
@@ -26,7 +28,11 @@ describe('interactive content', () => {
   });
 
   it('has no question for non-screening actions', () => {
-    for (const action of ['proceed_qualified', 'answer_faq', 'clarify'] as TurnAction[]) {
+    for (const action of [
+      'proceed_qualified',
+      'answer_faq',
+      'handle_objection',
+    ] as TurnAction[]) {
       expect(screeningQuestionFor(action)).toBeUndefined();
     }
   });
@@ -36,6 +42,32 @@ describe('interactive content', () => {
     expect(screeningQuestionFor('ask_currently_marketed')?.kind).toBe('buttons');
     expect(screeningQuestionFor('ask_neighborhood')?.kind).toBe('list');
     expect(screeningQuestionFor('ask_timeline')?.kind).toBe('list');
+  });
+
+  it('offers the five spec main-menu options within the list caps', () => {
+    expect(MAIN_MENU.rows).toHaveLength(5);
+    expect(MAIN_MENU.rows.map((r) => r.id)).toEqual([
+      'menu:check_fit',
+      'menu:learn_more',
+      'menu:book_meeting',
+      'menu:testimonials',
+      'menu:talk_to_human',
+    ]);
+    expect(MAIN_MENU.buttonLabel.length).toBeLessThanOrEqual(20);
+    for (const row of MAIN_MENU.rows) {
+      expect(row.title.length).toBeLessThanOrEqual(24);
+    }
+  });
+
+  it('maps a tapped or typed menu option to its choice', () => {
+    expect(mainMenuChoiceFor('✅ בדיקת התאמה')).toBe('check_fit');
+    expect(mainMenuChoiceFor('ℹ️ לשמוע פרטים')).toBe('learn_more');
+    expect(mainMenuChoiceFor('📅 קביעת פגישה')).toBe('book_meeting');
+    expect(mainMenuChoiceFor('⭐ המלצות')).toBe('testimonials');
+    expect(mainMenuChoiceFor('👤 דברו איתי')).toBe('talk_to_human');
+    // A normal answer is not a menu choice.
+    expect(mainMenuChoiceFor('שכונת רמות')).toBeUndefined();
+    expect(mainMenuChoiceFor('יאללה')).toBeUndefined();
   });
 
   it('respects WhatsApp length caps: ≤3 buttons (title ≤20), ≤10 rows (title ≤24)', () => {

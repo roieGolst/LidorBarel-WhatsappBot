@@ -27,6 +27,46 @@ export const WELCOME_MESSAGE =
  */
 export const INTRO_VIDEO_PATH = resolve(process.cwd(), 'assets/intro_video.mp4');
 
+/**
+ * The opening main menu (spec §8 `main_buttons`, conversation_style
+ * hybrid_buttons_first). After the welcome + video, the person is shown these
+ * five choices and picks how to start — `check_fit` begins the screening, the
+ * rest branch elsewhere. Five options exceed WhatsApp's 3-button cap, so it is a
+ * list. `talk_to_human` is last so the primary paths sit at the top.
+ */
+export const MAIN_MENU = {
+  body: 'איך תרצה להתחיל? אפשר לבדוק התאמה מהירה, לשמוע פרטים, או לדבר איתנו ישירות.',
+  buttonLabel: 'בחירת אפשרות',
+  rows: [
+    { id: 'menu:check_fit', title: '✅ בדיקת התאמה' },
+    { id: 'menu:learn_more', title: 'ℹ️ לשמוע פרטים' },
+    { id: 'menu:book_meeting', title: '📅 קביעת פגישה' },
+    { id: 'menu:testimonials', title: '⭐ המלצות' },
+    { id: 'menu:talk_to_human', title: '👤 דברו איתי' },
+  ],
+} as const;
+
+/** A main-menu choice, resolved from the tapped row (or typed text). */
+export type MainMenuChoice =
+  'check_fit' | 'learn_more' | 'book_meeting' | 'testimonials' | 'talk_to_human';
+
+/**
+ * Maps a message to a main-menu choice, or `undefined` if it is not one.
+ *
+ * A tapped row echoes its title verbatim, so matching the distinctive Hebrew
+ * phrase (ignoring the leading emoji) catches both taps and someone typing the
+ * same words.
+ */
+export function mainMenuChoiceFor(text: string): MainMenuChoice | undefined {
+  const t = text.trim();
+  if (t.includes('בדיקת התאמה')) return 'check_fit';
+  if (t.includes('לשמוע פרטים')) return 'learn_more';
+  if (t.includes('קביעת פגישה')) return 'book_meeting';
+  if (t.includes('המלצות')) return 'testimonials';
+  if (t.includes('דברו איתי')) return 'talk_to_human';
+  return undefined;
+}
+
 /** A screening question rendered as one of WhatsApp's two interactive shapes. */
 export type ScreeningQuestion =
   | { kind: 'buttons'; body: string; buttons: ReplyButton[] }

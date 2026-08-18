@@ -3,6 +3,7 @@ import type {
   ConversationStage,
 } from '../db/repositories/conversations.js';
 import type { Analysis } from './classify.js';
+import type { MainMenuChoice } from './interactive.js';
 
 /**
  * `decideTransition` — turns a classification into the next stage (§5.1).
@@ -25,6 +26,7 @@ export type DisqualificationReason = NonNullable<Conversation['disqualificationR
 
 /** What the reply-generation step should do this turn. */
 export type TurnAction =
+  | 'show_main_menu' // spec §8 opening buttons
   | 'ask_sell_intent' // spec Q1 (direct-message leads only)
   | 'ask_neighborhood' // spec Q2
   | 'ask_timeline' // spec Q3 (direct-message leads only)
@@ -34,7 +36,8 @@ export type TurnAction =
   | 'acknowledge_opt_out'
   | 'answer_faq'
   | 'handle_objection'
-  | 'clarify';
+  | 'send_social_proof' // main-menu "testimonials"
+  | 'handoff_to_human'; // main-menu "talk to me" / "book a meeting"
 
 export interface Decision {
   nextStage: ConversationStage;
@@ -47,8 +50,10 @@ export interface Decision {
 }
 
 /**
- * Below this, the classification is not trusted enough to act on: the turn
- * routes to a clarifying question rather than a guessed transition.
+ * Below this, a classification is not trusted enough to act on. A shaky read
+ * contributes no screening facts and triggers no FAQ/objection branch — the turn
+ * simply keeps the flow moving by re-asking the pending screening question,
+ * rather than acting on a guess.
  */
 export const CONFIDENCE_THRESHOLD = 0.5;
 
@@ -71,8 +76,8 @@ export function decideTransition(
   known: KnownFacts = {},
   screenAll = false,
 ): Decision {
-  // Whether the reply needs the stronger model. Frustration or an unclear read
-  // pushes to Sonnet; screening answers stay on Haiku (§7).
+  // Whether the reply needs the stronger model. Frustration pushes to Sonnet;
+  // screening answers stay on Haiku (§7).
   const escalate = analysis.needsEscalation;
 
   // 1. Opt-out wins from any stage, before any other consideration. It is a
@@ -81,17 +86,16 @@ export function decideTransition(
     return { nextStage: 'opted_out', action: 'acknowledge_opt_out', escalate: false };
   }
 
-  // 2. Low confidence or a genuinely unclear message: never guess a transition.
-  //    Ask, on the stronger model, rather than act on a shaky read.
-  if (analysis.intent === 'UNCLEAR' || analysis.confidence < CONFIDENCE_THRESHOLD) {
-    return { nextStage: holdStage(current), action: 'clarify', escalate: true };
-  }
+  // A shaky read (unclear, or below the confidence threshold) contributes no
+  // facts and no bespoke branch: rather than stall the person on "please
+  // rephrase", the turn falls through to the screening flow and re-asks the
+  // pending question. Only a confident read advances screening or answers an
+  // FAQ/objection.
+  const confident =
+    analysis.intent !== 'UNCLEAR' && analysis.confidence >= CONFIDENCE_THRESHOLD;
+  const facts: KnownFacts = confident ? { ...known, ...analysis.extracted } : known;
 
-  // Fold this turn's extraction over what we already knew. Q1/Q3 arrive
-  // pre-filled from the lead form; Q2/Q4 accumulate across screening turns.
-  const facts: KnownFacts = { ...known, ...analysis.extracted };
-
-  // 3. Disqualification — spec rules only, the highest business priority after
+  // 2. Disqualification — spec rules only, the highest business priority after
   //    opt-out. Checked on the merged facts so an answer given earlier still
   //    disqualifies even when this turn is about something else.
   const reason = disqualifyingReason(facts);
@@ -105,24 +109,76 @@ export function decideTransition(
     };
   }
 
-  // 4. An objection is not an answer: address the concern instead of advancing
-  //    screening, and reach for the stronger model to do it.
-  if (analysis.intent === 'OBJECTION') {
+  // 3. A confident objection or FAQ gets a bespoke reply, without advancing
+  //    screening. An objection reaches for the stronger model to handle it.
+  if (confident && analysis.intent === 'OBJECTION') {
     return { nextStage: holdStage(current), action: 'handle_objection', escalate: true };
   }
-
-  // 5. FAQ / off-topic: respond without moving the screening forward.
-  if (analysis.intent === 'FAQ') {
+  if (confident && analysis.intent === 'FAQ') {
     return { nextStage: holdStage(current), action: 'answer_faq', escalate };
   }
-  if (analysis.intent === 'OFF_TOPIC') {
-    return { nextStage: holdStage(current), action: 'clarify', escalate };
-  }
 
-  // 6. ANSWER: advance screening, one question at a time in spec order
-  //    (Q1 → Q2 → Q3 → Q4). Q1 and Q3 are asked only when the lead did not come
-  //    through the form (`screenAll`); a form lead answered them there, so the
-  //    bot screens on Q2 and Q4 alone.
+  // 4. Screening flow — the default. A greeting, filler ("יאללה"), an unclear or
+  //    off-topic message, or an actual answer all funnel here: ask the next
+  //    pending question (or qualify). An unparseable answer simply re-asks the
+  //    same question, whose buttons are already in front of the person — the flow
+  //    never dead-ends on "rephrase".
+  return nextScreeningStep(facts, screenAll, escalate);
+}
+
+/**
+ * Routes a main-menu selection (spec §8) — deterministic, no model call, since
+ * the choice is a known button, not free text.
+ *
+ * `check_fit` starts the screening (after the same disqualification check the
+ * normal flow applies); `testimonials` sends social proof; `learn_more` answers
+ * about the service; `book_meeting` and `talk_to_human` both hand off to Lidor
+ * (booking itself is a later milestone, so high intent goes straight to a human).
+ */
+export function decideMainMenu(
+  choice: MainMenuChoice,
+  current: ConversationStage,
+  known: KnownFacts = {},
+  screenAll = false,
+): Decision {
+  switch (choice) {
+    case 'check_fit': {
+      const reason = disqualifyingReason(known);
+      if (reason) {
+        return {
+          nextStage: 'disqualified',
+          action: 'send_disqualification',
+          qualified: false,
+          disqualificationReason: reason,
+          escalate: false,
+        };
+      }
+      return nextScreeningStep(known, screenAll, false);
+    }
+    case 'testimonials':
+      return {
+        nextStage: holdStage(current),
+        action: 'send_social_proof',
+        escalate: false,
+      };
+    case 'learn_more':
+      return { nextStage: holdStage(current), action: 'answer_faq', escalate: false };
+    case 'book_meeting':
+    case 'talk_to_human':
+      return { nextStage: 'handed_off', action: 'handoff_to_human', escalate: false };
+  }
+}
+
+/**
+ * The next screening question to ask, one at a time in spec order (Q1 → Q2 → Q3 →
+ * Q4), or `proceed_qualified` once all are answered. Q1/Q3 are asked only for a
+ * lead that did not come through the form (`screenAll`).
+ */
+function nextScreeningStep(
+  facts: KnownFacts,
+  screenAll: boolean,
+  escalate: boolean,
+): Decision {
   if (screenAll && facts.sellIntent === undefined) {
     return { nextStage: 'screening_sell_intent', action: 'ask_sell_intent', escalate };
   }
@@ -139,8 +195,6 @@ export function decideTransition(
       escalate,
     };
   }
-
-  // Both screening answers are in and none disqualifies → qualified.
   return {
     nextStage: 'qualified',
     action: 'proceed_qualified',
@@ -158,9 +212,8 @@ function disqualifyingReason(facts: KnownFacts): DisqualificationReason | undefi
 }
 
 /**
- * The stage to hold when a turn doesn't advance screening (a clarification, an
- * objection, an FAQ). A first inbound must not linger in `new`; everything else
- * stays where it is.
+ * The stage to hold when a turn doesn't advance screening (an objection or an
+ * FAQ). A first inbound must not linger in `new`; everything else stays put.
  */
 function holdStage(current: ConversationStage): ConversationStage {
   return current === 'new' || current === 'awaiting_first_contact' ? 'engaged' : current;

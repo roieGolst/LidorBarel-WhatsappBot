@@ -17,10 +17,18 @@ import type {
 } from '../whatsapp/channel.js';
 import { guardedSend } from '../whatsapp/guardedSend.js';
 import { classifyAndExtract } from './classify.js';
-import { decideTransition, screensAllQuestions, type KnownFacts } from './decide.js';
+import {
+  decideMainMenu,
+  decideTransition,
+  screensAllQuestions,
+  type Decision,
+  type KnownFacts,
+} from './decide.js';
 import { generateValidatedReply } from './generate.js';
 import {
   INTRO_VIDEO_PATH,
+  MAIN_MENU,
+  mainMenuChoiceFor,
   screeningQuestionFor,
   WELCOME_MESSAGE,
 } from './interactive.js';
@@ -46,8 +54,7 @@ import {
  * spec sequence (welcome → intro video → first question, §2), and the four
  * screening questions are sent as interactive buttons/lists (§8) rather than
  * model-written text, so their wording and options are exactly the spec's. Every
- * other reply (FAQ, objection, clarify, handoff) is still model-written and
- * validated.
+ * other reply (FAQ, objection, handoff) is still model-written and validated.
  *
  * Each IO step is a LangGraph `task` on a Postgres-backed checkpointer, so a turn
  * runs as durable, checkpointed execution — sends are individual tasks, so a
@@ -234,7 +241,20 @@ export function createConversationWorkflow(
       });
 
       // The one place a stage is chosen — pure code, never the model.
-      const decision = decideTransition(ctx.stage, analysis, ctx.known, ctx.screenAll);
+      // Opt-out always wins. Otherwise the very first response opens with the
+      // main menu (§2/§8); a later main-menu tap routes deterministically; and
+      // anything else runs the classify-driven screening flow.
+      const menuChoice = mainMenuChoiceFor(ctx.currentText);
+      let decision: Decision;
+      if (analysis.intent === 'OPT_OUT') {
+        decision = decideTransition(ctx.stage, analysis, ctx.known, ctx.screenAll);
+      } else if (ctx.isFirstResponse) {
+        decision = { nextStage: 'engaged', action: 'show_main_menu', escalate: false };
+      } else if (menuChoice) {
+        decision = decideMainMenu(menuChoice, ctx.stage, ctx.known, ctx.screenAll);
+      } else {
+        decision = decideTransition(ctx.stage, analysis, ctx.known, ctx.screenAll);
+      }
 
       // Assemble the ordered messages this turn will send.
       const plan: { part: OutboundPart; storeBody: string; usage?: LlmUsage[] }[] = [];
@@ -252,12 +272,23 @@ export function createConversationWorkflow(
         });
       }
 
-      // A screening question is fixed spec content sent as buttons/a list; every
-      // other action is written and validated by the model.
+      // The action's message. The main menu and the screening questions are fixed
+      // spec content sent as buttons/a list; every other action is written and
+      // validated by the model.
       let regenerated = false;
       let fellBack = false;
       const question = screeningQuestionFor(decision.action);
-      if (question) {
+      if (decision.action === 'show_main_menu') {
+        plan.push({
+          part: {
+            kind: 'list',
+            body: MAIN_MENU.body,
+            buttonLabel: MAIN_MENU.buttonLabel,
+            rows: [...MAIN_MENU.rows],
+          },
+          storeBody: MAIN_MENU.body,
+        });
+      } else if (question) {
         plan.push({
           part:
             question.kind === 'buttons'

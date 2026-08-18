@@ -62,6 +62,9 @@ The conversation so far is below. The final turn is a bracketed instruction tell
 
 /** What to tell the model to produce, per decided action. */
 const DIRECTIVES: Record<TurnAction, string> = {
+  // Deterministic actions (menu, screening) never reach the generator; their
+  // entries exist only to keep this map exhaustive over TurnAction.
+  show_main_menu: 'Present the opening options.',
   ask_sell_intent:
     'Ask whether they are actually thinking of selling the property or just want a price estimate. One short, easy question.',
   ask_neighborhood:
@@ -80,7 +83,10 @@ const DIRECTIVES: Record<TurnAction, string> = {
     'Answer their question briefly and helpfully in Lidor’s voice, using the KNOWLEDGE above. Do not over-explain.',
   handle_objection:
     'Acknowledge their concern with empathy and address it briefly, using the objection guidance above. You may ask one gentle follow-up.',
-  clarify: 'You did not fully understand. Ask them to rephrase. One short question.',
+  send_social_proof:
+    'They asked for proof/testimonials. Share the strongest social proof from the KNOWLEDGE — a couple of concrete stats and one short success story — warmly and without pressure. Do not ask a question.',
+  handoff_to_human:
+    'They want to speak with Lidor. Warmly tell them you are connecting them now and that Lidor will reach out shortly. Do not ask a question.',
 };
 
 /**
@@ -89,6 +95,7 @@ const DIRECTIVES: Record<TurnAction, string> = {
  * {@link validateReply} (asserted in the tests).
  */
 export const SAFE_VARIANTS: Record<TurnAction, string> = {
+  show_main_menu: 'איך תרצה להתחיל?',
   ask_sell_intent: 'האם חשבת למכור את הדירה או רק לקבל הערכת מחיר?',
   ask_neighborhood: 'באיזו שכונה נמצא הנכס?',
   ask_timeline: 'אם תקבל הצעה שמתאימה לציפיות שלך, תוך כמה זמן תרצה למכור?',
@@ -100,7 +107,9 @@ export const SAFE_VARIANTS: Record<TurnAction, string> = {
   acknowledge_opt_out: 'קיבלתי, לא נפנה אליך יותר. תודה.',
   answer_faq: 'אשמח לעזור. מה תרצה לדעת?',
   handle_objection: 'בטח, זה לגמרי מובן. מה ההתלבטות העיקרית שלך כרגע?',
-  clarify: 'לא הבנתי עד הסוף. אפשר לנסח שוב?',
+  send_social_proof:
+    'לידור מלווה מוכרים בבאר שבע מעל 4 שנים, עם יותר מ-124 נכסים שנמכרו, כ-82% מהם בפחות מחודשיים. נשמח לשתף גם סיפורי הצלחה.',
+  handoff_to_human: 'מעולה, אני מחבר אותך עכשיו ללידור. הוא יחזור אליך בהקדם להמשך.',
 };
 
 export interface GenerateInput {

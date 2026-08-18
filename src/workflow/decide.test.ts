@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { Analysis } from './classify.js';
 import {
   CONFIDENCE_THRESHOLD,
+  decideMainMenu,
   decideTransition,
   screensAllQuestions,
   type KnownFacts,
@@ -39,24 +40,28 @@ describe('decideTransition', () => {
     expect(decision.nextStage).toBe('opted_out');
   });
 
-  it('clarifies rather than guessing when confidence is below the threshold', () => {
+  it('keeps the flow moving instead of guessing when confidence is below the threshold', () => {
+    // A shaky read contributes no facts, so the pending question is re-asked
+    // rather than the person being told to rephrase. (Form lead → Q2 first.)
     const decision = decideTransition(
-      'engaged',
+      'screening_neighborhood',
       analysis({ confidence: CONFIDENCE_THRESHOLD - 0.01 }),
     );
-    expect(decision.action).toBe('clarify');
-    expect(decision.escalate).toBe(true);
-    expect(decision.nextStage).toBe('engaged');
+    expect(decision.action).toBe('ask_neighborhood');
+    expect(decision.nextStage).toBe('screening_neighborhood');
   });
 
-  it('clarifies on an UNCLEAR intent even at high confidence', () => {
+  it('asks the pending question on an UNCLEAR intent, never stalling', () => {
+    // A greeting or filler ("יאללה") reads as UNCLEAR; a direct-message lead
+    // should still be moved to Q1 rather than asked to rephrase.
     const decision = decideTransition(
       'new',
       analysis({ intent: 'UNCLEAR', confidence: 1 }),
+      {},
+      true,
     );
-    expect(decision.action).toBe('clarify');
-    // A first inbound must not linger in `new`.
-    expect(decision.nextStage).toBe('engaged');
+    expect(decision.action).toBe('ask_sell_intent');
+    expect(decision.nextStage).toBe('screening_sell_intent');
   });
 
   it.each([
@@ -190,6 +195,42 @@ describe('decideTransition', () => {
       );
       expect(decision.nextStage).toBe('disqualified');
       expect(decision.disqualificationReason).toBe('not_selling');
+    });
+  });
+
+  describe('decideMainMenu (§8 opening options)', () => {
+    it('check_fit starts screening at the first pending question (form lead → Q2)', () => {
+      const decision = decideMainMenu('check_fit', 'engaged');
+      expect(decision.action).toBe('ask_neighborhood');
+    });
+
+    it('check_fit for a direct lead starts at Q1', () => {
+      const decision = decideMainMenu('check_fit', 'engaged', {}, true);
+      expect(decision.action).toBe('ask_sell_intent');
+    });
+
+    it('check_fit still disqualifies on a fact already known', () => {
+      const decision = decideMainMenu('check_fit', 'engaged', {
+        currentlyMarketed: 'with_agent',
+      });
+      expect(decision.nextStage).toBe('disqualified');
+      expect(decision.disqualificationReason).toBe('exclusive_with_other_agent');
+    });
+
+    it('testimonials sends social proof', () => {
+      expect(decideMainMenu('testimonials', 'engaged').action).toBe('send_social_proof');
+    });
+
+    it('learn_more answers about the service', () => {
+      expect(decideMainMenu('learn_more', 'engaged').action).toBe('answer_faq');
+    });
+
+    it('talk_to_human and book_meeting both hand off', () => {
+      for (const choice of ['talk_to_human', 'book_meeting'] as const) {
+        const decision = decideMainMenu(choice, 'engaged');
+        expect(decision.action).toBe('handoff_to_human');
+        expect(decision.nextStage).toBe('handed_off');
+      }
     });
   });
 

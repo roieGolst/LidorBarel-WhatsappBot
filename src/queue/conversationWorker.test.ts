@@ -65,9 +65,10 @@ async function seed(inbound: string): Promise<{ conversationId: string; phone: s
 
 describe('processTurn', () => {
   it('advances the conversation and sends a reply for a queued turn', async () => {
-    // Screening is deterministic, so only the classifier runs on this turn.
+    // The opening is deterministic (welcome/video/menu), so only the classifier
+    // runs on this turn.
     const llm = new FakeLlmClient([
-      '{"intent":"ANSWER","confidence":0.9,"extracted":{}}',
+      '{"intent":"UNCLEAR","confidence":0.2,"extracted":{}}',
     ]);
     const channel = new FakeChannel();
     const { conversationId, phone } = await seed('היי, ראיתי את המודעה');
@@ -77,10 +78,10 @@ describe('processTurn', () => {
     // The stage advanced in the source of truth, not just in the workflow's
     // return value.
     const conversation = await getConversationById(db, conversationId);
-    expect(conversation?.stage).toBe('screening_neighborhood');
+    expect(conversation?.stage).toBe('engaged');
 
-    // The first response opens with welcome → intro video → the question, all to
-    // the right recipient, all persisted.
+    // The first response opens with welcome → intro video → main menu, all to the
+    // right recipient, all persisted.
     expect(channel.sent).toHaveLength(3);
     expect(channel.sent.every((m) => m.to === phone)).toBe(true);
     expect(channel.sent.at(-1)?.kind).toBe('list');
@@ -89,6 +90,5 @@ describe('processTurn', () => {
       (m) => m.direction === 'outbound',
     );
     expect(outbound).toHaveLength(3);
-    expect(outbound.at(-1)?.body).toBe('באיזו שכונה נמצא הנכס?');
   });
 });

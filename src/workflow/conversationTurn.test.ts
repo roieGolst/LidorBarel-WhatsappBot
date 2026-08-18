@@ -124,43 +124,88 @@ function config(conversationId: string) {
 }
 
 describe('conversationTurn', () => {
-  it('opens with welcome + intro video, then the first question as a list', async () => {
-    // Only the classifier runs — a screening question is deterministic, not
-    // model-written, so no generate call is made.
+  it('opens with welcome + intro video, then the main menu (§8)', async () => {
+    // Whatever the opener says, the first response is welcome → video → menu.
     const llm = new FakeLlmClient([
-      '{"intent":"ANSWER","confidence":0.9,"extracted":{}}',
+      '{"intent":"UNCLEAR","confidence":0.2,"extracted":{}}',
     ]);
     const channel = new FakeChannel();
-    const { conversationId } = await seed({ inbound: 'היי, ראיתי את המודעה' });
+    const { conversationId } = await seed({ inbound: 'היי, מה הולך?' });
 
     const result = await workflow({ db, llm, channel }).invoke(
       conversationId,
       config(conversationId),
     );
 
-    expect(result.stage).toBe('screening_neighborhood');
-    expect(result.action).toBe('ask_neighborhood');
-    expect(result.text).toBe('באיזו שכונה נמצא הנכס?');
+    expect(result.stage).toBe('engaged');
+    expect(result.action).toBe('show_main_menu');
 
-    // welcome text → intro video → neighborhood list, in that order.
+    // welcome text → intro video → main-menu list, in that order.
     expect(channel.sent).toHaveLength(3);
-    const [welcome, video, question] = channel.sent;
+    const [welcome, video, menu] = channel.sent;
     expect(welcome).toMatchObject({ kind: 'text', text: WELCOME_MESSAGE });
     expect(video).toMatchObject({ kind: 'video', filePath: INTRO_VIDEO_PATH });
-    expect(question?.kind).toBe('list');
-    if (question?.kind === 'list') {
-      expect(question.body).toBe('באיזו שכונה נמצא הנכס?');
-      expect(question.rows.map((r) => r.id)).toContain('neighborhood:ramot');
+    expect(menu?.kind).toBe('list');
+    if (menu?.kind === 'list') {
+      expect(menu.rows.map((r) => r.id)).toEqual([
+        'menu:check_fit',
+        'menu:learn_more',
+        'menu:book_meeting',
+        'menu:testimonials',
+        'menu:talk_to_human',
+      ]);
     }
-
-    // The classifier ran; the generator did not.
-    expect(llm.requests).toHaveLength(1);
 
     const outbound = (await recentMessages(db, conversationId)).filter(
       (m) => m.direction === 'outbound',
     );
     expect(outbound).toHaveLength(3);
-    expect(outbound.at(-1)?.body).toBe(result.text);
+  });
+
+  it('tapping "check fit" starts the screening flow (buttons/list)', async () => {
+    const llm = new FakeLlmClient([
+      '{"intent":"UNCLEAR","confidence":0.2,"extracted":{}}',
+    ]);
+    const channel = new FakeChannel();
+    // A returning turn after the menu was shown; the person taps check-fit.
+    const { conversationId } = await seed({
+      inbound: '✅ בדיקת התאמה',
+      stage: 'engaged',
+      priorReply: WELCOME_MESSAGE,
+    });
+
+    const result = await workflow({ db, llm, channel }).invoke(
+      conversationId,
+      config(conversationId),
+    );
+
+    // Form lead (default) → screening opens on Q2 (neighborhood) as a list.
+    expect(result.action).toBe('ask_neighborhood');
+    expect(channel.sent).toHaveLength(1);
+    expect(channel.sent[0]?.kind).toBe('list');
+  });
+
+  it('tapping "talk to me" hands off to a human', async () => {
+    const llm = new FakeLlmClient([
+      '{"intent":"UNCLEAR","confidence":0.2,"extracted":{}}',
+      'מעולה, אני מחבר אותך עכשיו ללידור.',
+    ]);
+    const channel = new FakeChannel();
+    const { conversationId } = await seed({
+      inbound: '👤 דברו איתי',
+      stage: 'engaged',
+      priorReply: WELCOME_MESSAGE,
+    });
+
+    const result = await workflow({ db, llm, channel }).invoke(
+      conversationId,
+      config(conversationId),
+    );
+
+    expect(result.action).toBe('handoff_to_human');
+    expect(result.stage).toBe('handed_off');
+    expect(channel.sent).toHaveLength(1);
+    expect(channel.sent[0]?.kind).toBe('text');
   });
 
   it('sends a three-option screening question as buttons', async () => {

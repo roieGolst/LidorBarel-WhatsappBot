@@ -49,7 +49,8 @@ beforeEach(async () => {
 /** Creates a contact + conversation and stores one inbound message. */
 async function seed(inbound: string): Promise<{ conversationId: string; phone: string }> {
   const phone = nextPhone();
-  const contact = await upsertContactByPhone(db, { phone });
+  // A Meta form lead: Q1/Q3 are pre-answered, so screening opens on Q2 (§3).
+  const contact = await upsertContactByPhone(db, { phone, entryPoint: 'meta_lead_form' });
   const { conversation } = await findOrCreateConversation(db, contact.id);
 
   await recordInboundMessage(db, {

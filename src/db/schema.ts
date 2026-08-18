@@ -61,14 +61,19 @@ export const entryPoint = pgEnum('entry_point', [
  * Owned exclusively by application code. The LLM returns structured JSON and
  * never writes this column — a hallucinated stage is structurally impossible.
  *
- * Q1 (intent) and Q3 (timeline) arrive pre-answered from the Meta lead form, so
- * the bot only screens on Q2 (neighborhood) and Q4 (currently marketed).
+ * Screening branches on the lead's origin (spec §3): a Meta-lead-form lead has
+ * Q1 (intent) and Q3 (timeline) pre-answered, so the bot only screens on Q2
+ * (neighborhood) and Q4 (currently marketed). A lead who messaged directly is
+ * screened on all four, so `screening_sell_intent` (Q1) and `screening_timeline`
+ * (Q3) exist for that path.
  */
 export const conversationStage = pgEnum('conversation_stage', [
   'new',
   'awaiting_first_contact',
   'engaged',
+  'screening_sell_intent',
   'screening_neighborhood',
+  'screening_timeline',
   'screening_currently_marketed',
   'qualified',
   'disqualified',

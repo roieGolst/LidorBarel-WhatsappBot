@@ -25,7 +25,9 @@ export type DisqualificationReason = NonNullable<Conversation['disqualificationR
 
 /** What the reply-generation step should do this turn. */
 export type TurnAction =
+  | 'ask_sell_intent' // spec Q1 (direct-message leads only)
   | 'ask_neighborhood' // spec Q2
+  | 'ask_timeline' // spec Q3 (direct-message leads only)
   | 'ask_currently_marketed' // spec Q4
   | 'proceed_qualified'
   | 'send_disqualification'
@@ -50,10 +52,24 @@ export interface Decision {
  */
 export const CONFIDENCE_THRESHOLD = 0.5;
 
+/**
+ * Whether to screen all four questions (spec §3).
+ *
+ * A Meta-lead-form lead answered Q1 (intent) and Q3 (timeline) on the form, so
+ * the bot re-asks neither — only Q2 and Q4. Any other origin (a direct WhatsApp
+ * message, a click-to-chat ad, an unknown source) has answered nothing, so all
+ * four are screened. Defaults to the form path so a caller that omits the origin
+ * keeps the narrower, less-intrusive flow.
+ */
+export function screensAllQuestions(entryPoint: string | null | undefined): boolean {
+  return entryPoint !== 'meta_lead_form';
+}
+
 export function decideTransition(
   current: ConversationStage,
   analysis: Analysis,
   known: KnownFacts = {},
+  screenAll = false,
 ): Decision {
   // Whether the reply needs the stronger model. Frustration or an unclear read
   // pushes to Sonnet; screening answers stay on Haiku (§7).
@@ -103,11 +119,18 @@ export function decideTransition(
     return { nextStage: holdStage(current), action: 'clarify', escalate };
   }
 
-  // 6. ANSWER: advance screening. The bot only asks Q2 (neighborhood) and Q4
-  //    (currently marketed) — one question at a time, in order — since Q1/Q3
-  //    are already answered by the form.
+  // 6. ANSWER: advance screening, one question at a time in spec order
+  //    (Q1 → Q2 → Q3 → Q4). Q1 and Q3 are asked only when the lead did not come
+  //    through the form (`screenAll`); a form lead answered them there, so the
+  //    bot screens on Q2 and Q4 alone.
+  if (screenAll && facts.sellIntent === undefined) {
+    return { nextStage: 'screening_sell_intent', action: 'ask_sell_intent', escalate };
+  }
   if (facts.neighborhood === undefined) {
     return { nextStage: 'screening_neighborhood', action: 'ask_neighborhood', escalate };
+  }
+  if (screenAll && facts.timeline === undefined) {
+    return { nextStage: 'screening_timeline', action: 'ask_timeline', escalate };
   }
   if (facts.currentlyMarketed === undefined) {
     return {

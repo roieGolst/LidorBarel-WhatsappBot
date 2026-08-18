@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import type { Analysis } from './classify.js';
-import { CONFIDENCE_THRESHOLD, decideTransition, type KnownFacts } from './decide.js';
+import {
+  CONFIDENCE_THRESHOLD,
+  decideTransition,
+  screensAllQuestions,
+  type KnownFacts,
+} from './decide.js';
 
 /** Builds an analysis with sensible confident defaults, overridable per test. */
 function analysis(overrides: Partial<Analysis> = {}): Analysis {
@@ -93,7 +98,8 @@ describe('decideTransition', () => {
     expect(decision).toMatchObject({ action: 'answer_faq', nextStage: 'engaged' });
   });
 
-  it('asks for the neighborhood first when nothing is known', () => {
+  it('asks for the neighborhood first when nothing is known (form lead: Q2+Q4 only)', () => {
+    // Default screenAll=false is the Meta-form path — Q1/Q3 were answered there.
     const decision = decideTransition('new', analysis());
     expect(decision.nextStage).toBe('screening_neighborhood');
     expect(decision.action).toBe('ask_neighborhood');
@@ -122,5 +128,81 @@ describe('decideTransition', () => {
   it('escalates the reply when the classifier flags frustration', () => {
     const decision = decideTransition('new', analysis({ needsEscalation: true }));
     expect(decision.escalate).toBe(true);
+  });
+
+  describe('direct-message lead (screenAll) — all four questions in order', () => {
+    it('asks Q1 (sell intent) first when nothing is known', () => {
+      const decision = decideTransition('new', analysis(), {}, true);
+      expect(decision.nextStage).toBe('screening_sell_intent');
+      expect(decision.action).toBe('ask_sell_intent');
+    });
+
+    it('asks Q2 (neighborhood) once sell intent is known', () => {
+      const decision = decideTransition(
+        'screening_sell_intent',
+        analysis({ extracted: { sellIntent: 'ready' } }),
+        {},
+        true,
+      );
+      expect(decision.nextStage).toBe('screening_neighborhood');
+      expect(decision.action).toBe('ask_neighborhood');
+    });
+
+    it('asks Q3 (timeline) once sell intent and neighborhood are known', () => {
+      const decision = decideTransition(
+        'screening_neighborhood',
+        analysis({ extracted: { neighborhood: 'רמות' } }),
+        { sellIntent: 'ready' },
+        true,
+      );
+      expect(decision.nextStage).toBe('screening_timeline');
+      expect(decision.action).toBe('ask_timeline');
+    });
+
+    it('asks Q4 (currently marketed) once the first three are known', () => {
+      const decision = decideTransition(
+        'screening_timeline',
+        analysis({ extracted: { timeline: 'within_month' } }),
+        { sellIntent: 'ready', neighborhood: 'רמות' },
+        true,
+      );
+      expect(decision.nextStage).toBe('screening_currently_marketed');
+      expect(decision.action).toBe('ask_currently_marketed');
+    });
+
+    it('qualifies once all four are answered and none disqualifies', () => {
+      const decision = decideTransition(
+        'screening_currently_marketed',
+        analysis({ extracted: { currentlyMarketed: 'no' } }),
+        { sellIntent: 'ready', neighborhood: 'רמות', timeline: 'within_month' },
+        true,
+      );
+      expect(decision.nextStage).toBe('qualified');
+      expect(decision.qualified).toBe(true);
+    });
+
+    it('disqualifies a direct lead who is not selling (Q1)', () => {
+      const decision = decideTransition(
+        'screening_sell_intent',
+        analysis({ extracted: { sellIntent: 'not_selling' } }),
+        {},
+        true,
+      );
+      expect(decision.nextStage).toBe('disqualified');
+      expect(decision.disqualificationReason).toBe('not_selling');
+    });
+  });
+
+  describe('screensAllQuestions', () => {
+    it('screens only Q2+Q4 for a Meta-form lead', () => {
+      expect(screensAllQuestions('meta_lead_form')).toBe(false);
+    });
+
+    it('screens all four for a direct message, click-to-chat, or unknown origin', () => {
+      expect(screensAllQuestions('direct_message')).toBe(true);
+      expect(screensAllQuestions('click_to_whatsapp')).toBe(true);
+      expect(screensAllQuestions(null)).toBe(true);
+      expect(screensAllQuestions(undefined)).toBe(true);
+    });
   });
 });

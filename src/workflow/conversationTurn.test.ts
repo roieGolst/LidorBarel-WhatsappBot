@@ -1,7 +1,11 @@
 import { eq } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import type { Database } from '../db/client.js';
-import { findContactById, upsertContactByPhone } from '../db/repositories/contacts.js';
+import {
+  findContactById,
+  upsertContactByPhone,
+  type EntryPoint,
+} from '../db/repositories/contacts.js';
 import {
   findOrCreateConversation,
   getConversationById,
@@ -55,6 +59,12 @@ interface SeedOptions {
   inbound: string;
   stage?: ConversationStage;
   extracted?: KnownFacts;
+  /**
+   * Lead origin, which drives the screening branch (spec §3). Defaults to a Meta
+   * form lead, so these tests exercise the Q2+Q4 flow unless they opt into the
+   * direct-message all-four path.
+   */
+  entryPoint?: EntryPoint;
 }
 
 /** Creates a contact + conversation and stores one inbound message. */
@@ -62,7 +72,10 @@ async function seed(
   options: SeedOptions,
 ): Promise<{ conversationId: string; phone: string }> {
   const phone = nextPhone();
-  const contact = await upsertContactByPhone(db, { phone });
+  const contact = await upsertContactByPhone(db, {
+    phone,
+    entryPoint: options.entryPoint ?? 'meta_lead_form',
+  });
   const { conversation } = await findOrCreateConversation(db, contact.id);
 
   if (options.stage || options.extracted) {

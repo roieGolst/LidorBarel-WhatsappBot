@@ -15,6 +15,13 @@
       "when": 1786883252409,
       "tag": "0001_non_partial_unique_indexes",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1787051053880,
+      "tag": "0002_wealthy_squadron_supreme",
+      "breakpoints": true
     }
   ]
 }

@@ -12,7 +12,7 @@ import type { LlmClient, LlmMessage } from '../llm/client.js';
 import type { WhatsAppChannel } from '../whatsapp/channel.js';
 import { guardedSend } from '../whatsapp/guardedSend.js';
 import { classifyAndExtract } from './classify.js';
-import { decideTransition, type KnownFacts } from './decide.js';
+import { decideTransition, screensAllQuestions, type KnownFacts } from './decide.js';
 import { generateValidatedReply } from './generate.js';
 import { persistTurn, type PersistTurnInput } from './persist.js';
 
@@ -48,6 +48,11 @@ export interface TurnContext {
   known: KnownFacts;
   contactId: string;
   contactPhone: string;
+  /**
+   * True when the lead did not come through the Meta form, so all four screening
+   * questions must be asked (spec §3). A form lead has Q1/Q3 pre-answered.
+   */
+  screenAll: boolean;
   /** True when this contact already opted out — the turn does nothing. */
   optedOut: boolean;
   /** The latest inbound message — the turn we are responding to. */
@@ -102,6 +107,7 @@ export async function loadContext(
     known: conversation.extracted ?? {},
     contactId: contact.id,
     contactPhone: contact.phone,
+    screenAll: screensAllQuestions(contact.entryPoint),
     optedOut: await isOptedOut(db, contact.phone),
     currentText: last.content,
     classifyHistory: turns.slice(0, -1),
@@ -164,7 +170,7 @@ export function createConversationWorkflow(
       });
 
       // The one place a stage is chosen — pure code, never the model.
-      const decision = decideTransition(ctx.stage, analysis, ctx.known);
+      const decision = decideTransition(ctx.stage, analysis, ctx.known, ctx.screenAll);
 
       const reply = await generate({
         action: decision.action,

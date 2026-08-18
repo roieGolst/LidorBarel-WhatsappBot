@@ -67,7 +67,6 @@ describe('decideTransition', () => {
   it.each([
     ['not_selling', { sellIntent: 'not_selling' }, 'not_selling'],
     ['no_urgency', { timeline: 'no_urgency' }, 'no_urgency'],
-    ['with_agent', { currentlyMarketed: 'with_agent' }, 'exclusive_with_other_agent'],
   ] as const)(
     'disqualifies on %s with the mapped reason',
     (_label, extracted, reason) => {
@@ -83,9 +82,39 @@ describe('decideTransition', () => {
   );
 
   it('disqualifies on a fact learned in an earlier turn', () => {
-    const known: KnownFacts = { currentlyMarketed: 'with_agent' };
-    const decision = decideTransition('screening_currently_marketed', analysis(), known);
-    expect(decision.disqualificationReason).toBe('exclusive_with_other_agent');
+    const known: KnownFacts = { sellIntent: 'not_selling' };
+    const decision = decideTransition('screening_sell_intent', analysis(), known);
+    expect(decision.disqualificationReason).toBe('not_selling');
+  });
+
+  describe('marketed through another agent (exclusivity follow-up)', () => {
+    it('asks about the exclusivity end + follow-up before disqualifying', () => {
+      const decision = decideTransition(
+        'screening_currently_marketed',
+        analysis({ extracted: { currentlyMarketed: 'with_agent' } }),
+      );
+      expect(decision.action).toBe('ask_exclusivity');
+      expect(decision.nextStage).toBe('screening_exclusivity');
+    });
+
+    it('disqualifies once the exclusivity details are captured', () => {
+      const decision = decideTransition(
+        'screening_exclusivity',
+        analysis({ extracted: { exclusivityEndsAt: 'עוד חודשיים' } }),
+        { currentlyMarketed: 'with_agent' },
+      );
+      expect(decision.nextStage).toBe('disqualified');
+      expect(decision.disqualificationReason).toBe('exclusive_with_other_agent');
+    });
+
+    it('proceeds to disqualify once the follow-up wish is known even without a date', () => {
+      const decision = decideTransition(
+        'screening_exclusivity',
+        analysis({ extracted: { wantsExclusivityFollowup: true } }),
+        { currentlyMarketed: 'with_agent' },
+      );
+      expect(decision.nextStage).toBe('disqualified');
+    });
   });
 
   it('handles an objection without advancing screening, on the stronger model', () => {
@@ -211,10 +240,17 @@ describe('decideTransition', () => {
 
     it('check_fit still disqualifies on a fact already known', () => {
       const decision = decideMainMenu('check_fit', 'engaged', {
-        currentlyMarketed: 'with_agent',
+        sellIntent: 'not_selling',
       });
       expect(decision.nextStage).toBe('disqualified');
-      expect(decision.disqualificationReason).toBe('exclusive_with_other_agent');
+      expect(decision.disqualificationReason).toBe('not_selling');
+    });
+
+    it('check_fit routes an already-known exclusive lead to the exclusivity ask', () => {
+      const decision = decideMainMenu('check_fit', 'engaged', {
+        currentlyMarketed: 'with_agent',
+      });
+      expect(decision.action).toBe('ask_exclusivity');
     });
 
     it('testimonials sends social proof', () => {

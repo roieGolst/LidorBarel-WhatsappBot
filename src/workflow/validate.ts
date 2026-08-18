@@ -59,7 +59,18 @@ const HEBREW_PREFIXES = ['ב', 'ה', 'ו', 'ל', 'מ', 'ש', 'כ'];
 /** Longest reply we will send. Beyond this it is a wall of text, not a message. */
 export const MAX_REPLY_LENGTH = 600;
 
-export type Violation = 'empty' | 'too_long' | 'multiple_questions' | 'banned_word';
+export type Violation =
+  'empty' | 'too_long' | 'multiple_questions' | 'missing_question' | 'banned_word';
+
+export interface ValidateOptions {
+  /**
+   * Require exactly one question. Used for the engaging replies (FAQ, objection,
+   * social proof, exclusivity) that must always move the lead forward — the bot
+   * should not leave an active conversation without a next step (unless it is a
+   * terminal close or a booked meeting).
+   */
+  requireQuestion?: boolean;
+}
 
 export interface ValidationResult {
   ok: boolean;
@@ -103,17 +114,22 @@ export function findBannedTerms(text: string): string[] {
 }
 
 /** Checks a candidate reply against the spec's send-time rules. */
-export function validateReply(text: string): ValidationResult {
+export function validateReply(
+  text: string,
+  options: ValidateOptions = {},
+): ValidationResult {
   const trimmed = text.trim();
   const violations = new Set<Violation>();
 
   if (trimmed.length === 0) violations.add('empty');
   if (trimmed.length > MAX_REPLY_LENGTH) violations.add('too_long');
 
-  // "One question at a time, don't flood them." Zero questions (an
-  // acknowledgement) is fine; two or more is a violation.
+  // "One question at a time, don't flood them." Two or more is always a
+  // violation; zero is a violation only when this reply must move the lead
+  // forward (see ValidateOptions.requireQuestion).
   const questionMarks = trimmed.match(/\?/g)?.length ?? 0;
   if (questionMarks > 1) violations.add('multiple_questions');
+  if (options.requireQuestion && questionMarks === 0) violations.add('missing_question');
 
   const bannedTerms = findBannedTerms(trimmed);
   if (bannedTerms.length > 0) violations.add('banned_word');

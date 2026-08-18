@@ -57,6 +57,16 @@ describe('validateReply', () => {
     expect(validateReply('דיברנו על שבטים').ok).toBe(true);
   });
 
+  it('flags a missing question only when one is required', () => {
+    const noQuestion = 'תודה, קיבלתי את הפרטים.';
+    expect(validateReply(noQuestion).ok).toBe(true);
+    expect(validateReply(noQuestion, { requireQuestion: true }).violations).toContain(
+      'missing_question',
+    );
+    // A single question satisfies the requirement.
+    expect(validateReply('נמשיך לבדיקה קצרה?', { requireQuestion: true }).ok).toBe(true);
+  });
+
   it('reports every distinct violation at once', () => {
     const result = validateReply(`${'א'.repeat(MAX_REPLY_LENGTH + 1)} מבצע? זול?`);
     expect(new Set(result.violations)).toEqual(

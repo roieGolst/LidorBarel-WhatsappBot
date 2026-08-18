@@ -31,6 +31,7 @@ export type TurnAction =
   | 'ask_neighborhood' // spec Q2
   | 'ask_timeline' // spec Q3 (direct-message leads only)
   | 'ask_currently_marketed' // spec Q4
+  | 'ask_exclusivity' // Q4 = with another agent: capture exclusivity end + follow-up
   | 'proceed_qualified'
   | 'send_disqualification'
   | 'acknowledge_opt_out'
@@ -95,19 +96,11 @@ export function decideTransition(
     analysis.intent !== 'UNCLEAR' && analysis.confidence >= CONFIDENCE_THRESHOLD;
   const facts: KnownFacts = confident ? { ...known, ...analysis.extracted } : known;
 
-  // 2. Disqualification — spec rules only, the highest business priority after
-  //    opt-out. Checked on the merged facts so an answer given earlier still
-  //    disqualifies even when this turn is about something else.
-  const reason = disqualifyingReason(facts);
-  if (reason) {
-    return {
-      nextStage: 'disqualified',
-      action: 'send_disqualification',
-      qualified: false,
-      disqualificationReason: reason,
-      escalate,
-    };
-  }
+  // 2. Marketed through another agent, then disqualification — the highest
+  //    business priority after opt-out. Checked on the merged facts so an answer
+  //    given earlier still applies even when this turn is about something else.
+  const blocked = exclusivityOrDisqualification(facts, escalate);
+  if (blocked) return blocked;
 
   // 3. A confident objection or FAQ gets a bespoke reply, without advancing
   //    screening. An objection reaches for the stronger model to handle it.
@@ -143,16 +136,8 @@ export function decideMainMenu(
 ): Decision {
   switch (choice) {
     case 'check_fit': {
-      const reason = disqualifyingReason(known);
-      if (reason) {
-        return {
-          nextStage: 'disqualified',
-          action: 'send_disqualification',
-          qualified: false,
-          disqualificationReason: reason,
-          escalate: false,
-        };
-      }
+      const blocked = exclusivityOrDisqualification(known, false);
+      if (blocked) return blocked;
       return nextScreeningStep(known, screenAll, false);
     }
     case 'testimonials':
@@ -201,6 +186,65 @@ function nextScreeningStep(
     qualified: true,
     escalate,
   };
+}
+
+/**
+ * Removes the most recently answered screening fact — the "go back" command.
+ *
+ * Walks the spec question order (Q1 → Q2 → Q3 → Q4, minus Q1/Q3 for a form lead)
+ * from the end and clears the last one that is set, so the flow re-asks exactly
+ * that question. With nothing answered yet it is a no-op.
+ */
+export function undoLastAnswer(facts: KnownFacts, screenAll: boolean): KnownFacts {
+  const order: (keyof KnownFacts)[] = [];
+  if (screenAll) order.push('sellIntent');
+  order.push('neighborhood');
+  if (screenAll) order.push('timeline');
+  order.push('currentlyMarketed');
+
+  const next: KnownFacts = { ...facts };
+  for (let i = order.length - 1; i >= 0; i -= 1) {
+    const key = order[i]!;
+    if (next[key] !== undefined) {
+      delete next[key];
+      break;
+    }
+  }
+  return next;
+}
+
+/**
+ * Handles a lead already marketed through another agent, then disqualification.
+ *
+ * When the property is marketed *with another agent*, that is normally a
+ * disqualifier — but first the bot asks when the exclusivity ends and whether
+ * they want a follow-up then (a nurture opportunity, not a dead end). Only once
+ * that is captured does the exclusivity become a disqualification. Returns the
+ * decision to take, or `undefined` to continue the normal flow.
+ */
+function exclusivityOrDisqualification(
+  facts: KnownFacts,
+  escalate: boolean,
+): Decision | undefined {
+  if (
+    facts.currentlyMarketed === 'with_agent' &&
+    facts.exclusivityEndsAt === undefined &&
+    facts.wantsExclusivityFollowup === undefined
+  ) {
+    return { nextStage: 'screening_exclusivity', action: 'ask_exclusivity', escalate };
+  }
+
+  const reason = disqualifyingReason(facts);
+  if (reason) {
+    return {
+      nextStage: 'disqualified',
+      action: 'send_disqualification',
+      qualified: false,
+      disqualificationReason: reason,
+      escalate,
+    };
+  }
+  return undefined;
 }
 
 /** The spec's disqualifiers, mapped from screening facts. First match wins. */

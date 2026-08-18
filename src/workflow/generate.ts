@@ -7,7 +7,20 @@ import {
   type LlmUsage,
 } from '../llm/client.js';
 import type { TurnAction } from './decide.js';
-import { validateReply } from './validate.js';
+import { validateReply, type ValidateOptions } from './validate.js';
+
+/**
+ * Actions whose reply must end with exactly one forward question — the engaging
+ * replies that keep an active conversation moving toward the consultation call.
+ * Terminal closes (qualified handoff, disqualification, opt-out, human handoff)
+ * are deliberately not here: they end the conversation and take no question.
+ */
+const ENGAGING_ACTIONS: ReadonlySet<TurnAction> = new Set([
+  'answer_faq',
+  'handle_objection',
+  'send_social_proof',
+  'ask_exclusivity',
+]);
 
 /**
  * `generateReply` — writes the actual reply, in Lidor's voice (§5.5).
@@ -33,12 +46,14 @@ const VOICE_PROMPT = `You are "צוות לידור בראל" — the voice of Li
 
 Voice: professional, warm, and sharp (מקצועי, ידידותי, חד). Sound like a senior Beer Sheva agent who leads the conversation with confidence, screens out unsuitable properties, and makes owners feel they are in good hands from the first message. Formality 3/5, medium-length messages, moderate emoji use.
 
-Sound like: an experienced, trustworthy professional holding a natural, focused, pleasant conversation — someone whose goal is to understand the property and offer a solution, not to sell by force.
-Never sound like: a bot or automated system; a pushy salesperson closing at any cost; an interrogator flooding questions; an agent who promises before checking; a robot with long, formal, repetitive answers; someone condescending or judgmental.
+Sound like: an experienced, trustworthy professional running a focused, efficient conversation — clear, sharp, and moving toward booking a consultation call with Lidor.
+Never sound like: a bot or automated system; a pushy salesperson closing at any cost; an interrogator flooding questions; an agent who promises before checking; a robot with long, formal, repetitive answers; someone condescending or judgmental; a chatty friend.
+
+Your job: collect the relevant details, answer questions, qualify the lead, and prepare them for the consultation call — nothing else.
 
 Hard rules:
-- Write in Hebrew. Keep it short — usually one or two lines. One idea per message.
-- Ask at most ONE question per message, and only when the instruction calls for it. Build trust; never pressure.
+- Write in Hebrew. Be brief and precise — one or two short lines, one idea. No rich small talk, no tangents; steer politely back to the property and the next step. Keep a professional distance — helpful, not a buddy.
+- End with exactly ONE question or a clear next step that moves toward the call. Never leave the lead without a next move, and never ask more than one question at a time. Build trust; never pressure.
 - Never promise what you cannot guarantee, and never use pressure or over-certainty words: בטוח, בוודאות, מאה אחוז, אין סיכוי, חייב, דחוף, רק היום, מבצע, מציאה, זול, "יקר מדי" (about the property), אי אפשר, אין מה לעשות, נסגור, תתחייב, "מקסימום מחיר", "אני מבטיח". Prefer instead: אבדוק, אעריך, על סמך הנתונים, לפי מצב השוק, המטרה היא, אסטרטגיית מכירה, חשיפה רחבה, הערכת שווי, "המחיר הגבוה ביותר שהשוק מאפשר".
 - Open gender-neutral; do not assume the lead's gender.
 - Output ONLY the message text to send. No quotes, no preamble, no explanation.
@@ -73,18 +88,20 @@ const DIRECTIVES: Record<TurnAction, string> = {
     'Ask, if they got an offer matching their expectations, how soon they would want to sell. One short question.',
   ask_currently_marketed:
     'Ask whether the property is currently being marketed — privately, through another agent, or not at all. One short question.',
+  ask_exclusivity:
+    'They said the property is marketed through another agent. In one message, ask when that agent’s exclusivity ends AND whether they would like a follow-up when it does. End with a single question mark.',
   proceed_qualified:
-    'You have everything you need. Warmly thank them for the details and tell them you are now passing everything to Lidor, who will review it and get back to them shortly. Do not ask a question.',
+    'You have everything you need. Briefly thank them and tell them you are passing the details to Lidor, who will reach out to arrange the consultation call shortly. Sharp and warm, no fluff.',
   send_disqualification:
-    'Politely close the conversation: thank them for their time, leave the door open for the future if they decide to sell or want advice, apply no pressure, wish them well. Do not ask a question.',
+    'Politely close: thank them, leave the door open for the future, no pressure. If they are exclusive with another agent and asked for a follow-up, add that you will reach out when the exclusivity ends. Do not ask a question.',
   acknowledge_opt_out:
     'Acknowledge their request to stop, once and politely, and confirm they will not be contacted again. Do not ask a question.',
   answer_faq:
-    'Answer their question briefly and helpfully in Lidor’s voice, using the KNOWLEDGE above. Do not over-explain.',
+    'Answer briefly and precisely in Lidor’s voice, using the KNOWLEDGE above — no over-explaining. Then end with one question that moves toward the consultation call (e.g. offer to continue the quick fit check).',
   handle_objection:
-    'Acknowledge their concern with empathy and address it briefly, using the objection guidance above. You may ask one gentle follow-up.',
+    'Acknowledge the concern briefly using the objection guidance above, then end with one question that moves the conversation forward.',
   send_social_proof:
-    'They asked for proof/testimonials. Share the strongest social proof from the KNOWLEDGE — a couple of concrete stats and one short success story — warmly and without pressure. Do not ask a question.',
+    'They asked for proof/testimonials. Share one or two of the strongest stats and one short success story from the KNOWLEDGE — concise, no pressure — then end with one question that moves toward the fit check or the call.',
   handoff_to_human:
     'They want to speak with Lidor. Warmly tell them you are connecting them now and that Lidor will reach out shortly. Do not ask a question.',
 };
@@ -100,6 +117,8 @@ export const SAFE_VARIANTS: Record<TurnAction, string> = {
   ask_neighborhood: 'באיזו שכונה נמצא הנכס?',
   ask_timeline: 'אם תקבל הצעה שמתאימה לציפיות שלך, תוך כמה זמן תרצה למכור?',
   ask_currently_marketed: 'האם הנכס משווק כרגע?',
+  ask_exclusivity:
+    'מתי מסתיימת הבלעדיות עם המתווך הנוכחי, ותרצה שנחזור אליך כשהיא מסתיימת?',
   proceed_qualified:
     'מעולה, תודה רבה על כל הפרטים. אני מעביר עכשיו הכול ללידור, שיעבור על הנתונים ויחזור אליך בהקדם עם המשך התהליך.',
   send_disqualification:
@@ -108,7 +127,7 @@ export const SAFE_VARIANTS: Record<TurnAction, string> = {
   answer_faq: 'אשמח לעזור. מה תרצה לדעת?',
   handle_objection: 'בטח, זה לגמרי מובן. מה ההתלבטות העיקרית שלך כרגע?',
   send_social_proof:
-    'לידור מלווה מוכרים בבאר שבע מעל 4 שנים, עם יותר מ-124 נכסים שנמכרו, כ-82% מהם בפחות מחודשיים. נשמח לשתף גם סיפורי הצלחה.',
+    'לידור מלווה מוכרים בבאר שבע מעל 4 שנים, עם יותר מ-124 נכסים שנמכרו וכ-82% שנמכרו בפחות מחודשיים. נמשיך לבדיקת התאמה קצרה?',
   handoff_to_human: 'מעולה, אני מחבר אותך עכשיו ללידור. הוא יחזור אליך בהקדם להמשך.',
 };
 
@@ -181,13 +200,16 @@ export async function generateValidatedReply(
     ...(input.history ?? []),
     instruction(input.action),
   ];
+  const checkOptions: ValidateOptions = {
+    requireQuestion: ENGAGING_ACTIONS.has(input.action),
+  };
 
   const first = await draft(
     llm,
     input.escalate ? ESCALATION_MODEL : CLASSIFIER_MODEL,
     baseMessages,
   );
-  const firstCheck = validateReply(first.text);
+  const firstCheck = validateReply(first.text, checkOptions);
   if (firstCheck.ok) {
     return {
       text: first.text,
@@ -203,7 +225,7 @@ export async function generateValidatedReply(
     { role: 'assistant', content: first.text },
     { role: 'user', content: correctionNote(firstCheck.bannedTerms) },
   ]);
-  const retryCheck = validateReply(retry.text);
+  const retryCheck = validateReply(retry.text, checkOptions);
   if (retryCheck.ok) {
     return {
       text: retry.text,

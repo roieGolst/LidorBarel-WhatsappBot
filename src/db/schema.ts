@@ -75,6 +75,8 @@ export const conversationStage = pgEnum('conversation_stage', [
   'screening_neighborhood',
   'screening_timeline',
   'screening_currently_marketed',
+  /** Q4 = with another agent: capturing exclusivity end + follow-up wish. */
+  'screening_exclusivity',
   'qualified',
   'disqualified',
   'appointment_proposed',
@@ -84,6 +86,8 @@ export const conversationStage = pgEnum('conversation_stage', [
   'awaiting_reply',
   'closed_no_response',
   'opted_out',
+  /** Banned for abuse (malicious/injection messages after a warning). Terminal. */
+  'blocked',
   'error',
 ]);
 

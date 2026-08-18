@@ -51,6 +51,10 @@ export const extractedSchema = z.object({
   neighborhood: z.string().min(1).optional(), // Q2, free text; mapped to a dropdown later
   timeline: timeline.optional(),
   currentlyMarketed: currentlyMarketed.optional(),
+  // Asked only when the property is marketed through another agent: when that
+  // agent's exclusivity ends (free text), and whether they want a follow-up then.
+  exclusivityEndsAt: z.string().min(1).optional(),
+  wantsExclusivityFollowup: z.boolean().optional(),
 });
 
 export const analysisSchema = z.object({
@@ -88,6 +92,8 @@ Return JSON with exactly these fields:
     - "neighborhood" (Q2 — "באיזו שכונה נמצא הנכס?"): the Beer Sheva neighborhood named, as free text (e.g. נווה זאב, נחל עשן, רמות, שכונות א׳/ב׳/ג׳/ד׳/ה׳/ו׳/ט׳)
     - "timeline" (Q3 — "תוך כמה זמן תרצה למכור אם תקבל הצעה מתאימה?"): "immediate" (מיד) | "within_month" (בחודש הקרוב) | "still_checking" (בחודשים הקרובים) | "no_urgency" (אין דחיפות)
     - "currentlyMarketed" (Q4 — "האם הנכס משווק כרגע?"): "no" (לא) | "privately" (כן, באופן פרטי) | "with_agent" (כן, עם מתווך)
+    - "exclusivityEndsAt": when the current agent's exclusivity ends, as free text (e.g. "עוד חודשיים", "בסוף מרץ", "לא יודע") — only when they say it
+    - "wantsExclusivityFollowup": true/false if they say whether they want us to follow up once the exclusivity ends
 - "needsEscalation": true if the message shows anger, frustration, or something a bot should not handle alone.
 
 Rules:

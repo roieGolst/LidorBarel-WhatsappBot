@@ -17,9 +17,30 @@ import type { TurnAction } from './decide.js';
  * the classifier maps it onto the right screening enum.
  */
 
-/** Verbatim welcome (spec §2), the first thing a new conversation receives. */
+/**
+ * Welcome (spec §2), the first thing a new conversation receives. The spec text,
+ * plus a note on the control words the person can type at any point (restart /
+ * back / stop) — Roie's addition so they always know how to change an answer, go
+ * back, or end.
+ */
 export const WELCOME_MESSAGE =
-  'היי! 👋 תודה שהשארת פרטים לגבי הנכס שלך. אני רק רוצה להכיר אותו קצת כדי שנוכל לתת לך הערכת שווי כמה שיותר מדויקת ולהבין מה פוטנציאל המכירה שלו. נתחיל בכמה שאלות קצרות?';
+  'היי! 👋 תודה שהשארת פרטים לגבי הנכס שלך. אני רק רוצה להכיר אותו קצת כדי שנוכל לתת לך הערכת שווי כמה שיותר מדויקת ולהבין מה פוטנציאל המכירה שלו. נתחיל בכמה שאלות קצרות?\n\n(בכל שלב אפשר לכתוב *התחל מחדש* כדי להתחיל מההתחלה, *חזור* כדי לתקן תשובה, או *עצור* כדי לסיים.)';
+
+/**
+ * Mandatory, model-free replies for the guard rails. Each is sent instead of an
+ * AI turn when a limit is hit, so they must stay clean and on-voice on their own.
+ */
+export const THROTTLE_MESSAGE =
+  'קיבלתי את ההודעות שלך 🙏 אני חוזר אליך עוד רגע — אין צורך לשלוח שוב.';
+export const QUOTA_HANDOFF_MESSAGE =
+  'תודה על כל הפרטים! אני מעביר אותך עכשיו ללידור, שימשיך איתך אישית ויחזור אליך בהקדם.';
+export const EXPIRED_MESSAGE =
+  'עברו כמה ימים מאז ששוחחנו, אז סגרתי את השיחה הזו. אפשר לכתוב לנו שוב בכל עת כדי להתחיל מחדש 🙏';
+export const ABUSE_WARNING_MESSAGE =
+  'אני כאן כדי לעזור לך עם הנכס בלבד. נשמור על השיחה עניינית 🙂';
+export const ABUSE_BAN_MESSAGE = 'לא נוכל להמשיך בשיחה הזו. כל טוב.';
+export const STOP_MESSAGE =
+  'סגרתי את השיחה. אפשר לכתוב לנו שוב בכל עת כדי להתחיל מחדש 🙏';
 
 /**
  * The intro clip sent after the welcome (spec §2). Resolved from the app's

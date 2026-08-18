@@ -1,8 +1,32 @@
-import { desc, eq } from 'drizzle-orm';
+import { and, count, desc, eq, gte } from 'drizzle-orm';
 import type { DbClient } from '../client.js';
 import { messages } from '../schema.js';
 
 export type Message = typeof messages.$inferSelect;
+
+/**
+ * Counts inbound messages in a conversation — the whole-conversation quota (a
+ * runaway conversation cap), and optionally only those since a cutoff (the
+ * rolling-window rate limit). Derived from the source of truth rather than a
+ * denormalized counter, so it is naturally correct under webhook redelivery.
+ */
+export async function countInboundMessages(
+  db: DbClient,
+  conversationId: string,
+  since?: Date,
+): Promise<number> {
+  const [row] = await db
+    .select({ n: count() })
+    .from(messages)
+    .where(
+      and(
+        eq(messages.conversationId, conversationId),
+        eq(messages.direction, 'inbound'),
+        ...(since ? [gte(messages.createdAt, since)] : []),
+      ),
+    );
+  return row?.n ?? 0;
+}
 
 /**
  * Returns a conversation's most recent messages, oldest first.

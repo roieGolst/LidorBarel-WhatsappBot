@@ -2,7 +2,7 @@ import { eq } from 'drizzle-orm';
 import type { Database } from '../db/client.js';
 import type { ConversationStage } from '../db/repositories/conversations.js';
 import { contacts, conversations, events, messages, optOuts } from '../db/schema.js';
-import type { Decision, KnownFacts } from './decide.js';
+import type { DisqualificationReason, KnownFacts } from './decide.js';
 
 /**
  * `persistTurn` — commits everything a turn changed, in one transaction (§5.2).
@@ -18,6 +18,9 @@ import type { Decision, KnownFacts } from './decide.js';
  * idempotent by its provider id: if the turn is replayed after a crash (some
  * sends already happened and their ids are checkpointed), those inserts no-op
  * rather than duplicating.
+ *
+ * It serves both the AI path and the deterministic guard rails (a rate-limit
+ * notice, an abuse ban), so it takes plain fields rather than a `Decision`.
  */
 
 /** One outbound message this turn produced. */
@@ -36,34 +39,40 @@ export interface OutboundMessageRecord {
 export interface PersistTurnInput {
   conversationId: string;
   contactId: string;
-  /** E.164 — needed to write the durable opt-out record. */
+  /** E.164 — needed to write the durable opt-out / ban record. */
   contactPhone: string;
   fromStage: ConversationStage;
-  decision: Decision;
+  /** The stage this turn moves the conversation to. */
+  toStage: ConversationStage;
+  /** The action taken this turn — for the audit event. */
+  action: string;
   /** Screening facts known so far plus this turn's extraction. */
-  mergedExtracted: KnownFacts;
+  extracted: KnownFacts;
   /** Every message sent this turn, in send order. */
   outbound: OutboundMessageRecord[];
+  qualified?: boolean;
+  disqualificationReason?: DisqualificationReason;
+  /** Ban this contact for abuse (durable opt-out with an abuse reason). */
+  ban?: boolean;
   /** Reply-generation audit flags — only meaningful when the model wrote. */
   regenerated?: boolean;
   fellBack?: boolean;
 }
 
 export async function persistTurn(db: Database, input: PersistTurnInput): Promise<void> {
-  const { decision } = input;
   const at = new Date();
 
   await db.transaction(async (tx) => {
     await tx
       .update(conversations)
       .set({
-        stage: decision.nextStage,
-        extracted: input.mergedExtracted,
+        stage: input.toStage,
+        extracted: input.extracted,
         lastOutboundAt: at,
         updatedAt: at,
-        ...(decision.qualified !== undefined ? { qualified: decision.qualified } : {}),
-        ...(decision.disqualificationReason !== undefined
-          ? { disqualificationReason: decision.disqualificationReason }
+        ...(input.qualified !== undefined ? { qualified: input.qualified } : {}),
+        ...(input.disqualificationReason !== undefined
+          ? { disqualificationReason: input.disqualificationReason }
           : {}),
       })
       .where(eq(conversations.id, input.conversationId));
@@ -97,35 +106,44 @@ export async function persistTurn(db: Database, input: PersistTurnInput): Promis
       aggregateId: input.conversationId,
       eventType: 'stage_transition',
       fromStage: input.fromStage,
-      toStage: decision.nextStage,
+      toStage: input.toStage,
       actor: 'system',
       metadata: {
-        action: decision.action,
+        action: input.action,
         regenerated: input.regenerated ?? false,
         fellBack: input.fellBack ?? false,
-        ...(decision.qualified !== undefined ? { qualified: decision.qualified } : {}),
-        ...(decision.disqualificationReason !== undefined
-          ? { disqualificationReason: decision.disqualificationReason }
+        ...(input.qualified !== undefined ? { qualified: input.qualified } : {}),
+        ...(input.disqualificationReason !== undefined
+          ? { disqualificationReason: input.disqualificationReason }
           : {}),
+        ...(input.ban ? { banned: true } : {}),
       },
     });
 
-    // Opt-out is a durable, phone-keyed record checked before every future send,
-    // plus the denormalized flag on the contact for the hot-path check. Written
-    // here so reaching the opted_out stage and honoring it commit together.
-    if (decision.nextStage === 'opted_out') {
+    // A durable, phone-keyed block, checked before every future send, plus the
+    // denormalized `doNotContact` flag for the hot path. Written here so reaching
+    // the terminal stage and honoring it commit together. A user opt-out and an
+    // abuse ban share the mechanism but record a different reason.
+    const block =
+      input.toStage === 'opted_out'
+        ? { reason: 'user_request', source: 'classifier', consent: true as const }
+        : input.ban
+          ? { reason: 'abuse', source: 'abuse_guard', consent: false as const }
+          : undefined;
+
+    if (block) {
       await tx
         .insert(optOuts)
-        .values({
-          phone: input.contactPhone,
-          reason: 'user_request',
-          source: 'classifier',
-        })
+        .values({ phone: input.contactPhone, reason: block.reason, source: block.source })
         .onConflictDoNothing({ target: optOuts.phone });
 
       await tx
         .update(contacts)
-        .set({ doNotContact: true, consentStatus: 'opted_out', updatedAt: at })
+        .set({
+          doNotContact: true,
+          updatedAt: at,
+          ...(block.consent ? { consentStatus: 'opted_out' as const } : {}),
+        })
         .where(eq(contacts.id, input.contactId));
     }
   });

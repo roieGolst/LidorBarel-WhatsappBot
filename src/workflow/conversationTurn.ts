@@ -6,7 +6,7 @@ import {
   getConversationById,
   type ConversationStage,
 } from '../db/repositories/conversations.js';
-import { recentMessages } from '../db/repositories/messages.js';
+import { countInboundMessages, recentMessages } from '../db/repositories/messages.js';
 import { isOptedOut } from '../db/repositories/optOuts.js';
 import type { LlmClient, LlmMessage, LlmUsage } from '../llm/client.js';
 import type {
@@ -23,7 +23,9 @@ import {
   screensAllQuestions,
   type Decision,
   type KnownFacts,
+  type TurnAction,
 } from './decide.js';
+import { evaluateGate, isMalicious, RATE_WINDOW_MS, type GateResult } from './gate.js';
 import { generateValidatedReply } from './generate.js';
 import {
   INTRO_VIDEO_PATH,
@@ -101,6 +103,17 @@ export interface TurnContext {
   classifyHistory: LlmMessage[];
   /** The full recent transcript, for reply generation. */
   turns: LlmMessage[];
+  // --- Deterministic guard-rail inputs (see gate.ts) ---
+  /** Total inbound in this conversation, including the current message. */
+  inboundCount: number;
+  /** Inbound within the last rate-limit window, including the current. */
+  recentInboundCount: number;
+  /** Milliseconds since the conversation started. */
+  conversationAgeMs: number;
+  /** Whether an earlier inbound in this conversation was malicious. */
+  priorMalicious: boolean;
+  /** The bot's most recent outbound text, to dedupe a throttle notice. */
+  lastOutboundText?: string;
 }
 
 export interface TurnResult {
@@ -142,6 +155,20 @@ export async function loadContext(
     throw new Error('conversationTurn: no inbound message to respond to');
   }
 
+  const now = Date.now();
+  const [inboundCount, recentInboundCount] = await Promise.all([
+    countInboundMessages(db, conversationId),
+    countInboundMessages(db, conversationId, new Date(now - RATE_WINDOW_MS)),
+  ]);
+
+  // Earlier user turns (excluding the current message), for the abuse strike.
+  const priorMalicious = turns
+    .slice(0, -1)
+    .some((turn) => turn.role === 'user' && isMalicious(turn.content));
+  const lastOutboundText = turns
+    .filter((turn) => turn.role === 'assistant')
+    .at(-1)?.content;
+
   return {
     stage: conversation.stage,
     known: conversation.extracted ?? {},
@@ -154,6 +181,11 @@ export async function loadContext(
     currentText: last.content,
     classifyHistory: turns.slice(0, -1),
     turns,
+    inboundCount,
+    recentInboundCount,
+    conversationAgeMs: now - conversation.createdAt.getTime(),
+    priorMalicious,
+    ...(lastOutboundText !== undefined ? { lastOutboundText } : {}),
   };
 }
 
@@ -205,11 +237,8 @@ export function createConversationWorkflow(
 
   const generate = task(
     'ct_generate',
-    (args: {
-      action: PersistTurnInput['decision']['action'];
-      escalate: boolean;
-      history: LlmMessage[];
-    }) => generateValidatedReply(deps.llm, args),
+    (args: { action: TurnAction; escalate: boolean; history: LlmMessage[] }) =>
+      generateValidatedReply(deps.llm, args),
   );
 
   // Every outbound message goes through guardedSend, so opt-out enforcement
@@ -223,6 +252,111 @@ export function createConversationWorkflow(
     persistTurn(deps.db, args),
   );
 
+  /** The interactive re-ask for a "go back" — the pending question after undo. */
+  const backPart = (
+    ctx: TurnContext,
+    extracted: KnownFacts,
+  ): { part: OutboundPart; storeBody: string; toStage: ConversationStage } => {
+    const decision = decideMainMenu('check_fit', ctx.stage, extracted, ctx.screenAll);
+    const question = screeningQuestionFor(decision.action);
+    if (question) {
+      return {
+        part:
+          question.kind === 'buttons'
+            ? { kind: 'buttons', body: question.body, buttons: question.buttons }
+            : {
+                kind: 'list',
+                body: question.body,
+                buttonLabel: question.buttonLabel,
+                rows: question.rows,
+              },
+        storeBody: question.body,
+        toStage: decision.nextStage,
+      };
+    }
+    // Nothing left to ask (shouldn't happen after an undo) → re-show the menu.
+    return {
+      part: {
+        kind: 'list',
+        body: MAIN_MENU.body,
+        buttonLabel: MAIN_MENU.buttonLabel,
+        rows: [...MAIN_MENU.rows],
+      },
+      storeBody: MAIN_MENU.body,
+      toStage: 'engaged',
+    };
+  };
+
+  /**
+   * Handles a fired guard rail deterministically: sends the canned reply (or
+   * nothing), applies any reset/ban, and records the turn — no model call.
+   */
+  const handleGate = async (
+    gate: Exclude<GateResult, { kind: 'proceed' }>,
+    ctx: TurnContext,
+    conversationId: string,
+  ): Promise<TurnResult> => {
+    const base = {
+      conversationId,
+      contactId: ctx.contactId,
+      contactPhone: ctx.contactPhone,
+      fromStage: ctx.stage,
+    };
+
+    if (gate.kind === 'silent') {
+      await persist({
+        ...base,
+        toStage: gate.nextStage,
+        action: gate.action,
+        extracted: ctx.known,
+        outbound: [],
+      });
+      return { stage: gate.nextStage, text: '', action: gate.action, sent: false };
+    }
+
+    if (gate.kind === 'send') {
+      const { providerMessageId } = await send({
+        to: ctx.contactPhone,
+        part: { kind: 'text', text: gate.text },
+      });
+      await persist({
+        ...base,
+        toStage: gate.nextStage,
+        action: gate.action,
+        extracted: ctx.known,
+        outbound: [{ body: gate.text, providerMessageId }],
+        ...(gate.ban ? { ban: true } : {}),
+      });
+      return { stage: gate.nextStage, text: gate.text, action: gate.action, sent: true };
+    }
+
+    // restart / back — reset the facts and re-show the menu or re-ask the question.
+    const reset =
+      gate.kind === 'restart'
+        ? {
+            part: {
+              kind: 'list' as const,
+              body: MAIN_MENU.body,
+              buttonLabel: MAIN_MENU.buttonLabel,
+              rows: [...MAIN_MENU.rows],
+            },
+            storeBody: MAIN_MENU.body,
+            toStage: 'engaged' as ConversationStage,
+            extracted: {} as KnownFacts,
+          }
+        : { ...backPart(ctx, gate.extracted), extracted: gate.extracted };
+    const action = gate.kind === 'restart' ? 'restart' : 'go_back';
+    const { providerMessageId } = await send({ to: ctx.contactPhone, part: reset.part });
+    await persist({
+      ...base,
+      toStage: reset.toStage,
+      action,
+      extracted: reset.extracted,
+      outbound: [{ body: reset.storeBody, providerMessageId }],
+    });
+    return { stage: reset.toStage, text: reset.storeBody, action, sent: true };
+  };
+
   return entrypoint(
     { name: 'conversationTurn', checkpointer },
     async (conversationId: string): Promise<TurnResult> => {
@@ -233,6 +367,26 @@ export function createConversationWorkflow(
       // went out on the turn that recorded it, before this became true.
       if (ctx.optedOut) {
         return { stage: ctx.stage, action: 'skipped_opted_out', text: '', sent: false };
+      }
+
+      // Deterministic guard rails run before any model call: abuse, rate/quota
+      // limits, expiry, and the typed control words (gate.ts). When one fires the
+      // turn is handled here, with no classification or generation.
+      const gate = evaluateGate({
+        currentText: ctx.currentText,
+        stage: ctx.stage,
+        known: ctx.known,
+        screenAll: ctx.screenAll,
+        inboundCount: ctx.inboundCount,
+        recentInboundCount: ctx.recentInboundCount,
+        conversationAgeMs: ctx.conversationAgeMs,
+        priorMalicious: ctx.priorMalicious,
+        ...(ctx.lastOutboundText !== undefined
+          ? { lastOutboundText: ctx.lastOutboundText }
+          : {}),
+      });
+      if (gate.kind !== 'proceed') {
+        return handleGate(gate, ctx, conversationId);
       }
 
       const { analysis } = await classify({
@@ -342,8 +496,13 @@ export function createConversationWorkflow(
         contactId: ctx.contactId,
         contactPhone: ctx.contactPhone,
         fromStage: ctx.stage,
-        decision,
-        mergedExtracted: { ...ctx.known, ...analysis.extracted },
+        toStage: decision.nextStage,
+        action: decision.action,
+        extracted: { ...ctx.known, ...analysis.extracted },
+        ...(decision.qualified !== undefined ? { qualified: decision.qualified } : {}),
+        ...(decision.disqualificationReason !== undefined
+          ? { disqualificationReason: decision.disqualificationReason }
+          : {}),
         outbound,
         regenerated,
         fellBack,

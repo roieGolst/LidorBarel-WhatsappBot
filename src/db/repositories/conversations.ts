@@ -18,6 +18,7 @@ const TERMINAL_STAGES = [
   'opted_out',
   'disqualified',
   'handed_off',
+  'blocked',
   'error',
 ] as const satisfies readonly ConversationStage[];
 

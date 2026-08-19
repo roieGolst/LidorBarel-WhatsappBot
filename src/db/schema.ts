@@ -279,9 +279,9 @@ export const conversations = pgTable(
     disqualificationReason: disqualificationReason('disqualification_reason'),
 
     /**
-     * Reserved for prioritizing Lidor's queue. Deliberately unpopulated in V1 —
-     * no scoring formula ships without Lidor's explicit approval, and it must
-     * never gate qualification.
+     * Orders Lidor's queue. Populated from the timeline (spec Q3) — higher is
+     * more urgent — so "no urgency" lowers priority instead of disqualifying. It
+     * must NEVER gate qualification (see workflow/decide.ts `leadPriorityScore`).
      */
     priorityScore: integer('priority_score'),
 

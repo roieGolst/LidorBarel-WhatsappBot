@@ -247,12 +247,38 @@ function exclusivityOrDisqualification(
   return undefined;
 }
 
-/** The spec's disqualifiers, mapped from screening facts. First match wins. */
+/**
+ * The disqualifiers, mapped from screening facts. First match wins.
+ *
+ * Timeline is deliberately NOT here: "no urgency" does not disqualify — it only
+ * lowers the lead's priority (see {@link leadPriorityScore}) while the
+ * conversation continues to qualification. Only not-selling and being exclusive
+ * with another agent close the door.
+ */
 function disqualifyingReason(facts: KnownFacts): DisqualificationReason | undefined {
   if (facts.sellIntent === 'not_selling') return 'not_selling';
-  if (facts.timeline === 'no_urgency') return 'no_urgency';
   if (facts.currentlyMarketed === 'with_agent') return 'exclusive_with_other_agent';
   return undefined;
+}
+
+/**
+ * A lead's priority from how soon they want to sell (spec Q3) — higher is more
+ * urgent. It only orders Lidor's queue; it never gates qualification. `undefined`
+ * until the timeline is known (a form lead answers Q3 on the form, not the bot).
+ */
+export function leadPriorityScore(facts: KnownFacts): number | undefined {
+  switch (facts.timeline) {
+    case 'immediate':
+      return 100;
+    case 'within_month':
+      return 75;
+    case 'still_checking':
+      return 50;
+    case 'no_urgency':
+      return 25;
+    default:
+      return undefined;
+  }
 }
 
 /**

@@ -276,6 +276,30 @@ describe('conversationTurn', () => {
     expect(conversation?.qualified).toBe(true);
   });
 
+  it('does not close on "no urgency" — it continues and lowers the priority', async () => {
+    const llm = new FakeLlmClient([
+      '{"intent":"ANSWER","confidence":0.9,"extracted":{"timeline":"no_urgency"}}',
+    ]);
+    const { conversationId } = await seed({
+      inbound: 'אין לי דחיפות',
+      entryPoint: 'direct_message', // all four questions
+      stage: 'screening_timeline',
+      extracted: { sellIntent: 'ready', neighborhood: 'רמות' },
+      priorReply: 'תוך כמה זמן תרצה למכור?',
+    });
+
+    const result = await workflow({ db, llm, channel: new FakeChannel() }).invoke(
+      conversationId,
+      config(conversationId),
+    );
+
+    // Continues to Q4 rather than disqualifying.
+    expect(result.action).toBe('ask_currently_marketed');
+    const conversation = await getConversationById(db, conversationId);
+    expect(conversation?.disqualificationReason).toBeNull();
+    expect(conversation?.priorityScore).toBe(25); // lowest urgency
+  });
+
   it('asks about exclusivity before disqualifying a lead with another agent', async () => {
     const llm = new FakeLlmClient([
       '{"intent":"ANSWER","confidence":0.9,"extracted":{"currentlyMarketed":"with_agent"}}',

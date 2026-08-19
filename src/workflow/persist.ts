@@ -2,7 +2,11 @@ import { eq } from 'drizzle-orm';
 import type { Database } from '../db/client.js';
 import type { ConversationStage } from '../db/repositories/conversations.js';
 import { contacts, conversations, events, messages, optOuts } from '../db/schema.js';
-import type { DisqualificationReason, KnownFacts } from './decide.js';
+import {
+  leadPriorityScore,
+  type DisqualificationReason,
+  type KnownFacts,
+} from './decide.js';
 
 /**
  * `persistTurn` — commits everything a turn changed, in one transaction (§5.2).
@@ -61,6 +65,9 @@ export interface PersistTurnInput {
 
 export async function persistTurn(db: Database, input: PersistTurnInput): Promise<void> {
   const at = new Date();
+  // Priority orders Lidor's queue; it never gates qualification. Set once the
+  // timeline is known.
+  const priorityScore = leadPriorityScore(input.extracted);
 
   await db.transaction(async (tx) => {
     await tx
@@ -70,6 +77,7 @@ export async function persistTurn(db: Database, input: PersistTurnInput): Promis
         extracted: input.extracted,
         lastOutboundAt: at,
         updatedAt: at,
+        ...(priorityScore !== undefined ? { priorityScore } : {}),
         ...(input.qualified !== undefined ? { qualified: input.qualified } : {}),
         ...(input.disqualificationReason !== undefined
           ? { disqualificationReason: input.disqualificationReason }

@@ -4,6 +4,7 @@ import {
   CONFIDENCE_THRESHOLD,
   decideMainMenu,
   decideTransition,
+  leadPriorityScore,
   screensAllQuestions,
   type KnownFacts,
 } from './decide.js';
@@ -64,22 +65,36 @@ describe('decideTransition', () => {
     expect(decision.nextStage).toBe('screening_sell_intent');
   });
 
-  it.each([
-    ['not_selling', { sellIntent: 'not_selling' }, 'not_selling'],
-    ['no_urgency', { timeline: 'no_urgency' }, 'no_urgency'],
-  ] as const)(
-    'disqualifies on %s with the mapped reason',
-    (_label, extracted, reason) => {
-      const decision = decideTransition(
-        'screening_currently_marketed',
-        analysis({ extracted }),
-      );
-      expect(decision.nextStage).toBe('disqualified');
-      expect(decision.action).toBe('send_disqualification');
-      expect(decision.qualified).toBe(false);
-      expect(decision.disqualificationReason).toBe(reason);
-    },
-  );
+  it('disqualifies on not_selling with the mapped reason', () => {
+    const decision = decideTransition(
+      'screening_currently_marketed',
+      analysis({ extracted: { sellIntent: 'not_selling' } }),
+    );
+    expect(decision.nextStage).toBe('disqualified');
+    expect(decision.action).toBe('send_disqualification');
+    expect(decision.qualified).toBe(false);
+    expect(decision.disqualificationReason).toBe('not_selling');
+  });
+
+  it('does NOT disqualify on no urgency — it continues to qualification', () => {
+    const decision = decideTransition(
+      'screening_currently_marketed',
+      analysis({ extracted: { timeline: 'no_urgency', currentlyMarketed: 'no' } }),
+      { sellIntent: 'ready', neighborhood: 'רמות' },
+    );
+    expect(decision.nextStage).toBe('qualified');
+    expect(decision.qualified).toBe(true);
+  });
+
+  describe('leadPriorityScore', () => {
+    it('ranks urgency (higher = sooner), undefined until the timeline is known', () => {
+      expect(leadPriorityScore({ timeline: 'immediate' })).toBe(100);
+      expect(leadPriorityScore({ timeline: 'within_month' })).toBe(75);
+      expect(leadPriorityScore({ timeline: 'still_checking' })).toBe(50);
+      expect(leadPriorityScore({ timeline: 'no_urgency' })).toBe(25);
+      expect(leadPriorityScore({})).toBeUndefined();
+    });
+  });
 
   it('disqualifies on a fact learned in an earlier turn', () => {
     const known: KnownFacts = { sellIntent: 'not_selling' };

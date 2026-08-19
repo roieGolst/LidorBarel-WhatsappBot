@@ -38,7 +38,8 @@ export type TurnAction =
   | 'answer_faq'
   | 'handle_objection'
   | 'send_social_proof' // main-menu "testimonials"
-  | 'handoff_to_human'; // main-menu "talk to me" / "book a meeting"
+  | 'handoff_to_human' // main-menu "talk to me" / "book a meeting"
+  | 'acknowledge_additional_info'; // extra details after the lead already qualified
 
 export interface Decision {
   nextStage: ConversationStage;
@@ -111,7 +112,14 @@ export function decideTransition(
     return { nextStage: holdStage(current), action: 'answer_faq', escalate };
   }
 
-  // 4. Screening flow — the default. A greeting, filler ("יאללה"), an unclear or
+  // 4. Already qualified: the conversation stays open for more property details,
+  //    which are appended to the lead. Don't re-run screening or re-send the
+  //    handoff — just acknowledge.
+  if (current === 'qualified') {
+    return { nextStage: 'qualified', action: 'acknowledge_additional_info', escalate };
+  }
+
+  // 5. Screening flow — the default. A greeting, filler ("יאללה"), an unclear or
   //    off-topic message, or an actual answer all funnel here: ask the next
   //    pending question (or qualify). An unparseable answer simply re-asks the
   //    same question, whose buttons are already in front of the person — the flow

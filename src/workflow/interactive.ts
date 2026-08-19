@@ -43,6 +43,15 @@ export const STOP_MESSAGE =
   'סגרתי את השיחה. אפשר לכתוב לנו שוב בכל עת כדי להתחיל מחדש 🙏';
 
 /**
+ * Sent when all four questions are answered. Deliberately canned (not
+ * model-written) so it never promises a specific callback time — it only says the
+ * details are on their way to Lidor — and it leaves the conversation OPEN,
+ * inviting more property details that get appended to the lead.
+ */
+export const QUALIFIED_HANDOFF_MESSAGE =
+  'תודה על הפרטים! אני מעביר אותם ללידור עכשיו — הוא יחזור אליך בהקדם לשיחת הערכה ולבניית תוכנית מכירה מותאמת. 👍 בינתיים, אפשר להשאיר כאן פרטים נוספים על הנכס שיעזרו למקד את השיחה עם לידור, ואני אעביר לו גם אותם.';
+
+/**
  * The intro clip sent after the welcome (spec §2). Resolved from the app's
  * working directory; the channel uploads it to Meta once and caches the id.
  */

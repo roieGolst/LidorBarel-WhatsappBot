@@ -31,6 +31,7 @@ import {
   INTRO_VIDEO_PATH,
   MAIN_MENU,
   mainMenuChoiceFor,
+  QUALIFIED_HANDOFF_MESSAGE,
   screeningQuestionFor,
   WELCOME_MESSAGE,
 } from './interactive.js';
@@ -212,6 +213,21 @@ function sumUsage(
   field: 'inputTokens' | 'outputTokens' | 'cacheReadTokens',
 ): number {
   return usage.reduce((total, u) => total + u[field], 0);
+}
+
+/**
+ * Folds this turn's extraction over what we already knew. `additionalNotes`
+ * accumulates (extra property details volunteered over several messages append to
+ * the lead) rather than overwriting; every other field is last-write-wins.
+ */
+function mergeExtracted(known: KnownFacts, extracted: KnownFacts): KnownFacts {
+  const merged: KnownFacts = { ...known, ...extracted };
+  if (extracted.additionalNotes) {
+    merged.additionalNotes = [known.additionalNotes, extracted.additionalNotes]
+      .filter(Boolean)
+      .join(' | ');
+  }
+  return merged;
 }
 
 /** Stored placeholder for a media message, which has no text body. */
@@ -442,6 +458,12 @@ export function createConversationWorkflow(
           },
           storeBody: MAIN_MENU.body,
         });
+      } else if (decision.action === 'proceed_qualified') {
+        // Canned so it never promises a callback time; leaves the chat open.
+        plan.push({
+          part: { kind: 'text', text: QUALIFIED_HANDOFF_MESSAGE },
+          storeBody: QUALIFIED_HANDOFF_MESSAGE,
+        });
       } else if (question) {
         plan.push({
           part:
@@ -498,7 +520,7 @@ export function createConversationWorkflow(
         fromStage: ctx.stage,
         toStage: decision.nextStage,
         action: decision.action,
-        extracted: { ...ctx.known, ...analysis.extracted },
+        extracted: mergeExtracted(ctx.known, analysis.extracted),
         ...(decision.qualified !== undefined ? { qualified: decision.qualified } : {}),
         ...(decision.disqualificationReason !== undefined
           ? { disqualificationReason: decision.disqualificationReason }

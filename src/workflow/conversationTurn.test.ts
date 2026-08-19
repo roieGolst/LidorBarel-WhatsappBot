@@ -21,7 +21,11 @@ import { FakeChannel } from '../whatsapp/fakeChannel.js';
 import { createCheckpointer } from './checkpointer.js';
 import { createConversationWorkflow, type ConversationDeps } from './conversationTurn.js';
 import type { KnownFacts } from './decide.js';
-import { INTRO_VIDEO_PATH, WELCOME_MESSAGE } from './interactive.js';
+import {
+  INTRO_VIDEO_PATH,
+  QUALIFIED_HANDOFF_MESSAGE,
+  WELCOME_MESSAGE,
+} from './interactive.js';
 import { persistTurn, type PersistTurnInput } from './persist.js';
 import { testDatabaseUrl } from '../db/testing.js';
 
@@ -274,6 +278,33 @@ describe('conversationTurn', () => {
     const conversation = await getConversationById(db, conversationId);
     expect(conversation?.stage).toBe('qualified');
     expect(conversation?.qualified).toBe(true);
+    // The qualified handoff is canned (no callback-time promise) and leaves the
+    // chat open — sent without a model generate call.
+    expect(result.text).toBe(QUALIFIED_HANDOFF_MESSAGE);
+    expect(llm.requests).toHaveLength(1); // classify only
+  });
+
+  it('keeps a qualified conversation open and appends extra details to the lead', async () => {
+    const llm = new FakeLlmClient([
+      '{"intent":"ANSWER","confidence":0.9,"extracted":{"additionalNotes":"4 חדרים, משופצת, קומה 3"}}',
+      'תודה, רשמתי ואעביר גם ללידור. משהו נוסף שחשוב שיידע?',
+    ]);
+    const { conversationId } = await seed({
+      inbound: 'שכחתי לציין — 4 חדרים, משופצת, קומה 3',
+      stage: 'qualified',
+      extracted: { neighborhood: 'רמות', currentlyMarketed: 'no' },
+      priorReply: QUALIFIED_HANDOFF_MESSAGE,
+    });
+
+    const result = await workflow({ db, llm, channel: new FakeChannel() }).invoke(
+      conversationId,
+      config(conversationId),
+    );
+
+    expect(result.action).toBe('acknowledge_additional_info');
+    expect(result.stage).toBe('qualified'); // stays open
+    const conversation = await getConversationById(db, conversationId);
+    expect((conversation?.extracted as KnownFacts).additionalNotes).toContain('4 חדרים');
   });
 
   it('does not close on "no urgency" — it continues and lowers the priority', async () => {

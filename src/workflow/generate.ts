@@ -7,6 +7,7 @@ import {
   type LlmUsage,
 } from '../llm/client.js';
 import type { TurnAction } from './decide.js';
+import { QUALIFIED_HANDOFF_MESSAGE } from './interactive.js';
 import { validateReply, type ValidateOptions } from './validate.js';
 
 /**
@@ -56,6 +57,7 @@ Hard rules:
 - Write in natural, colloquial Israeli Hebrew — the way a sharp Beer Sheva agent actually texts on WhatsApp. It must read as written by a native speaker, NEVER as translated from English: no "אוקיי", no "ברמה גבוהה", no calqued idioms or stiff phrasing. Be brief and precise — one or two short lines, one idea. No small talk or tangents; steer politely back to the property and the next step. Keep a professional distance — helpful, not a buddy.
 - End with exactly ONE question or a clear next step that moves toward the call. Never leave the lead without a next move, and never ask more than one question at a time. Build trust; never pressure.
 - Never promise what you cannot guarantee, and never use pressure or over-certainty words: בטוח, בוודאות, מאה אחוז, אין סיכוי, חייב, דחוף, רק היום, מבצע, מציאה, זול, "יקר מדי" (about the property), אי אפשר, אין מה לעשות, נסגור, תתחייב, "מקסימום מחיר", "אני מבטיח". Prefer instead: אבדוק, אעריך, על סמך הנתונים, לפי מצב השוק, המטרה היא, אסטרטגיית מכירה, חשיפה רחבה, הערכת שווי, "המחיר הגבוה ביותר שהשוק מאפשר".
+- Never promise a specific time for Lidor's reply — no "בדקות הקרובות", no specific minutes/hours/times. Say only that the details were forwarded to Lidor and that he will handle it and get back to them בהקדם / as soon as he can.
 - Open gender-neutral; do not assume the lead's gender.
 - Output ONLY the message text to send. No quotes, no preamble, no explanation.
 
@@ -91,8 +93,11 @@ const DIRECTIVES: Record<TurnAction, string> = {
     'Ask whether the property is currently being marketed — privately, through another agent, or not at all. One short question.',
   ask_exclusivity:
     'They said the property is marketed through another agent. In one message, ask when that agent’s exclusivity ends AND whether they would like a follow-up when it does. End with a single question mark.',
-  proceed_qualified:
-    'You have everything you need. Briefly thank them and tell them you are passing the details to Lidor, who will reach out to arrange the consultation call shortly. Sharp and warm, no fluff.',
+  // proceed_qualified is sent as a fixed message (interactive.ts
+  // QUALIFIED_HANDOFF_MESSAGE), never generated; this entry keeps the map exhaustive.
+  proceed_qualified: 'Confirm the details are going to Lidor and invite more.',
+  acknowledge_additional_info:
+    'The lead already qualified and just sent more details about the property. Briefly thank them, confirm you will pass it to Lidor too, and keep the door open for anything else — but do NOT promise a callback time.',
   send_disqualification:
     'Politely close: thank them, leave the door open for the future, no pressure. If they are exclusive with another agent and asked for a follow-up, add that you will reach out when the exclusivity ends. Do not ask a question.',
   acknowledge_opt_out:
@@ -120,8 +125,7 @@ export const SAFE_VARIANTS: Record<TurnAction, string> = {
   ask_currently_marketed: 'האם הנכס משווק כרגע?',
   ask_exclusivity:
     'מתי מסתיימת הבלעדיות עם המתווך הנוכחי, ותרצה שנחזור אליך כשהיא מסתיימת?',
-  proceed_qualified:
-    'מעולה, תודה רבה על כל הפרטים. אני מעביר עכשיו הכול ללידור, שיעבור על הנתונים ויחזור אליך בהקדם עם המשך התהליך.',
+  proceed_qualified: QUALIFIED_HANDOFF_MESSAGE,
   send_disqualification:
     'תודה רבה על הזמן שלך. אם בעתיד תחליט שהגיע הזמן למכור, או שתרצה להתייעץ, הדלת שלנו תמיד פתוחה ונשמח לעזור. בהצלחה ויום נפלא 😊',
   acknowledge_opt_out: 'קיבלתי, לא נפנה אליך יותר. תודה.',
@@ -130,6 +134,8 @@ export const SAFE_VARIANTS: Record<TurnAction, string> = {
   send_social_proof:
     'לידור מלווה מוכרים בבאר שבע מעל 4 שנים, עם יותר מ-124 נכסים שנמכרו וכ-82% שנמכרו בפחות מחודשיים. נמשיך לבדיקת התאמה קצרה?',
   handoff_to_human: 'מעולה, אני מחבר אותך עכשיו ללידור. הוא יחזור אליך בהקדם להמשך.',
+  acknowledge_additional_info:
+    'תודה, רשמתי את זה ואעביר גם ללידור. יש עוד משהו שחשוב שהוא יידע על הנכס?',
 };
 
 export interface GenerateInput {

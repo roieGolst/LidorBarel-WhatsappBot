@@ -174,6 +174,16 @@ describe('decideTransition', () => {
     expect(decision.qualified).toBe(true);
   });
 
+  it('keeps a qualified conversation open, collecting more details', () => {
+    const decision = decideTransition(
+      'qualified',
+      analysis({ extracted: { additionalNotes: '4 חדרים, קומה 3' } }),
+      { sellIntent: 'ready', neighborhood: 'רמות', currentlyMarketed: 'no' },
+    );
+    expect(decision.action).toBe('acknowledge_additional_info');
+    expect(decision.nextStage).toBe('qualified');
+  });
+
   it('escalates the reply when the classifier flags frustration', () => {
     const decision = decideTransition('new', analysis({ needsEscalation: true }));
     expect(decision.escalate).toBe(true);

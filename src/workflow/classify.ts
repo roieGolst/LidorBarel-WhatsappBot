@@ -55,6 +55,9 @@ export const extractedSchema = z.object({
   // agent's exclusivity ends (free text), and whether they want a follow-up then.
   exclusivityEndsAt: z.string().min(1).optional(),
   wantsExclusivityFollowup: z.boolean().optional(),
+  // Any extra property details the person volunteers (rooms, size, floor,
+  // condition, price expectation…) — a short note, appended to the lead.
+  additionalNotes: z.string().min(1).optional(),
 });
 
 export const analysisSchema = z.object({
@@ -94,6 +97,7 @@ Return JSON with exactly these fields:
     - "currentlyMarketed" (Q4 — "האם הנכס משווק כרגע?"): "no" (לא) | "privately" (כן, באופן פרטי) | "with_agent" (כן, עם מתווך)
     - "exclusivityEndsAt": when the current agent's exclusivity ends, as free text (e.g. "עוד חודשיים", "בסוף מרץ", "לא יודע") — only when they say it
     - "wantsExclusivityFollowup": true/false if they say whether they want us to follow up once the exclusivity ends
+    - "additionalNotes": a short Hebrew note of any EXTRA property details the person volunteers beyond the four screening answers (rooms, size/מ"ר, floor, condition/renovation, parking, price expectation, etc.). Omit if there are none.
 - "needsEscalation": true if the message shows anger, frustration, or something a bot should not handle alone.
 
 Rules:

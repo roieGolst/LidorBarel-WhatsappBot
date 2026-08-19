@@ -257,10 +257,10 @@ describe('conversationTurn', () => {
     }
   });
 
-  it('qualifies once both screening answers are in', async () => {
-    const llm = new FakeLlmClient([
+  it('asks the intent check after the four answers, then qualifies a serious seller', async () => {
+    // Turn 1: Q4 answered → the intent question (canned, no model reply).
+    const llm1 = new FakeLlmClient([
       '{"intent":"ANSWER","confidence":0.9,"extracted":{"currentlyMarketed":"no"}}',
-      'מצוין, תודה! לידור יחזור אליך בהקדם.',
     ]);
     const { conversationId } = await seed({
       inbound: 'עדיין לא שיווקתי',
@@ -268,20 +268,53 @@ describe('conversationTurn', () => {
       extracted: { neighborhood: 'רמות' },
       priorReply: 'האם הנכס משווק כרגע?',
     });
+    const step1 = await workflow({ db, llm: llm1, channel: new FakeChannel() }).invoke(
+      conversationId,
+      config(conversationId),
+    );
+    expect(step1.action).toBe('ask_intent');
+    expect(step1.stage).toBe('assessing_intent');
+
+    // Turn 2: a genuine motivation → qualified with the canned handoff.
+    const llm2 = new FakeLlmClient([
+      '{"intent":"ANSWER","confidence":0.9,"extracted":{"seriousSeller":true,"sellMotivation":"עוברים דירה"}}',
+    ]);
+    await recordInboundMessage(db, {
+      conversationId,
+      providerMessageId: `in2-${conversationId}`,
+      body: 'אנחנו עוברים דירה, רוצים למכור',
+      createdAt: new Date(),
+    });
+    const step2 = await workflow({ db, llm: llm2, channel: new FakeChannel() }).invoke(
+      conversationId,
+      config(conversationId),
+    );
+
+    expect(step2.stage).toBe('qualified');
+    expect(step2.text).toBe(QUALIFIED_HANDOFF_MESSAGE);
+    const conversation = await getConversationById(db, conversationId);
+    expect(conversation?.qualified).toBe(true);
+  });
+
+  it('does not forward a lead who is only price-checking', async () => {
+    const llm = new FakeLlmClient([
+      '{"intent":"ANSWER","confidence":0.9,"extracted":{"seriousSeller":false}}',
+    ]);
+    const { conversationId } = await seed({
+      inbound: 'סתם רציתי לדעת כמה זה שווה',
+      stage: 'assessing_intent',
+      extracted: { neighborhood: 'רמות', currentlyMarketed: 'no' },
+      priorReply: 'מה גורם לך לשקול למכור עכשיו?',
+    });
 
     const result = await workflow({ db, llm, channel: new FakeChannel() }).invoke(
       conversationId,
       config(conversationId),
     );
 
-    expect(result.stage).toBe('qualified');
+    expect(result.action).toBe('low_intent_hold');
     const conversation = await getConversationById(db, conversationId);
-    expect(conversation?.stage).toBe('qualified');
-    expect(conversation?.qualified).toBe(true);
-    // The qualified handoff is canned (no callback-time promise) and leaves the
-    // chat open — sent without a model generate call.
-    expect(result.text).toBe(QUALIFIED_HANDOFF_MESSAGE);
-    expect(llm.requests).toHaveLength(1); // classify only
+    expect(conversation?.qualified).toBeNull(); // not forwarded to Lidor
   });
 
   it('keeps a qualified conversation open and appends extra details to the lead', async () => {

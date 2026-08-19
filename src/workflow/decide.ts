@@ -32,6 +32,8 @@ export type TurnAction =
   | 'ask_timeline' // spec Q3 (direct-message leads only)
   | 'ask_currently_marketed' // spec Q4
   | 'ask_exclusivity' // Q4 = with another agent: capture exclusivity end + follow-up
+  | 'ask_intent' // gauge seriousness/motivation before handing off
+  | 'low_intent_hold' // just price-checking → don't forward to Lidor
   | 'proceed_qualified'
   | 'send_disqualification'
   | 'acknowledge_opt_out'
@@ -124,7 +126,7 @@ export function decideTransition(
   //    pending question (or qualify). An unparseable answer simply re-asks the
   //    same question, whose buttons are already in front of the person — the flow
   //    never dead-ends on "rephrase".
-  return nextScreeningStep(facts, screenAll, escalate);
+  return nextScreeningStep(current, facts, screenAll, escalate);
 }
 
 /**
@@ -146,7 +148,7 @@ export function decideMainMenu(
     case 'check_fit': {
       const blocked = exclusivityOrDisqualification(known, false);
       if (blocked) return blocked;
-      return nextScreeningStep(known, screenAll, false);
+      return nextScreeningStep(current, known, screenAll, false);
     }
     case 'testimonials':
       return {
@@ -164,10 +166,16 @@ export function decideMainMenu(
 
 /**
  * The next screening question to ask, one at a time in spec order (Q1 → Q2 → Q3 →
- * Q4), or `proceed_qualified` once all are answered. Q1/Q3 are asked only for a
- * lead that did not come through the form (`screenAll`).
+ * Q4), then a brief intent check, then the qualified handoff. Q1/Q3 are asked
+ * only for a lead that did not come through the form (`screenAll`).
+ *
+ * The intent check (the bot must gauge seriousness before spending Lidor's time)
+ * asks ONE natural question. A price-checker who is not seriously selling is held
+ * back rather than forwarded; a genuine seller is handed off. Asked at most once —
+ * if the read is still unclear after asking, give the benefit of the doubt.
  */
 function nextScreeningStep(
+  current: ConversationStage,
   facts: KnownFacts,
   screenAll: boolean,
   escalate: boolean,
@@ -187,6 +195,14 @@ function nextScreeningStep(
       action: 'ask_currently_marketed',
       escalate,
     };
+  }
+  // Intent check — asked only if we have not asked it yet.
+  if (facts.seriousSeller === undefined && current !== 'assessing_intent') {
+    return { nextStage: 'assessing_intent', action: 'ask_intent', escalate };
+  }
+  // Clearly just price-checking → do not forward to Lidor; leave the door open.
+  if (facts.seriousSeller === false) {
+    return { nextStage: 'engaged', action: 'low_intent_hold', escalate };
   }
   return {
     nextStage: 'qualified',

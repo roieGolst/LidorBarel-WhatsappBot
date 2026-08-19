@@ -77,6 +77,8 @@ export const conversationStage = pgEnum('conversation_stage', [
   'screening_currently_marketed',
   /** Q4 = with another agent: capturing exclusivity end + follow-up wish. */
   'screening_exclusivity',
+  /** Brief intent/seriousness check after the four questions, before handoff. */
+  'assessing_intent',
   'qualified',
   'disqualified',
   'appointment_proposed',

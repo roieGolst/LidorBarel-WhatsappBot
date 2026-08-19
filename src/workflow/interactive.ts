@@ -24,7 +24,10 @@ import type { TurnAction } from './decide.js';
  * back, or end.
  */
 export const WELCOME_MESSAGE =
-  'היי! 👋 תודה שהשארת פרטים לגבי הנכס שלך. אני רק רוצה להכיר אותו קצת כדי שנוכל לתת לך הערכת שווי כמה שיותר מדויקת ולהבין מה פוטנציאל המכירה שלו. נתחיל בכמה שאלות קצרות?\n\n(בכל שלב אפשר לכתוב *התחל מחדש* כדי להתחיל מההתחלה, *חזור* כדי לתקן תשובה, או *עצור* כדי לסיים.)';
+  'היי! 👋 תודה שהשארת פרטים לגבי הנכס שלך. אני רק רוצה להכיר אותו קצת כדי שנוכל לתת לך הערכת שווי כמה שיותר מדויקת ולהבין מה פוטנציאל המכירה שלו. נתחיל בכמה שאלות קצרות?\n\n(בכל שלב אפשר לכתוב:\n' +
+  '*התחל מחדש* כדי להתחיל מההתחלה\n' +
+  '*חזור* כדי לתקן תשובה\n' +
+  '*עצור* כדי לסיים את השיחה)';
 
 /**
  * Mandatory, model-free replies for the guard rails. Each is sent instead of an
@@ -50,6 +53,32 @@ export const STOP_MESSAGE =
  */
 export const QUALIFIED_HANDOFF_MESSAGE =
   'תודה על הפרטים! אני מעביר אותם ללידור עכשיו — הוא יחזור אליך בהקדם לשיחת הערכה ולבניית תוכנית מכירה מותאמת. 👍 בינתיים, אפשר להשאיר כאן פרטים נוספים על הנכס שיעזרו למקד את השיחה עם לידור, ואני אעביר לו גם אותם.';
+
+/** Talk-to-a-human / book-a-meeting handoff — canned, no callback-time promise. */
+export const HANDOFF_TO_HUMAN_MESSAGE =
+  'מעולה, אני מעביר אותך ללידור עם כל הפרטים. הוא יחזור אליך בהקדם.';
+
+/**
+ * Acknowledges extra details a qualified lead sent. Short and natural — it does
+ * NOT read the details back (they are already saved to the lead), and never
+ * promises a callback time.
+ */
+export const ADDITIONAL_INFO_ACK_MESSAGE =
+  'מעולה, קיבלתי — אעביר את זה ללידור יחד עם שאר הפרטים. אם יש עוד משהו שחשוב שיידע, אני כאן.';
+
+/**
+ * A brief, natural check of selling intent before we invest Lidor's time — asked
+ * once, after the four questions.
+ */
+export const INTENT_QUESTION =
+  'ורק כדי שלידור ייערך בצורה הכי טובה — מה גורם לך לשקול למכור עכשיו?';
+
+/**
+ * A lead who is mainly price-checking, not seriously selling. We do NOT forward
+ * them to Lidor; we leave the door open for when they are ready.
+ */
+export const LOW_INTENT_MESSAGE =
+  'תודה על השיתוף! כשתרגיש שהזמן מתאים להתקדם, נשמח ללוות אותך. אפשר לחזור אליי בכל שלב.';
 
 /**
  * The intro clip sent after the welcome (spec §2). Resolved from the app's
@@ -166,4 +195,23 @@ export function screeningQuestionFor(action: TurnAction): ScreeningQuestion | un
 /** The plain-text body of a screening question — the text stored for the turn. */
 export function screeningBody(question: ScreeningQuestion): string {
   return question.body;
+}
+
+/**
+ * Fixed, model-free replies for actions whose wording should never vary — closes
+ * and the intent check. Canned so they read naturally, stay short, keep correct
+ * Hebrew grammar, and never promise a callback time. Everything else is written
+ * by the model.
+ */
+const CANNED_REPLIES: Partial<Record<TurnAction, string>> = {
+  proceed_qualified: QUALIFIED_HANDOFF_MESSAGE,
+  handoff_to_human: HANDOFF_TO_HUMAN_MESSAGE,
+  acknowledge_additional_info: ADDITIONAL_INFO_ACK_MESSAGE,
+  ask_intent: INTENT_QUESTION,
+  low_intent_hold: LOW_INTENT_MESSAGE,
+};
+
+/** The canned reply for an action, or `undefined` if the action is model-written. */
+export function cannedReplyFor(action: TurnAction): string | undefined {
+  return CANNED_REPLIES[action];
 }

@@ -7,7 +7,6 @@ import {
   type LlmUsage,
 } from '../llm/client.js';
 import type { TurnAction } from './decide.js';
-import { QUALIFIED_HANDOFF_MESSAGE } from './interactive.js';
 import { validateReply, type ValidateOptions } from './validate.js';
 
 /**
@@ -59,6 +58,7 @@ Hard rules:
 - Never promise what you cannot guarantee, and never use pressure or over-certainty words: בטוח, בוודאות, מאה אחוז, אין סיכוי, חייב, דחוף, רק היום, מבצע, מציאה, זול, "יקר מדי" (about the property), אי אפשר, אין מה לעשות, נסגור, תתחייב, "מקסימום מחיר", "אני מבטיח". Prefer instead: אבדוק, אעריך, על סמך הנתונים, לפי מצב השוק, המטרה היא, אסטרטגיית מכירה, חשיפה רחבה, הערכת שווי, "המחיר הגבוה ביותר שהשוק מאפשר".
 - Never promise a specific time for Lidor's reply — no "בדקות הקרובות", no specific minutes/hours/times. Say only that the details were forwarded to Lidor and that he will handle it and get back to them בהקדם / as soon as he can.
 - Open gender-neutral; do not assume the lead's gender.
+- Proofread before sending: correct Hebrew spelling, grammar, and especially verb tense and person (e.g. "נתקשר אליך" — future — not "התקשרנו אליך" — past). Do not mix past and future. Do not read back details the person already gave; just acknowledge them.
 - Output ONLY the message text to send. No quotes, no preamble, no explanation.
 
 KNOWLEDGE — the content is in Hebrew on purpose; draw on it ONLY when the instruction calls for it, rephrase naturally and briefly in your own words, and never dump it verbatim or volunteer it.
@@ -78,26 +78,14 @@ KNOWLEDGE — the content is in Hebrew on purpose; draw on it ONLY when the inst
 
 The conversation so far is below. The final turn is a bracketed instruction telling you what to say next — it is your director, not the customer speaking. Follow it and write the reply.`;
 
-/** What to tell the model to produce, per decided action. */
-const DIRECTIVES: Record<TurnAction, string> = {
-  // Deterministic actions (menu, screening) never reach the generator; their
-  // entries exist only to keep this map exhaustive over TurnAction.
-  show_main_menu: 'Present the opening options.',
-  ask_sell_intent:
-    'Ask whether they are actually thinking of selling the property or just want a price estimate. One short, easy question.',
-  ask_neighborhood:
-    'Ask which Beer Sheva neighborhood the property is in. One short question.',
-  ask_timeline:
-    'Ask, if they got an offer matching their expectations, how soon they would want to sell. One short question.',
-  ask_currently_marketed:
-    'Ask whether the property is currently being marketed — privately, through another agent, or not at all. One short question.',
+/**
+ * What to tell the model to produce, per decided action — only the actions that
+ * are model-written. The rest (the menu, the screening questions, the closes and
+ * the intent check) are fixed content sent verbatim, so they never reach here.
+ */
+const DIRECTIVES: Partial<Record<TurnAction, string>> = {
   ask_exclusivity:
     'They said the property is marketed through another agent. In one message, ask when that agent’s exclusivity ends AND whether they would like a follow-up when it does. End with a single question mark.',
-  // proceed_qualified is sent as a fixed message (interactive.ts
-  // QUALIFIED_HANDOFF_MESSAGE), never generated; this entry keeps the map exhaustive.
-  proceed_qualified: 'Confirm the details are going to Lidor and invite more.',
-  acknowledge_additional_info:
-    'The lead already qualified and just sent more details about the property. Briefly thank them, confirm you will pass it to Lidor too, and keep the door open for anything else — but do NOT promise a callback time.',
   send_disqualification:
     'Politely close: thank them, leave the door open for the future, no pressure. If they are exclusive with another agent and asked for a follow-up, add that you will reach out when the exclusivity ends. Do not ask a question.',
   acknowledge_opt_out:
@@ -108,24 +96,16 @@ const DIRECTIVES: Record<TurnAction, string> = {
     'Acknowledge the concern briefly using the objection guidance above, then end with one question that moves the conversation forward.',
   send_social_proof:
     'They asked for proof/testimonials. Share one or two of the strongest stats and one short success story from the KNOWLEDGE — concise, no pressure — then end with one question that moves toward the fit check or the call.',
-  handoff_to_human:
-    'They want to speak with Lidor. Warmly tell them you are connecting them now and that Lidor will reach out shortly. Do not ask a question.',
 };
 
 /**
- * Pre-written safe replies, used only when two generation attempts both fail the
- * validator. Deliberately plain and spec-clean — every one passes
- * {@link validateReply} (asserted in the tests).
+ * Pre-written safe replies for the model-written actions, used only when two
+ * generation attempts both fail the validator. Deliberately plain and spec-clean —
+ * every one passes {@link validateReply} (asserted in the tests).
  */
-export const SAFE_VARIANTS: Record<TurnAction, string> = {
-  show_main_menu: 'איך תרצה להתחיל?',
-  ask_sell_intent: 'האם חשבת למכור את הדירה או רק לקבל הערכת מחיר?',
-  ask_neighborhood: 'באיזו שכונה נמצא הנכס?',
-  ask_timeline: 'אם תקבל הצעה שמתאימה לציפיות שלך, תוך כמה זמן תרצה למכור?',
-  ask_currently_marketed: 'האם הנכס משווק כרגע?',
+export const SAFE_VARIANTS: Partial<Record<TurnAction, string>> = {
   ask_exclusivity:
     'מתי מסתיימת הבלעדיות עם המתווך הנוכחי, ותרצה שנחזור אליך כשהיא מסתיימת?',
-  proceed_qualified: QUALIFIED_HANDOFF_MESSAGE,
   send_disqualification:
     'תודה רבה על הזמן שלך. אם בעתיד תחליט שהגיע הזמן למכור, או שתרצה להתייעץ, הדלת שלנו תמיד פתוחה ונשמח לעזור. בהצלחה ויום נפלא 😊',
   acknowledge_opt_out: 'קיבלתי, לא נפנה אליך יותר. תודה.',
@@ -133,9 +113,6 @@ export const SAFE_VARIANTS: Record<TurnAction, string> = {
   handle_objection: 'בטח, זה לגמרי מובן. מה ההתלבטות העיקרית שלך כרגע?',
   send_social_proof:
     'לידור מלווה מוכרים בבאר שבע מעל 4 שנים, עם יותר מ-124 נכסים שנמכרו וכ-82% שנמכרו בפחות מחודשיים. נמשיך לבדיקת התאמה קצרה?',
-  handoff_to_human: 'מעולה, אני מחבר אותך עכשיו ללידור. הוא יחזור אליך בהקדם להמשך.',
-  acknowledge_additional_info:
-    'תודה, רשמתי את זה ואעביר גם ללידור. יש עוד משהו שחשוב שהוא יידע על הנכס?',
 };
 
 export interface GenerateInput {
@@ -161,9 +138,24 @@ export interface ValidatedReply {
   fellBack: boolean;
 }
 
-/** The bracketed director turn for an action. */
+/** The bracketed director turn for an action. Only model-written actions reach here. */
 function instruction(action: TurnAction): LlmMessage {
-  return { role: 'user', content: `[INSTRUCTION] ${DIRECTIVES[action]}` };
+  const directive = DIRECTIVES[action];
+  if (!directive) {
+    throw new Error(
+      `generate: no directive for action "${action}" — it is not model-written`,
+    );
+  }
+  return { role: 'user', content: `[INSTRUCTION] ${directive}` };
+}
+
+/** The pre-written safe reply for a model-written action. */
+function safeVariant(action: TurnAction): string {
+  const variant = SAFE_VARIANTS[action];
+  if (!variant) {
+    throw new Error(`generate: no safe variant for action "${action}"`);
+  }
+  return variant;
 }
 
 /** Names a failed draft's violations so the regeneration can avoid them. */
@@ -244,7 +236,7 @@ export async function generateValidatedReply(
 
   // Both attempts failed the spec: send something we wrote and trust.
   return {
-    text: SAFE_VARIANTS[input.action],
+    text: safeVariant(input.action),
     usage: [first.usage, retry.usage],
     regenerated: true,
     fellBack: true,

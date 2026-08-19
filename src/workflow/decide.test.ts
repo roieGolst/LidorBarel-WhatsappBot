@@ -76,14 +76,62 @@ describe('decideTransition', () => {
     expect(decision.disqualificationReason).toBe('not_selling');
   });
 
-  it('does NOT disqualify on no urgency — it continues to qualification', () => {
+  it('does NOT disqualify on no urgency — it continues the flow', () => {
     const decision = decideTransition(
       'screening_currently_marketed',
       analysis({ extracted: { timeline: 'no_urgency', currentlyMarketed: 'no' } }),
       { sellIntent: 'ready', neighborhood: 'רמות' },
     );
-    expect(decision.nextStage).toBe('qualified');
-    expect(decision.qualified).toBe(true);
+    // Continues to the intent check rather than disqualifying.
+    expect(decision.action).not.toBe('send_disqualification');
+    expect(decision.action).toBe('ask_intent');
+  });
+
+  describe('intent check before handoff', () => {
+    const answered: KnownFacts = {
+      sellIntent: 'ready',
+      neighborhood: 'רמות',
+      timeline: 'within_month',
+      currentlyMarketed: 'no',
+    };
+
+    it('asks the intent question once all four are answered', () => {
+      const decision = decideTransition(
+        'screening_currently_marketed',
+        analysis(),
+        answered,
+        true,
+      );
+      expect(decision.action).toBe('ask_intent');
+      expect(decision.nextStage).toBe('assessing_intent');
+    });
+
+    it('qualifies a serious seller', () => {
+      const decision = decideTransition(
+        'assessing_intent',
+        analysis({ extracted: { seriousSeller: true } }),
+        answered,
+        true,
+      );
+      expect(decision.nextStage).toBe('qualified');
+      expect(decision.qualified).toBe(true);
+    });
+
+    it('does not forward a price-checker — holds them instead', () => {
+      const decision = decideTransition(
+        'assessing_intent',
+        analysis({ extracted: { seriousSeller: false } }),
+        answered,
+        true,
+      );
+      expect(decision.action).toBe('low_intent_hold');
+      expect(decision.qualified).toBeUndefined();
+    });
+
+    it('gives the benefit of the doubt if intent stays unclear after asking', () => {
+      const decision = decideTransition('assessing_intent', analysis(), answered, true);
+      expect(decision.action).toBe('proceed_qualified');
+    });
   });
 
   describe('leadPriorityScore', () => {
@@ -163,10 +211,10 @@ describe('decideTransition', () => {
     expect(decision.action).toBe('ask_currently_marketed');
   });
 
-  it('qualifies once both screening answers are in and none disqualifies', () => {
+  it('qualifies once both answers are in, none disqualifies, and intent is confirmed', () => {
     const decision = decideTransition(
-      'screening_currently_marketed',
-      analysis({ extracted: { currentlyMarketed: 'no' } }),
+      'assessing_intent',
+      analysis({ extracted: { currentlyMarketed: 'no', seriousSeller: true } }),
       { neighborhood: 'נווה זאב' },
     );
     expect(decision.nextStage).toBe('qualified');
@@ -229,15 +277,14 @@ describe('decideTransition', () => {
       expect(decision.action).toBe('ask_currently_marketed');
     });
 
-    it('qualifies once all four are answered and none disqualifies', () => {
+    it('asks the intent check once all four are answered', () => {
       const decision = decideTransition(
         'screening_currently_marketed',
         analysis({ extracted: { currentlyMarketed: 'no' } }),
         { sellIntent: 'ready', neighborhood: 'רמות', timeline: 'within_month' },
         true,
       );
-      expect(decision.nextStage).toBe('qualified');
-      expect(decision.qualified).toBe(true);
+      expect(decision.action).toBe('ask_intent');
     });
 
     it('disqualifies a direct lead who is not selling (Q1)', () => {

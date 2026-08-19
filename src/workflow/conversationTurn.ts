@@ -28,10 +28,10 @@ import {
 import { evaluateGate, isMalicious, RATE_WINDOW_MS, type GateResult } from './gate.js';
 import { generateValidatedReply } from './generate.js';
 import {
+  cannedReplyFor,
   INTRO_VIDEO_PATH,
   MAIN_MENU,
   mainMenuChoiceFor,
-  QUALIFIED_HANDOFF_MESSAGE,
   screeningQuestionFor,
   WELCOME_MESSAGE,
 } from './interactive.js';
@@ -448,6 +448,7 @@ export function createConversationWorkflow(
       let regenerated = false;
       let fellBack = false;
       const question = screeningQuestionFor(decision.action);
+      const canned = cannedReplyFor(decision.action);
       if (decision.action === 'show_main_menu') {
         plan.push({
           part: {
@@ -458,12 +459,10 @@ export function createConversationWorkflow(
           },
           storeBody: MAIN_MENU.body,
         });
-      } else if (decision.action === 'proceed_qualified') {
-        // Canned so it never promises a callback time; leaves the chat open.
-        plan.push({
-          part: { kind: 'text', text: QUALIFIED_HANDOFF_MESSAGE },
-          storeBody: QUALIFIED_HANDOFF_MESSAGE,
-        });
+      } else if (canned) {
+        // Fixed closes and the intent check — canned so the wording, grammar and
+        // "no callback-time promise" rule can never drift.
+        plan.push({ part: { kind: 'text', text: canned }, storeBody: canned });
       } else if (question) {
         plan.push({
           part:

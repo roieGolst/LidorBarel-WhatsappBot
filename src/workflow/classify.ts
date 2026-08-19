@@ -58,6 +58,11 @@ export const extractedSchema = z.object({
   // Any extra property details the person volunteers (rooms, size, floor,
   // condition, price expectation…) — a short note, appended to the lead.
   additionalNotes: z.string().min(1).optional(),
+  // The brief intent check after the four questions: their reason for selling
+  // (free text) and whether they read as a genuine, serious seller vs. someone
+  // mainly checking the price.
+  sellMotivation: z.string().min(1).optional(),
+  seriousSeller: z.boolean().optional(),
 });
 
 export const analysisSchema = z.object({
@@ -98,6 +103,8 @@ Return JSON with exactly these fields:
     - "exclusivityEndsAt": when the current agent's exclusivity ends, as free text (e.g. "עוד חודשיים", "בסוף מרץ", "לא יודע") — only when they say it
     - "wantsExclusivityFollowup": true/false if they say whether they want us to follow up once the exclusivity ends
     - "additionalNotes": a short Hebrew note of any EXTRA property details the person volunteers beyond the four screening answers (rooms, size/מ"ר, floor, condition/renovation, parking, price expectation, etc.). Omit if there are none.
+    - "sellMotivation": a short Hebrew note of WHY they are (or are not) looking to sell, when they say it (e.g. "עוברים דירה", "צריך נזילות", "רק בודק מחיר").
+    - "seriousSeller": true if they read as a genuine, motivated seller (a real reason, actively planning to sell); false if they are mainly checking the price or not really intending to sell. Set it only once they've indicated their intent/motivation, otherwise omit.
 - "needsEscalation": true if the message shows anger, frustration, or something a bot should not handle alone.
 
 Rules:

@@ -102,7 +102,7 @@ Return JSON with exactly these fields:
     - "currentlyMarketed" (Q4 — "האם הנכס משווק כרגע?"): "no" (לא) | "privately" (כן, באופן פרטי) | "with_agent" (כן, עם מתווך)
     - "exclusivityEndsAt": when the current agent's exclusivity ends, as free text (e.g. "עוד חודשיים", "בסוף מרץ", "לא יודע") — only when they say it
     - "wantsExclusivityFollowup": true/false if they say whether they want us to follow up once the exclusivity ends
-    - "additionalNotes": a short Hebrew note of any EXTRA property details the person volunteers beyond the four screening answers (rooms, size/מ"ר, floor, condition/renovation, parking, price expectation, etc.). Omit if there are none.
+    - "additionalNotes": ONLY when THIS message adds or clarifies property details (rooms, size/מ"ר, floor, condition/renovation, parking, price expectation, etc.), return the FULL consolidated Hebrew summary of ALL property details so far — merge any "פרטי הנכס עד כה" context shown to you with the new details, into ONE concise line with NO duplication and no repeated facts. If this message adds no property details, omit it entirely.
     - "sellMotivation": a short Hebrew note of WHY they are (or are not) looking to sell, when they say it (e.g. "עוברים דירה", "צריך נזילות", "רק בודק מחיר").
     - "seriousSeller": true if they read as a genuine, motivated seller (a real reason, actively planning to sell); false if they are mainly checking the price or not really intending to sell. Set it only once they've indicated their intent/motivation, otherwise omit.
 - "needsEscalation": true if the message shows anger, frustration, or something a bot should not handle alone.
@@ -117,6 +117,12 @@ export interface ClassifyInput {
   text: string;
   /** Prior turns for context, oldest first. Omit for the first message. */
   history?: { role: 'user' | 'assistant'; content: string }[];
+  /**
+   * Property details gathered so far. Given to the model so `additionalNotes`
+   * comes back as one consolidated, deduplicated summary rather than an
+   * ever-growing pile of restatements.
+   */
+  priorNotes?: string;
   /**
    * Use the stronger model. Set after a low-confidence turn, a detected
    * objection, or a validator rejection — never as the default (§7).
@@ -138,10 +144,20 @@ export async function classifyAndExtract(
 ): Promise<ClassifyResult> {
   const model: LlmModel = input.escalate ? ESCALATION_MODEL : CLASSIFIER_MODEL;
 
+  // A context line so the model consolidates property notes instead of appending.
+  const priorNotesContext =
+    input.priorNotes !== undefined && input.priorNotes.length > 0
+      ? [{ role: 'user' as const, content: `(פרטי הנכס עד כה: ${input.priorNotes})` }]
+      : [];
+
   const { text, usage } = await llm.complete({
     model,
     system: SYSTEM_PROMPT,
-    messages: [...(input.history ?? []), { role: 'user', content: input.text }],
+    messages: [
+      ...(input.history ?? []),
+      ...priorNotesContext,
+      { role: 'user', content: input.text },
+    ],
     // Classification JSON is tiny; this is a generous ceiling, not a target.
     maxTokens: 512,
   });

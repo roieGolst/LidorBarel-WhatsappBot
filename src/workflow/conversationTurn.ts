@@ -215,21 +215,6 @@ function sumUsage(
   return usage.reduce((total, u) => total + u[field], 0);
 }
 
-/**
- * Folds this turn's extraction over what we already knew. `additionalNotes`
- * accumulates (extra property details volunteered over several messages append to
- * the lead) rather than overwriting; every other field is last-write-wins.
- */
-function mergeExtracted(known: KnownFacts, extracted: KnownFacts): KnownFacts {
-  const merged: KnownFacts = { ...known, ...extracted };
-  if (extracted.additionalNotes) {
-    merged.additionalNotes = [known.additionalNotes, extracted.additionalNotes]
-      .filter(Boolean)
-      .join(' | ');
-  }
-  return merged;
-}
-
 /** Stored placeholder for a media message, which has no text body. */
 const VIDEO_PLACEHOLDER = '[סרטון היכרות]';
 
@@ -247,8 +232,10 @@ export function createConversationWorkflow(
     loadContext(deps.db, conversationId),
   );
 
-  const classify = task('ct_classify', (args: { text: string; history: LlmMessage[] }) =>
-    classifyAndExtract(deps.llm, args),
+  const classify = task(
+    'ct_classify',
+    (args: { text: string; history: LlmMessage[]; priorNotes?: string }) =>
+      classifyAndExtract(deps.llm, args),
   );
 
   const generate = task(
@@ -408,6 +395,7 @@ export function createConversationWorkflow(
       const { analysis } = await classify({
         text: ctx.currentText,
         history: ctx.classifyHistory,
+        ...(ctx.known.additionalNotes ? { priorNotes: ctx.known.additionalNotes } : {}),
       });
 
       // The one place a stage is chosen — pure code, never the model.
@@ -519,7 +507,9 @@ export function createConversationWorkflow(
         fromStage: ctx.stage,
         toStage: decision.nextStage,
         action: decision.action,
-        extracted: mergeExtracted(ctx.known, analysis.extracted),
+        // additionalNotes is the model's consolidated summary, so overwrite (the
+        // prior notes were fed to classify to merge) rather than appending.
+        extracted: { ...ctx.known, ...analysis.extracted },
         ...(decision.qualified !== undefined ? { qualified: decision.qualified } : {}),
         ...(decision.disqualificationReason !== undefined
           ? { disqualificationReason: decision.disqualificationReason }

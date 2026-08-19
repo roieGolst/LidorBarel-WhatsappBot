@@ -317,7 +317,7 @@ describe('conversationTurn', () => {
     expect(conversation?.qualified).toBeNull(); // not forwarded to Lidor
   });
 
-  it('keeps a qualified conversation open and appends extra details to the lead', async () => {
+  it('keeps a qualified conversation open and captures extra details on the lead', async () => {
     const llm = new FakeLlmClient([
       '{"intent":"ANSWER","confidence":0.9,"extracted":{"additionalNotes":"4 חדרים, משופצת, קומה 3"}}',
       'תודה, רשמתי ואעביר גם ללידור. משהו נוסף שחשוב שיידע?',
@@ -338,6 +338,39 @@ describe('conversationTurn', () => {
     expect(result.stage).toBe('qualified'); // stays open
     const conversation = await getConversationById(db, conversationId);
     expect((conversation?.extracted as KnownFacts).additionalNotes).toContain('4 חדרים');
+  });
+
+  it('consolidates property notes (overwrite, no duplication) using prior notes', async () => {
+    // The classifier is fed the prior notes and returns a single merged summary;
+    // the turn overwrites rather than appending with " | ".
+    const merged = 'וילה, 9 חדרים, 2 יחידות דיור, ציפיית מחיר לפחות 3 מיליון';
+    const llm = new FakeLlmClient([
+      `{"intent":"ANSWER","confidence":0.9,"extracted":{"additionalNotes":"${merged}"}}`,
+      'מעולה, קיבלתי.',
+    ]);
+    const { conversationId } = await seed({
+      inbound: 'ציפיית המחיר לפחות 3 מיליון',
+      stage: 'qualified',
+      extracted: {
+        neighborhood: 'רמות',
+        additionalNotes: 'וילה, 9 חדרים, 2 יחידות דיור',
+      },
+      priorReply: QUALIFIED_HANDOFF_MESSAGE,
+    });
+
+    await workflow({ db, llm, channel: new FakeChannel() }).invoke(
+      conversationId,
+      config(conversationId),
+    );
+
+    // The prior notes were handed to the classifier as context...
+    const classifyMessages = llm.requests[0]!.messages.map((m) => m.content).join('\n');
+    expect(classifyMessages).toContain('פרטי הנכס עד כה: וילה, 9 חדרים, 2 יחידות דיור');
+    // ...and the stored note is the single merged summary, not an appended pile.
+    const conversation = await getConversationById(db, conversationId);
+    const notes = (conversation?.extracted as KnownFacts).additionalNotes ?? '';
+    expect(notes).toBe(merged);
+    expect(notes).not.toContain(' | ');
   });
 
   it('does not close on "no urgency" — it continues and lowers the priority', async () => {

@@ -1,3 +1,4 @@
+import { sql } from 'drizzle-orm';
 import {
   boolean,
   index,
@@ -6,6 +7,7 @@ import {
   numeric,
   pgEnum,
   pgTable,
+  pgView,
   text,
   timestamp,
   uniqueIndex,
@@ -548,3 +550,54 @@ export const mediaUploads = pgTable('media_uploads', {
   mediaId: text('media_id').notNull(),
   uploadedAt: timestamp('uploaded_at', { withTimezone: true }).notNull().defaultNow(),
 });
+
+/**
+ * A readable, human-facing view of each lead — one row per conversation, with the
+ * contact's phone/name and the screening answers flattened out of the `extracted`
+ * JSONB. It exists purely for eyeballing leads in a DB tool (`SELECT * FROM leads`)
+ * until the Monday.com projection is built; nothing writes through it.
+ */
+export const leads = pgView('leads', {
+  conversationId: uuid('conversation_id'),
+  phone: text('phone'),
+  name: text('name'),
+  entryPoint: entryPoint('entry_point'),
+  stage: conversationStage('stage'),
+  qualified: boolean('qualified'),
+  priorityScore: integer('priority_score'),
+  disqualificationReason: disqualificationReason('disqualification_reason'),
+  sellIntent: text('sell_intent'),
+  neighborhood: text('neighborhood'),
+  timeline: text('timeline'),
+  currentlyMarketed: text('currently_marketed'),
+  seriousSeller: text('serious_seller'),
+  sellMotivation: text('sell_motivation'),
+  additionalNotes: text('additional_notes'),
+  exclusivityEndsAt: text('exclusivity_ends_at'),
+  wantsExclusivityFollowup: text('wants_exclusivity_followup'),
+  createdAt: timestamp('created_at', { withTimezone: true }),
+  updatedAt: timestamp('updated_at', { withTimezone: true }),
+}).as(sql`
+  SELECT
+    conv.id                                        AS conversation_id,
+    c.phone,
+    c.name,
+    c.entry_point,
+    conv.stage,
+    conv.qualified,
+    conv.priority_score,
+    conv.disqualification_reason,
+    conv.extracted ->> 'sellIntent'                AS sell_intent,
+    conv.extracted ->> 'neighborhood'              AS neighborhood,
+    conv.extracted ->> 'timeline'                  AS timeline,
+    conv.extracted ->> 'currentlyMarketed'         AS currently_marketed,
+    conv.extracted ->> 'seriousSeller'             AS serious_seller,
+    conv.extracted ->> 'sellMotivation'            AS sell_motivation,
+    conv.extracted ->> 'additionalNotes'           AS additional_notes,
+    conv.extracted ->> 'exclusivityEndsAt'         AS exclusivity_ends_at,
+    conv.extracted ->> 'wantsExclusivityFollowup'  AS wants_exclusivity_followup,
+    conv.created_at,
+    conv.updated_at
+  FROM conversations conv
+  JOIN contacts c ON c.id = conv.contact_id
+`);

@@ -43,6 +43,13 @@
       "when": 1787170234113,
       "tag": "0005_boring_exiles",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1787171211817,
+      "tag": "0006_bright_iron_monger",
+      "breakpoints": true
     }
   ]
 }

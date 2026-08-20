@@ -138,6 +138,32 @@ export class CloudApiChannel implements WhatsAppChannel {
   }
 
   /**
+   * Marks the inbound message read and shows a typing indicator. Uses the same
+   * `/messages` endpoint but a different payload shape (a status update, not a
+   * message), so it does not go through {@link postMessage} — there is no outbound
+   * message id to return.
+   */
+  async markTyping(inboundMessageId: string): Promise<void> {
+    const { accessToken, phoneNumberId, graphApiVersion } = this.credentials;
+    const url = `https://graph.facebook.com/${graphApiVersion}/${phoneNumberId}/messages`;
+
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        messaging_product: 'whatsapp',
+        status: 'read',
+        message_id: inboundMessageId,
+        typing_indicator: { type: 'text' },
+      }),
+    });
+    await this.assertOk(response, 'typing indicator');
+  }
+
+  /**
    * Uploads a file for a media id, memoized in-process and (if configured) in the
    * durable {@link MediaCache}. Keyed by path + modified-time, so replacing the
    * file forces exactly one fresh upload.

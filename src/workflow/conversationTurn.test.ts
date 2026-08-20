@@ -144,7 +144,7 @@ function config(conversationId: string) {
 }
 
 describe('conversationTurn', () => {
-  it('dev reset trigger wipes the conversation clean (non-production only)', async () => {
+  it('dev reset trigger wipes ALL client data — contact included (non-production only)', async () => {
     // A mid-flow conversation with collected facts and a transcript.
     const { conversationId } = await seed({
       inbound: 'zTDjKr9Ip6mfYPkiH9iyNxWH',
@@ -152,6 +152,9 @@ describe('conversationTurn', () => {
       extracted: { neighborhood: 'רמות', currentlyMarketed: 'no', seriousSeller: true },
       priorReply: 'מה גורם לך לשקול למכור עכשיו?',
     });
+    const before = await getConversationById(db, conversationId);
+    const contactId = before!.contactId;
+
     const channel = new FakeChannel();
     // No LLM call happens on a dev reset — the trigger short-circuits.
     const llm = new FakeLlmClient([]);
@@ -162,15 +165,81 @@ describe('conversationTurn', () => {
     );
 
     expect(result.action).toBe('dev_reset');
-    expect(result.stage).toBe('new');
-    // The whole transcript is gone and the facts are reset to a clean slate.
+    // Everything tied to the client is gone: the conversation, its transcript,
+    // and the contact row itself.
+    expect(await getConversationById(db, conversationId)).toBeUndefined();
     expect(await recentMessages(db, conversationId)).toHaveLength(0);
-    const conversation = await getConversationById(db, conversationId);
-    expect(conversation?.stage).toBe('new');
-    expect(conversation?.extracted).toEqual({});
-    expect(conversation?.qualified).toBeNull();
+    expect(await findContactById(db, contactId)).toBeUndefined();
     // No model was consulted.
     expect(llm.requests).toHaveLength(0);
+  });
+
+  it('acknowledges a property photo, records it on the lead, and does not derail the flow', async () => {
+    const { conversationId } = await seed({
+      inbound: 'שלום',
+      stage: 'screening_currently_marketed',
+      extracted: { neighborhood: 'רמות' },
+      priorReply: 'האם הנכס משווק כרגע?',
+    });
+    // The lead sends a photo (no caption) — now the latest inbound.
+    await recordInboundMessage(db, {
+      conversationId,
+      providerMessageId: `photo1-${conversationId}`,
+      mediaType: 'image',
+      mediaUrl: 'wamid-media-1',
+      createdAt: new Date(Date.now() + 1000),
+    });
+    const channel = new FakeChannel();
+    const llm = new FakeLlmClient([]); // a photo needs no classification/generation
+
+    const result = await workflow({ db, llm, channel }).invoke(
+      conversationId,
+      config(conversationId),
+    );
+
+    expect(result.action).toBe('acknowledge_photos');
+    // The pending screening stage is untouched — the photo does not advance/re-ask.
+    expect(result.stage).toBe('screening_currently_marketed');
+    expect(channel.sent).toHaveLength(1);
+    expect(channel.sent[0]?.kind).toBe('text');
+    expect(llm.requests).toHaveLength(0);
+    let conversation = await getConversationById(db, conversationId);
+    expect((conversation?.extracted as KnownFacts).photoCount).toBe(1);
+
+    // A second photo in the same burst is recorded silently (no repeated ack).
+    await recordInboundMessage(db, {
+      conversationId,
+      providerMessageId: `photo2-${conversationId}`,
+      mediaType: 'image',
+      mediaUrl: 'wamid-media-2',
+      createdAt: new Date(Date.now() + 2000),
+    });
+    const result2 = await workflow({ db, llm, channel }).invoke(
+      conversationId,
+      config(conversationId),
+    );
+    expect(result2.action).toBe('acknowledge_photos');
+    expect(result2.sent).toBe(false); // deduped — no second ack
+    expect(channel.sent).toHaveLength(1); // still just the one ack
+    conversation = await getConversationById(db, conversationId);
+    expect((conversation?.extracted as KnownFacts).photoCount).toBe(2);
+  });
+
+  it('shows a typing indicator against the inbound message before the model replies', async () => {
+    const llm = new FakeLlmClient([
+      '{"intent":"ANSWER","confidence":0.9,"extracted":{"neighborhood":"רמות"}}',
+    ]);
+    const channel = new FakeChannel();
+    const { conversationId } = await seed({
+      inbound: 'רמות',
+      stage: 'screening_neighborhood',
+      priorReply: 'באיזו שכונה נמצא הנכס?',
+    });
+
+    await workflow({ db, llm, channel }).invoke(conversationId, config(conversationId));
+
+    // The turn ran the model, so it first marked the inbound read + typing.
+    expect(channel.typingFor).toContain(`in-${conversationId}`);
   });
 
   it('opens with welcome + intro video, then the main menu (§8)', async () => {

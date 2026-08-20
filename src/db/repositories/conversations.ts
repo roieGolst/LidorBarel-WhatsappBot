@@ -1,6 +1,6 @@
-import { and, desc, eq, notInArray } from 'drizzle-orm';
+import { and, desc, eq, inArray, notInArray } from 'drizzle-orm';
 import type { Database, DbClient } from '../client.js';
-import { appointmentRequests, conversations, events, messages } from '../schema.js';
+import { contacts, conversations, events, optOuts, outbox } from '../schema.js';
 
 export type Conversation = typeof conversations.$inferSelect;
 export type ConversationStage = Conversation['stage'];
@@ -181,54 +181,55 @@ export async function setMondayItemId(
 }
 
 /**
- * DEV-ONLY hard reset of a conversation to a clean slate.
+ * DEV-ONLY hard wipe of EVERYTHING tied to a client.
  *
- * Wipes everything collected during the chat — the whole message transcript, any
- * booked-meeting requests, and the conversation's event history — and resets the
- * conversation row itself (stage, extracted facts, qualification, priority, Monday
- * link, window/follow-up bookkeeping). The contact row is kept, so the SAME thread
- * can be re-driven from the opening sequence. Runs in one transaction.
+ * Given one of the contact's conversations, deletes the whole client: the contact
+ * row (which cascades to every conversation, message, appointment, listing, and
+ * campaign referral), plus the rows that carry no cascading foreign key — the
+ * opt-out (keyed by phone) and the audit/outbox events for the contact and its
+ * conversations. Shared `properties` (deduped by address, not owned by a client)
+ * are intentionally left. Nothing is left behind that references this person, so a
+ * subsequent inbound recreates the contact and conversation from scratch. Runs in
+ * one transaction; a no-op if the conversation is already gone.
  *
- * This exists purely so a developer can restart a test conversation without
- * hand-editing the database; it is gated to non-production callers (see
- * conversationTurn) and must never be reachable in production.
+ * This exists purely so a developer can restart a test client without hand-editing
+ * the database; it is gated to non-production callers (see conversationTurn) and
+ * must never be reachable in production.
  */
-export async function resetConversationForDev(
+export async function wipeClientForDev(
   db: Database,
   conversationId: string,
 ): Promise<void> {
   await db.transaction(async (tx) => {
-    await tx.delete(messages).where(eq(messages.conversationId, conversationId));
-    await tx
-      .delete(appointmentRequests)
-      .where(eq(appointmentRequests.conversationId, conversationId));
-    await tx
-      .delete(events)
-      .where(
-        and(
-          eq(events.aggregateType, 'conversation'),
-          eq(events.aggregateId, conversationId),
-        ),
-      );
-    await tx
-      .update(conversations)
-      .set({
-        stage: 'new',
-        extracted: {},
-        qualified: null,
-        disqualificationReason: null,
-        priorityScore: null,
-        listingId: null,
-        mondayItemId: null,
-        windowExpiresAt: null,
-        lastInboundAt: null,
-        lastOutboundAt: null,
-        followupCount: 0,
-        nextFollowupAt: null,
-        handedOffAt: null,
-        errorState: null,
-        updatedAt: new Date(),
-      })
-      .where(eq(conversations.id, conversationId));
+    const [conversation] = await tx
+      .select({ contactId: conversations.contactId })
+      .from(conversations)
+      .where(eq(conversations.id, conversationId))
+      .limit(1);
+    if (!conversation) return; // already wiped
+
+    const contactId = conversation.contactId;
+    const [contact] = await tx
+      .select({ phone: contacts.phone })
+      .from(contacts)
+      .where(eq(contacts.id, contactId))
+      .limit(1);
+
+    // Every conversation this contact has, so their audit/outbox rows (which have
+    // no cascading FK, only an aggregate_id) can be cleared too.
+    const contactConversations = await tx
+      .select({ id: conversations.id })
+      .from(conversations)
+      .where(eq(conversations.contactId, contactId));
+    const aggregateIds = [contactId, ...contactConversations.map((c) => c.id)];
+
+    await tx.delete(events).where(inArray(events.aggregateId, aggregateIds));
+    await tx.delete(outbox).where(inArray(outbox.aggregateId, aggregateIds));
+    if (contact?.phone) {
+      await tx.delete(optOuts).where(eq(optOuts.phone, contact.phone));
+    }
+    // Cascades to conversations → messages / appointment_requests, listings, and
+    // campaign_referrals.
+    await tx.delete(contacts).where(eq(contacts.id, contactId));
   });
 }

@@ -68,6 +68,22 @@ describe('CloudApiChannel', () => {
     expect(result).toEqual({ providerMessageId: 'wamid.XYZ' });
   });
 
+  it('markTyping POSTs a read + typing-indicator status for the inbound id', async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ success: true }));
+    const channel = new CloudApiChannel(CREDENTIALS);
+
+    await channel.markTyping('wamid.INBOUND');
+
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe('https://graph.facebook.com/v21.0/1234567890/messages');
+    expect(JSON.parse(init.body as string)).toEqual({
+      messaging_product: 'whatsapp',
+      status: 'read',
+      message_id: 'wamid.INBOUND',
+      typing_indicator: { type: 'text' },
+    });
+  });
+
   it('throws on a non-2xx response, including the error payload', async () => {
     const errorBody = {
       error: { message: 'Invalid parameter', code: 100, fbtrace_id: 'Axyz' },

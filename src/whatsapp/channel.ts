@@ -36,6 +36,15 @@ export interface WhatsAppChannel {
     buttonLabel: string,
     rows: readonly ListRow[],
   ): Promise<OutboundResult>;
+
+  /**
+   * Shows the "typing…" indicator to the person while the bot composes a reply,
+   * and marks their message read. Keyed by the INBOUND message's id (Meta requires
+   * it). The indicator clears when the next message is sent or after ~25s, so it is
+   * sent just before the slow model work. Purely cosmetic — callers treat a failure
+   * as non-fatal and never let it block the reply.
+   */
+  markTyping(inboundMessageId: string): Promise<void>;
 }
 
 /**

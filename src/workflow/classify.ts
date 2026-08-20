@@ -66,6 +66,9 @@ export const extractedSchema = z.object({
   // True when the person explicitly asks to book a meeting/call or to proceed
   // with selling now — a strong, weighted quality signal.
   bookingIntent: z.boolean().optional(),
+  // How many property photos the lead has sent. Set by the workflow (NOT the
+  // classifier) when an image arrives, so Lidor knows photos are attached.
+  photoCount: z.number().int().nonnegative().optional(),
 });
 
 export const analysisSchema = z.object({

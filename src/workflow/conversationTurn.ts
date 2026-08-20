@@ -6,7 +6,7 @@ import { findContactById } from '../db/repositories/contacts.js';
 import { listMediaAssets } from '../db/repositories/mediaAssets.js';
 import {
   getConversationById,
-  resetConversationForDev,
+  wipeClientForDev,
   type ConversationStage,
 } from '../db/repositories/conversations.js';
 import { getConfig } from '../config.js';
@@ -113,6 +113,14 @@ export interface TurnContext {
   optedOut: boolean;
   /** The latest inbound message — the turn we are responding to. */
   currentText: string;
+  /** Meta's id for the latest inbound, used to show a typing indicator against it. */
+  currentMessageId: string;
+  /**
+   * Media attached to the latest inbound, when any — e.g. a property photo the
+   * lead sent. `kind` is Meta's media type ("image", "video", …); `id` is the
+   * Meta media id (the binary is fetched from the Graph API separately).
+   */
+  currentMedia?: { kind: string; id: string };
   /** Turns before the current one, for classification context. */
   classifyHistory: LlmMessage[];
   /** The full recent transcript, for reply generation. */
@@ -157,15 +165,14 @@ export async function loadContext(
     throw new Error(`conversationTurn: contact ${conversation.contactId} not found`);
   }
 
-  const turns: LlmMessage[] = (await recentMessages(db, conversationId))
-    .map((message) => ({
-      role: message.direction === 'inbound' ? ('user' as const) : ('assistant' as const),
-      content: message.body ?? '',
-    }))
-    .filter((turn) => turn.content.length > 0);
+  const messageRows = await recentMessages(db, conversationId);
 
-  const last = turns.at(-1);
-  if (!last || last.role !== 'user') {
+  // Whether there is a fresh inbound to respond to is decided from the RAW latest
+  // message, not the text transcript — a photo with no caption has an empty body
+  // and would otherwise be filtered out entirely, making the turn look like there
+  // was nothing to answer (and going silent).
+  const latest = messageRows.at(-1);
+  if (!latest || latest.direction !== 'inbound') {
     // Nothing to respond to: the latest message is already the bot's reply (a
     // stale/duplicate enqueue, or a redelivery whose inbound was answered on an
     // earlier turn). This is a no-op, not an error — returning null lets the turn
@@ -173,16 +180,37 @@ export async function loadContext(
     return null;
   }
 
+  const currentText = latest.body ?? '';
+  const currentMedia =
+    latest.mediaType && latest.mediaUrl
+      ? { kind: latest.mediaType, id: latest.mediaUrl }
+      : undefined;
+
+  // The text transcript for the LLM. Media-only messages (no caption) contribute
+  // no text and are simply absent here; the current message's own text, when it
+  // has any, is the last user turn.
+  const turns: LlmMessage[] = messageRows
+    .map((message) => ({
+      role: message.direction === 'inbound' ? ('user' as const) : ('assistant' as const),
+      content: message.body ?? '',
+    }))
+    .filter((turn) => turn.content.length > 0);
+
   const now = Date.now();
   const [inboundCount, recentInboundCount] = await Promise.all([
     countInboundMessages(db, conversationId),
     countInboundMessages(db, conversationId, new Date(now - RATE_WINDOW_MS)),
   ]);
 
-  // Earlier user turns (excluding the current message), for the abuse strike.
-  const priorMalicious = turns
-    .slice(0, -1)
-    .some((turn) => turn.role === 'user' && isMalicious(turn.content));
+  // History for classification excludes the current message when it carried text
+  // (it is the last user turn); a media-only current message is not in `turns`.
+  const classifyHistory =
+    currentText.length > 0 && turns.at(-1)?.role === 'user' ? turns.slice(0, -1) : turns;
+
+  // Earlier user turns, for the abuse strike.
+  const priorMalicious = classifyHistory.some(
+    (turn) => turn.role === 'user' && isMalicious(turn.content),
+  );
   const lastOutboundText = turns
     .filter((turn) => turn.role === 'assistant')
     .at(-1)?.content;
@@ -196,8 +224,10 @@ export async function loadContext(
     // No prior outbound message means the bot has not spoken yet.
     isFirstResponse: !turns.some((turn) => turn.role === 'assistant'),
     optedOut: await isOptedOut(db, contact.phone),
-    currentText: last.content,
-    classifyHistory: turns.slice(0, -1),
+    currentText,
+    currentMessageId: latest.providerMessageId ?? '',
+    ...(currentMedia ? { currentMedia } : {}),
+    classifyHistory,
     turns,
     inboundCount,
     recentInboundCount,
@@ -272,8 +302,18 @@ function questionPart(question: ScreeningQuestion): OutboundPart {
  */
 const DEV_RESET_TRIGGER = 'zTDjKr9Ip6mfYPkiH9iyNxWH';
 
-/** Dev-only confirmation sent after a reset, so the developer sees it worked. */
-const DEV_RESET_CONFIRMATION = '🧹 [dev] השיחה אופסה. שלח הודעה כדי להתחיל מחדש.';
+/** Dev-only confirmation sent after a wipe, so the developer sees it worked. */
+const DEV_RESET_CONFIRMATION =
+  '🧹 [dev] כל נתוני הלקוח נמחקו. שלח הודעה כדי להתחיל מחדש.';
+
+/**
+ * Brief, model-free acknowledgement when the lead sends a property photo. Short
+ * and non-derailing on purpose — it does not answer or re-ask a screening
+ * question, so a photo sent mid-flow does not knock the conversation off course;
+ * the pending question still stands. On a burst of photos it is sent once (see
+ * the dedupe in the entrypoint), not once per image.
+ */
+const PHOTO_ACK_MESSAGE = 'קיבלתי את התמונות, תודה! 📸 אצרף אותן לפרטים שיעברו ללידור.';
 
 /** Stored placeholder for a media message, which has no text body. */
 const VIDEO_PLACEHOLDER = '[סרטון היכרות]';
@@ -443,19 +483,20 @@ export function createConversationWorkflow(
         return { stage: 'engaged', action: 'skipped_no_inbound', text: '', sent: false };
       }
 
-      // DEV-ONLY hard reset: an exact trigger word wipes everything collected in
-      // this conversation and re-drives the same thread from the opening
-      // sequence. Runs before every other branch (even opt-out) so a developer
-      // can always get a clean slate. Never active in production — there the
-      // token is just an ordinary inbound message. Sends a confirmation directly
-      // (not persisted), so the next inbound is treated as a fresh first contact.
+      // DEV-ONLY hard wipe: an exact trigger word deletes EVERYTHING tied to this
+      // client — the contact and every conversation, message, appointment, opt-out
+      // and audit row — so the next inbound starts a brand-new client from the
+      // opening sequence. Runs before every other branch (even opt-out) so a
+      // developer can always get a clean slate. Never active in production — there
+      // the token is just an ordinary inbound message. The confirmation is sent
+      // directly (not persisted), and the conversation row itself is gone.
       if (
         getConfig().nodeEnv !== 'production' &&
         ctx.currentText.trim() === DEV_RESET_TRIGGER
       ) {
-        await resetConversationForDev(deps.db, conversationId);
+        await wipeClientForDev(deps.db, conversationId);
         await deps.channel.sendText(ctx.contactPhone, DEV_RESET_CONFIRMATION);
-        logger.warn({ conversationId }, 'dev reset: conversation wiped');
+        logger.warn({ conversationId }, 'dev reset: client data wiped');
         return {
           stage: 'new',
           action: 'dev_reset',
@@ -489,6 +530,49 @@ export function createConversationWorkflow(
       });
       if (gate.kind !== 'proceed') {
         return handleGate(gate, ctx, conversationId);
+      }
+
+      // Property photo: the lead attached an image. Record it on the lead (a
+      // running photoCount, so Lidor knows photos are attached) and acknowledge
+      // briefly — no classification, no flow advance, so a photo sent mid-screening
+      // does not derail the pending question. On a burst (WhatsApp delivers each
+      // image as its own message → its own turn), only the first gets the ack; the
+      // rest are recorded silently. Runs BEFORE the language gates so a caption-less
+      // photo (empty text) is not mistaken for gibberish and redirected. On the very
+      // first turn the opening sequence takes precedence (fall through).
+      if (ctx.currentMedia?.kind === 'image' && !ctx.isFirstResponse) {
+        const photoCount = (ctx.known.photoCount ?? 0) + 1;
+        const extracted: KnownFacts = { ...ctx.known, photoCount };
+        const alreadyAcked = ctx.lastOutboundText === PHOTO_ACK_MESSAGE;
+        logger.info(
+          { conversationId, photoCount, alreadyAcked },
+          'property photo received',
+        );
+
+        const outbound: OutboundMessageRecord[] = [];
+        if (!alreadyAcked) {
+          const { providerMessageId } = await send({
+            to: ctx.contactPhone,
+            part: { kind: 'text', text: PHOTO_ACK_MESSAGE },
+          });
+          outbound.push({ body: PHOTO_ACK_MESSAGE, providerMessageId });
+        }
+        await persist({
+          conversationId,
+          contactId: ctx.contactId,
+          contactPhone: ctx.contactPhone,
+          fromStage: ctx.stage,
+          toStage: ctx.stage,
+          action: 'acknowledge_photos',
+          extracted,
+          outbound,
+        });
+        return {
+          stage: ctx.stage,
+          action: 'acknowledge_photos',
+          text: alreadyAcked ? '' : PHOTO_ACK_MESSAGE,
+          sent: !alreadyAcked,
+        };
       }
 
       // Hebrew-only gate (review req #4): a predominantly-English message is
@@ -554,6 +638,18 @@ export function createConversationWorkflow(
           action: 'stay_on_topic',
           sent: true,
         };
+      }
+
+      // From here the turn does the slow model work (classification, and usually
+      // generation). Show the person a "typing…" indicator and mark their message
+      // read so the wait reads as a real reply being composed. Purely cosmetic and
+      // best-effort: a failure here must never block the actual reply.
+      if (ctx.currentMessageId) {
+        try {
+          await deps.channel.markTyping(ctx.currentMessageId);
+        } catch (error) {
+          logger.warn({ conversationId, error }, 'typing indicator failed (ignored)');
+        }
       }
 
       const { analysis } = await classify({

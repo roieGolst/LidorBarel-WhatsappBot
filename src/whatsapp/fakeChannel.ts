@@ -27,12 +27,19 @@ export type SentMessage = DraftMessage & { providerMessageId: string };
 export class FakeChannel implements WhatsAppChannel {
   /** Every successful send, in order, with its full shape. */
   readonly sent: SentMessage[] = [];
+  /** Inbound message ids the bot showed a typing indicator for, in order. */
+  readonly typingFor: string[] = [];
   private counter = 0;
   private failures = 0;
 
   /** Make the next `n` sends reject before recording anything. */
   failNext(n = 1): void {
     this.failures += n;
+  }
+
+  markTyping(inboundMessageId: string): Promise<void> {
+    this.typingFor.push(inboundMessageId);
+    return Promise.resolve();
   }
 
   sendText(to: string, text: string): Promise<OutboundResult> {

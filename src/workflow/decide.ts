@@ -112,7 +112,7 @@ export function decideTransition(
   //     priority (see leadPriorityScore). Not for an already-qualified lead —
   //     they are handled below.
   if (confident && facts.bookingIntent && current !== 'qualified') {
-    return nextScreeningStep(current, facts, screenAll, escalate);
+    return nextScreeningStep(current, bookingFacts(facts), screenAll, escalate);
   }
 
   // 3. A confident objection or FAQ gets a bespoke reply, without advancing
@@ -169,7 +169,12 @@ export function decideMainMenu(
     case 'book_meeting': {
       const blocked = exclusivityOrDisqualification(known, false);
       if (blocked) return blocked;
-      return nextScreeningStep(current, known, screenAll, false);
+      // Booking a meeting is top-urgency intent: mark it and skip Q3 (timeline).
+      const facts =
+        choice === 'book_meeting'
+          ? bookingFacts({ ...known, bookingIntent: true })
+          : known;
+      return nextScreeningStep(current, facts, screenAll, false);
     }
     case 'testimonials':
       return {
@@ -308,6 +313,17 @@ function disqualifyingReason(facts: KnownFacts): DisqualificationReason | undefi
  * urgent. It only orders Lidor's queue; it never gates qualification. `undefined`
  * until the timeline is known (a form lead answers Q3 on the form, not the bot).
  */
+/**
+ * Booking a meeting is top-urgency intent, so the timeline is taken as immediate:
+ * Q3 is skipped and the weighted priority is maxed. Only fills a timeline that is
+ * not already known, so a stated timeline is never overwritten.
+ */
+function bookingFacts(facts: KnownFacts): KnownFacts {
+  return facts.bookingIntent && facts.timeline === undefined
+    ? { ...facts, timeline: 'immediate' }
+    : facts;
+}
+
 export function leadPriorityScore(facts: KnownFacts): number | undefined {
   const base =
     facts.timeline === 'immediate'

@@ -38,6 +38,7 @@ import {
   mainMenuChoiceFor,
   screeningQuestionFor,
   WELCOME_MESSAGE,
+  type ScreeningQuestion,
 } from './interactive.js';
 import { ENGLISH_ONLY_REPLY, isPredominantlyEnglish } from './language.js';
 import { isOptOutKeyword } from './optOutKeywords.js';
@@ -141,7 +142,7 @@ export interface TurnResult {
 export async function loadContext(
   db: Database,
   conversationId: string,
-): Promise<TurnContext> {
+): Promise<TurnContext | null> {
   const conversation = await getConversationById(db, conversationId);
   if (!conversation) {
     throw new Error(`conversationTurn: conversation ${conversationId} not found`);
@@ -161,7 +162,11 @@ export async function loadContext(
 
   const last = turns.at(-1);
   if (!last || last.role !== 'user') {
-    throw new Error('conversationTurn: no inbound message to respond to');
+    // Nothing to respond to: the latest message is already the bot's reply (a
+    // stale/duplicate enqueue, or a redelivery whose inbound was answered on an
+    // earlier turn). This is a no-op, not an error — returning null lets the turn
+    // skip silently instead of failing and retrying forever.
+    return null;
   }
 
   const now = Date.now();
@@ -221,6 +226,23 @@ function sumUsage(
   field: 'inputTokens' | 'outputTokens' | 'cacheReadTokens',
 ): number {
   return usage.reduce((total, u) => total + u[field], 0);
+}
+
+/** Renders a screening question into the outbound part that carries it. */
+function questionPart(question: ScreeningQuestion): OutboundPart {
+  switch (question.kind) {
+    case 'text':
+      return { kind: 'text', text: question.body };
+    case 'buttons':
+      return { kind: 'buttons', body: question.body, buttons: question.buttons };
+    case 'list':
+      return {
+        kind: 'list',
+        body: question.body,
+        buttonLabel: question.buttonLabel,
+        rows: question.rows,
+      };
+  }
 }
 
 /** Stored placeholder for a media message, which has no text body. */
@@ -292,15 +314,7 @@ export function createConversationWorkflow(
     const question = screeningQuestionFor(decision.action);
     if (question) {
       return {
-        part:
-          question.kind === 'buttons'
-            ? { kind: 'buttons', body: question.body, buttons: question.buttons }
-            : {
-                kind: 'list',
-                body: question.body,
-                buttonLabel: question.buttonLabel,
-                rows: question.rows,
-              },
+        part: questionPart(question),
         storeBody: question.body,
         toStage: decision.nextStage,
       };
@@ -392,6 +406,12 @@ export function createConversationWorkflow(
     { name: 'conversationTurn', checkpointer },
     async (conversationId: string): Promise<TurnResult> => {
       const ctx = await load(conversationId);
+
+      // Nothing to respond to (the latest message is already the bot's reply — a
+      // stale or duplicate enqueue). Skip silently rather than fail and retry.
+      if (!ctx) {
+        return { stage: 'engaged', action: 'skipped_no_inbound', text: '', sent: false };
+      }
 
       // A contact who already opted out is left in silence — no reply is
       // generated and nothing is sent. The acknowledgement of the opt-out itself
@@ -605,18 +625,7 @@ export function createConversationWorkflow(
         // "no callback-time promise" rule can never drift.
         plan.push({ part: { kind: 'text', text: canned }, storeBody: canned });
       } else if (question) {
-        plan.push({
-          part:
-            question.kind === 'buttons'
-              ? { kind: 'buttons', body: question.body, buttons: question.buttons }
-              : {
-                  kind: 'list',
-                  body: question.body,
-                  buttonLabel: question.buttonLabel,
-                  rows: question.rows,
-                },
-          storeBody: question.body,
-        });
+        plan.push({ part: questionPart(question), storeBody: question.body });
       } else {
         const reply = await generate({
           action: decision.action,
@@ -663,11 +672,19 @@ export function createConversationWorkflow(
         // additionalNotes is the model's consolidated summary, so overwrite (the
         // prior notes were fed to classify to merge) rather than appending. Uses
         // the validated extraction, so an invalid neighborhood is never stored.
-        // A book-meeting tap sets bookingIntent even when the tap text carried none.
+        // A book-meeting tap sets bookingIntent even when the tap text carried
+        // none, and implies top urgency — timeline is taken as immediate (Q3 is
+        // skipped) unless a timeline is already known.
         extracted: {
           ...ctx.known,
           ...validated.extracted,
-          ...(bookingIntent ? { bookingIntent: true } : {}),
+          ...(bookingIntent
+            ? {
+                bookingIntent: true,
+                timeline:
+                  ctx.known.timeline ?? validated.extracted.timeline ?? 'immediate',
+              }
+            : {}),
         },
         ...(decision.qualified !== undefined ? { qualified: decision.qualified } : {}),
         ...(decision.disqualificationReason !== undefined

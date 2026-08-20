@@ -198,10 +198,11 @@ describe('conversationTurn', () => {
       config(conversationId),
     );
 
-    // Form lead (default) → screening opens on Q2 (neighborhood) as a list.
+    // Form lead (default) → screening opens on Q2 (neighborhood), an open text
+    // question.
     expect(result.action).toBe('ask_neighborhood');
     expect(channel.sent).toHaveLength(1);
-    expect(channel.sent[0]?.kind).toBe('list');
+    expect(channel.sent[0]?.kind).toBe('text');
   });
 
   it('tapping "book a meeting" runs screening with a booking lead-in and boosts priority', async () => {
@@ -223,12 +224,14 @@ describe('conversationTurn', () => {
     // Same flow as check_fit (form lead → Q2), preceded by the booking lead-in.
     expect(result.action).toBe('ask_neighborhood');
     expect(channel.sent[0]).toMatchObject({ kind: 'text', text: BOOKING_LEADIN_MESSAGE });
-    expect(channel.sent.at(-1)?.kind).toBe('list'); // the neighborhood question
+    expect(channel.sent.at(-1)?.kind).toBe('text'); // the neighborhood question
 
     const conversation = await getConversationById(db, conversationId);
     const extracted = conversation?.extracted as KnownFacts;
     expect(extracted.bookingIntent).toBe(true);
-    expect(conversation?.priorityScore).toBe(60); // booking intent floor
+    // Booking implies immediate urgency → Q3 skipped and priority maxed.
+    expect(extracted.timeline).toBe('immediate');
+    expect(conversation?.priorityScore).toBe(100);
   });
 
   it('sends a three-option screening question as buttons', async () => {

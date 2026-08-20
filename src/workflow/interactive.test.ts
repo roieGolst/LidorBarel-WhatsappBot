@@ -40,7 +40,7 @@ describe('interactive content', () => {
   it('uses buttons for ≤3 options and a list for more', () => {
     expect(screeningQuestionFor('ask_sell_intent')?.kind).toBe('buttons');
     expect(screeningQuestionFor('ask_currently_marketed')?.kind).toBe('buttons');
-    expect(screeningQuestionFor('ask_neighborhood')?.kind).toBe('list');
+    expect(screeningQuestionFor('ask_neighborhood')?.kind).toBe('text');
     expect(screeningQuestionFor('ask_timeline')?.kind).toBe('list');
   });
 
@@ -73,7 +73,9 @@ describe('interactive content', () => {
   it('respects WhatsApp length caps: ≤3 buttons (title ≤20), ≤10 rows (title ≤24)', () => {
     for (const action of SCREENING_ACTIONS) {
       const q = screeningQuestionFor(action)!;
-      if (q.kind === 'buttons') {
+      if (q.kind === 'text') {
+        expect(q.body.length).toBeGreaterThan(0);
+      } else if (q.kind === 'buttons') {
         expect(q.buttons.length).toBeLessThanOrEqual(3);
         for (const b of q.buttons) {
           expect(b.title.length).toBeLessThanOrEqual(20);

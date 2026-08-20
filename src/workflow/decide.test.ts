@@ -372,6 +372,18 @@ describe('decideTransition', () => {
       );
       expect(decision.action).toBe('ask_neighborhood');
     });
+
+    it('skips Q3 (timeline) for a booking lead — treated as immediate', () => {
+      // Direct lead (screenAll) with Q1+Q2 answered: normally Q3 is next, but a
+      // booking lead jumps straight to Q4.
+      const decision = decideMainMenu(
+        'book_meeting',
+        'engaged',
+        { sellIntent: 'ready', neighborhood: 'רמות' },
+        true,
+      );
+      expect(decision.action).toBe('ask_currently_marketed');
+    });
   });
 
   describe('screensAllQuestions', () => {

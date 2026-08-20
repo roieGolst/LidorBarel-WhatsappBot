@@ -78,11 +78,12 @@ export const ADDITIONAL_INFO_ACK_MESSAGE =
   'מעולה, קיבלתי — אעביר את זה ללידור יחד עם שאר הפרטים. אם יש עוד משהו שחשוב שיידע, אני כאן.';
 
 /**
- * A brief, natural check of selling intent before we invest Lidor's time — asked
- * once, after the four questions.
+ * Asked once, after the screening questions. It doubles as the seriousness check
+ * and as a way to collect the property details that help Lidor prepare — the
+ * answer's substance both reveals a genuine seller and is saved to the lead.
  */
 export const INTENT_QUESTION =
-  'ורק כדי שלידור ייערך בצורה הכי טובה — מה גורם לך לשקול למכור עכשיו?';
+  'כדי שלידור יגיע לשיחה מוכן — תוכל/י לשתף כמה פרטים על הנכס? למשל כתובת מדויקת, מספר חדרים, קומה, מצב הנכס, ומחיר משוער שחשבת עליו. 🙂';
 
 /**
  * A lead who is mainly price-checking, not seriously selling. We do NOT forward
@@ -135,8 +136,12 @@ export function mainMenuChoiceFor(text: string): MainMenuChoice | undefined {
   return undefined;
 }
 
-/** A screening question rendered as one of WhatsApp's two interactive shapes. */
+/**
+ * A screening question rendered as plain text or one of WhatsApp's two
+ * interactive shapes.
+ */
 export type ScreeningQuestion =
+  | { kind: 'text'; body: string }
   | { kind: 'buttons'; body: string; buttons: ReplyButton[] }
   | { kind: 'list'; body: string; buttonLabel: string; rows: ListRow[] };
 
@@ -156,29 +161,13 @@ const SCREENING_QUESTIONS: Partial<Record<TurnAction, ScreeningQuestion>> = {
       { id: 'sell_intent:not_selling', title: 'לא מעוניין למכור' },
     ],
   },
-  // Q2 — neighborhood. WhatsApp lists cap at 10 rows total, so the eight lettered
-  // neighborhoods are each an independent, tappable option and every named
-  // neighborhood is typed — it is matched against the full list either way (see
-  // domain/neighborhoods.ts).
+  // Q2 — neighborhood. An OPEN question rather than a list: Be'er Sheva has ~30
+  // neighborhoods (more than a WhatsApp list's 10-row cap), and an "other" row
+  // just loops. The person types the neighborhood — or a full address — and it is
+  // parsed and matched against the full list (see domain/neighborhoods.ts).
   ask_neighborhood: {
-    kind: 'list',
-    body: 'באיזו שכונה נמצא הנכס? אם השכונה אינה ברשימה, אפשר פשוט להקליד את שמה.',
-    buttonLabel: 'בחירת שכונה',
-    rows: [
-      { id: 'neighborhood:alef', title: 'שכונה א׳' },
-      { id: 'neighborhood:bet', title: 'שכונה ב׳' },
-      { id: 'neighborhood:gimel', title: 'שכונה ג׳' },
-      { id: 'neighborhood:dalet', title: 'שכונה ד׳' },
-      { id: 'neighborhood:hey', title: 'שכונה ה׳' },
-      { id: 'neighborhood:vav', title: 'שכונה ו׳' },
-      { id: 'neighborhood:tet', title: 'שכונה ט׳' },
-      { id: 'neighborhood:yod_alef', title: 'שכונה י״א' },
-      {
-        id: 'neighborhood:other',
-        title: 'שכונה אחרת',
-        description: 'הקלד/י את שם השכונה',
-      },
-    ],
+    kind: 'text',
+    body: 'באיזו שכונה נמצא הנכס? אפשר לכתוב שם שכונה, ואם נוח יותר — כתובת מלאה.',
   },
   // Q3 — timeline (four options → list).
   ask_timeline: {

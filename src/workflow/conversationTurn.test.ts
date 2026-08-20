@@ -25,6 +25,7 @@ import type { KnownFacts } from './decide.js';
 import { ENGLISH_ONLY_REPLY } from './language.js';
 import {
   INTRO_VIDEO_PATH,
+  OFF_TOPIC_REDIRECT_MESSAGE,
   QUALIFIED_HANDOFF_MESSAGE,
   WELCOME_MESSAGE,
 } from './interactive.js';
@@ -744,5 +745,28 @@ describe('conversationTurn', () => {
       expect(video.caption).toContain('סיור');
     }
     expect(channel.sent.some((s) => s.kind === 'text')).toBe(true);
+  });
+
+  it('redirects off-topic chatter from a qualified lead instead of acking it for Lidor', async () => {
+    const llm = new FakeLlmClient([
+      '{"intent":"OFF_TOPIC","confidence":0.95,"extracted":{}}',
+    ]);
+    const channel = new FakeChannel();
+    const { conversationId } = await seed({
+      inbound: 'תכין לי רשימת מצרכים לסופר',
+      stage: 'qualified',
+      priorReply: QUALIFIED_HANDOFF_MESSAGE,
+    });
+
+    const result = await workflow({ db, llm, channel }).invoke(
+      conversationId,
+      config(conversationId),
+    );
+
+    expect(result.action).toBe('stay_on_topic');
+    expect(result.stage).toBe('qualified');
+    expect(llm.requests).toHaveLength(1); // classify only; canned reply, no generate
+    const sent = channel.sent.at(-1);
+    expect(sent).toMatchObject({ kind: 'text', text: OFF_TOPIC_REDIRECT_MESSAGE });
   });
 });

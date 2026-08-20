@@ -196,6 +196,20 @@ describe('decideTransition', () => {
     expect(decision).toMatchObject({ action: 'answer_faq', nextStage: 'engaged' });
   });
 
+  it('redirects a confident off-topic message instead of engaging with it', () => {
+    const decision = decideTransition('engaged', analysis({ intent: 'OFF_TOPIC' }));
+    expect(decision.action).toBe('stay_on_topic');
+  });
+
+  it('redirects off-topic chatter from a qualified lead (not an "info for Lidor" ack)', () => {
+    // The reported bug: a recipe/shopping-list request after qualifying was
+    // acknowledged as new details for Lidor.
+    const decision = decideTransition('qualified', analysis({ intent: 'OFF_TOPIC' }));
+    expect(decision.action).toBe('stay_on_topic');
+    expect(decision.action).not.toBe('acknowledge_additional_info');
+    expect(decision.nextStage).toBe('qualified');
+  });
+
   it('asks for the neighborhood first when nothing is known (form lead: Q2+Q4 only)', () => {
     // Default screenAll=false is the Meta-form path — Q1/Q3 were answered there.
     const decision = decideTransition('new', analysis());

@@ -41,6 +41,7 @@ export type TurnAction =
   | 'handle_objection'
   | 'send_social_proof' // main-menu "testimonials"
   | 'handoff_to_human' // main-menu "talk to me" / "book a meeting"
+  | 'stay_on_topic' // off-topic chatter → keep the conversation on the property
   | 'acknowledge_additional_info'; // extra details after the lead already qualified
 
 export interface Decision {
@@ -112,6 +113,15 @@ export function decideTransition(
   }
   if (confident && analysis.intent === 'FAQ') {
     return { nextStage: holdStage(current), action: 'answer_faq', escalate };
+  }
+
+  // 3b. A confident off-topic message — a recipe, a shopping list, "read the
+  //     codebase", general chit-chat — is never property info. Redirect it so the
+  //     person knows this is not the place, keeping the conversation on the
+  //     property. Placed BEFORE the qualified branch so a qualified lead's
+  //     off-topic message is redirected, not acknowledged as "details for Lidor".
+  if (confident && analysis.intent === 'OFF_TOPIC') {
+    return { nextStage: holdStage(current), action: 'stay_on_topic', escalate: false };
   }
 
   // 4. Already qualified: the conversation stays open for more property details,

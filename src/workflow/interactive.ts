@@ -41,6 +41,9 @@ export const EXPIRED_MESSAGE =
   'עברו כמה ימים מאז ששוחחנו, אז סגרתי את השיחה הזו. אפשר לכתוב לנו שוב בכל עת כדי להתחיל מחדש 🙏';
 export const ABUSE_WARNING_MESSAGE =
   'אני כאן כדי לעזור לך עם הנכס בלבד. נשמור על השיחה עניינית 🙂';
+/** Redirect for a benign but off-topic message (a recipe, a shopping list). */
+export const OFF_TOPIC_REDIRECT_MESSAGE =
+  'אני כאן כדי לעזור לך עם הנכס בלבד. נשמור על השיחה עניינית 🙂';
 export const ABUSE_BAN_MESSAGE = 'לא נוכל להמשיך בשיחה הזו. כל טוב.';
 export const STOP_MESSAGE =
   'סגרתי את השיחה. אפשר לכתוב לנו שוב בכל עת כדי להתחיל מחדש 🙏';
@@ -209,6 +212,7 @@ const CANNED_REPLIES: Partial<Record<TurnAction, string>> = {
   acknowledge_additional_info: ADDITIONAL_INFO_ACK_MESSAGE,
   ask_intent: INTENT_QUESTION,
   low_intent_hold: LOW_INTENT_MESSAGE,
+  stay_on_topic: OFF_TOPIC_REDIRECT_MESSAGE,
 };
 
 /** The canned reply for an action, or `undefined` if the action is model-written. */

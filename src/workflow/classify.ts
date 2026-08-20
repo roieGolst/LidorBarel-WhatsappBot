@@ -104,7 +104,7 @@ Return JSON with exactly these fields:
 - "confidence": a number from 0 to 1.
 - "extracted": an object with any of these you can determine from the message, omitting the rest. The person is answering the questionnaire's fixed options; map their words onto the tokens:
     - "sellIntent" (Q1 — "האם חשבת למכור או רק לקבל הערכת מחיר?"): "ready" (רוצה למכור) | "not_sure" (מתלבט, רוצה לדעת מחיר) | "not_selling" (לא מעוניין למכור)
-    - "neighborhood" (Q2 — "באיזו שכונה נמצא הנכס?"): the Beer Sheva neighborhood named, as free text (e.g. נווה זאב, נחל עשן, רמות, שכונות א׳/ב׳/ג׳/ד׳/ה׳/ו׳/ט׳)
+    - "neighborhood" (Q2 — "באיזו שכונה נמצא הנכס?"): the Beer Sheva neighborhood named, as the person's exact free text. Any real Be'er Sheva neighborhood is acceptable (e.g. העיר העתיקה, שכונת דרום, נווה עופר, נאות לון, נווה זאב, נווה נוי, נחל בקע, נחל עשן, רמות, נאות אברהם, נווה אילן, קריית גנים, כלניות, פארק הנחל, נאות הדרים, בית אשל, and the lettered שכונות א׳/ב׳/ג׳/ד׳/ה׳/ו׳/ט׳/י״א). Extract it only when the message genuinely names a place, never a product/model name or nonsense.
     - "timeline" (Q3 — "תוך כמה זמן תרצה למכור אם תקבל הצעה מתאימה?"): "immediate" (מיד) | "within_month" (בחודש הקרוב) | "still_checking" (בחודשים הקרובים) | "no_urgency" (אין דחיפות)
     - "currentlyMarketed" (Q4 — "האם הנכס משווק כרגע?"): "no" (לא) | "privately" (כן, באופן פרטי) | "with_agent" (כן, עם מתווך)
     - "exclusivityEndsAt": when the current agent's exclusivity ends, as free text (e.g. "עוד חודשיים", "בסוף מרץ", "לא יודע") — only when they say it

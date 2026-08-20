@@ -18,6 +18,20 @@ describe('normalizeNeighborhood', () => {
     expect(normalizeNeighborhood('שכונת נווה זאב').canonical).toBe('נווה זאב');
   });
 
+  it('recognises the newer neighborhoods', () => {
+    expect(normalizeNeighborhood('רובע החדשנות').known).toBe(true);
+    expect(normalizeNeighborhood('שכונה י״א').canonical).toBe('שכונה י״א');
+    expect(normalizeNeighborhood('יא').canonical).toBe('שכונה י״א');
+  });
+
+  it('folds alternate / former names onto the canonical name', () => {
+    expect(normalizeNeighborhood('שיכון רסקו').canonical).toBe('נווה עופר');
+    expect(normalizeNeighborhood('נווה מנחם').canonical).toBe('נחל עשן');
+    expect(normalizeNeighborhood('פלח 6').canonical).toBe('נאות אברהם');
+    expect(normalizeNeighborhood('פלח 7').canonical).toBe('נווה אילן');
+    expect(normalizeNeighborhood('שכונת הפארק').canonical).toBe('פארק הנחל');
+  });
+
   it('accepts an unknown neighborhood, preserving the original and never guessing', () => {
     const match = normalizeNeighborhood('שכונה חדשה כלשהי');
     expect(match.known).toBe(false);

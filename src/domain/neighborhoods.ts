@@ -11,19 +11,19 @@
  *     (testimonial video selection, deduplication) while the original text is
  *     always preserved alongside.
  *
- * The list starts from the spec's Q2 options (the authoritative set for this
- * business) extended with widely-known Be'er Sheva neighborhoods. It is meant to
- * grow: unknown values surfaced in the logs are the backlog for extending it.
+ * The list is the full set of Be'er Sheva neighborhoods. It can still grow —
+ * unknown values surfaced in the logs are the backlog for extending it — but a
+ * customer is never restricted to it.
  */
 
 /**
  * Canonical neighborhood names, in the spelling we store and display.
  *
- * The lettered שכונות use a geresh (׳); the normalizer accepts the apostrophe and
- * bare-letter variants people actually type.
+ * The lettered שכונות use a geresh (׳) / gershayim (״); the normalizer accepts the
+ * apostrophe, gershayim, and bare-letter variants people actually type.
  */
 export const BEER_SHEVA_NEIGHBORHOODS = [
-  // Lettered neighborhoods — the spec's Q2 set.
+  // Lettered neighborhoods.
   'שכונה א׳',
   'שכונה ב׳',
   'שכונה ג׳',
@@ -31,15 +31,30 @@ export const BEER_SHEVA_NEIGHBORHOODS = [
   'שכונה ה׳',
   'שכונה ו׳',
   'שכונה ט׳',
-  // Named neighborhoods (widely known; extend from logged unknowns).
-  'נווה זאב',
-  'נחל עשן',
-  'נחל בקע',
-  'רמות',
-  'נאות לון',
-  'נווה נוי',
-  'נאות אברהם',
+  'שכונה י״א',
+  // Named neighborhoods.
   'העיר העתיקה',
+  'שכונת דרום',
+  'נווה עופר',
+  'המרכז האזרחי',
+  'נאות לון',
+  'נווה זאב',
+  'נווה נוי',
+  'נחל בקע',
+  'נחל עשן',
+  'רמות',
+  'נאות אברהם',
+  'נווה אילן',
+  'רובע החדשנות',
+  'קריית גנים',
+  'כלניות',
+  'סיגליות',
+  'פארק הנחל',
+  'נאות הדרים',
+  'רקפות',
+  'בית אשל',
+  'מתחם אורות',
+  'ברגמן',
 ] as const;
 
 export type CanonicalNeighborhood = (typeof BEER_SHEVA_NEIGHBORHOODS)[number];
@@ -50,14 +65,8 @@ export type CanonicalNeighborhood = (typeof BEER_SHEVA_NEIGHBORHOODS)[number];
  * only variants `clean` does not already fold need to appear here.
  */
 const ALIASES: Record<string, CanonicalNeighborhood> = {
-  // "שכונת X" phrasing and bare letters for the lettered neighborhoods.
-  'שכונה א': 'שכונה א׳',
-  'שכונה ב': 'שכונה ב׳',
-  'שכונה ג': 'שכונה ג׳',
-  'שכונה ד': 'שכונה ד׳',
-  'שכונה ה': 'שכונה ה׳',
-  'שכונה ו': 'שכונה ו׳',
-  'שכונה ט': 'שכונה ט׳',
+  // Bare letters for the lettered neighborhoods (the geresh-less "שכונה X" forms
+  // already fold onto the canonical names via `clean`).
   א: 'שכונה א׳',
   ב: 'שכונה ב׳',
   ג: 'שכונה ג׳',
@@ -65,7 +74,21 @@ const ALIASES: Record<string, CanonicalNeighborhood> = {
   ה: 'שכונה ה׳',
   ו: 'שכונה ו׳',
   ט: 'שכונה ט׳',
-  // Named-neighborhood variants.
+  יא: 'שכונה י״א',
+  // Alternate / former names (the parentheticals in the official list).
+  'שיכון רסקו': 'נווה עופר',
+  רסקו: 'נווה עופר',
+  'נוה עופר': 'נווה עופר',
+  'נווה מנחם': 'נחל עשן',
+  'נוה מנחם': 'נחל עשן',
+  'פלח 6': 'נאות אברהם',
+  'פלח 7': 'נווה אילן',
+  'נוה אילן': 'נווה אילן',
+  'שכונת הפארק': 'פארק הנחל',
+  דרום: 'שכונת דרום',
+  'מרכז אזרחי': 'המרכז האזרחי',
+  'קרית גנים': 'קריית גנים',
+  // Common spelling variants (defective spelling, "שכונת X" phrasing).
   'שכונת נווה זאב': 'נווה זאב',
   'נוה זאב': 'נווה זאב',
   'שכונת נחל עשן': 'נחל עשן',

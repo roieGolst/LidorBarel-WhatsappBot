@@ -18,7 +18,6 @@ import { validateReply, type ValidateOptions } from './validate.js';
 const ENGAGING_ACTIONS: ReadonlySet<TurnAction> = new Set([
   'answer_faq',
   'handle_objection',
-  'send_social_proof',
   'ask_exclusivity',
 ]);
 
@@ -95,7 +94,7 @@ const DIRECTIVES: Partial<Record<TurnAction, string>> = {
   handle_objection:
     'Acknowledge the concern briefly using the objection guidance above, then end with one question that moves the conversation forward.',
   send_social_proof:
-    'They asked for proof/testimonials. Share one or two of the strongest stats and one short success story from the KNOWLEDGE — concise, no pressure — then end with one question that moves toward the fit check or the call.',
+    'They asked for proof/testimonials. Share one or two of the strongest stats and one short success story from the KNOWLEDGE — concise, warm, no pressure. Do NOT ask a follow-up question and do NOT ask for more property details; just deliver the proof and stop.',
 };
 
 /**
@@ -112,7 +111,7 @@ export const SAFE_VARIANTS: Partial<Record<TurnAction, string>> = {
   answer_faq: 'אשמח לעזור. מה תרצה לדעת?',
   handle_objection: 'בטח, זה לגמרי מובן. מה ההתלבטות העיקרית שלך כרגע?',
   send_social_proof:
-    'לידור מלווה מוכרים בבאר שבע מעל 4 שנים, עם יותר מ-124 נכסים שנמכרו וכ-82% שנמכרו בפחות מחודשיים. נמשיך לבדיקת התאמה קצרה?',
+    'לידור מלווה מוכרים בבאר שבע מעל 4 שנים, עם יותר מ-124 נכסים שנמכרו וכ-82% שנמכרו בפחות מחודשיים. מאגר הקונים והמשקיעים הפעיל שלו מאפשר לנכס חשיפה מיידית לקהל הנכון.',
 };
 
 export interface GenerateInput {

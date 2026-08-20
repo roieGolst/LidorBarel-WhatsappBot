@@ -20,7 +20,9 @@ export async function listMediaAssets(db: DbClient): Promise<CatalogRow[]> {
     id: row.id,
     path: row.path,
     type: row.type,
-    neighborhoods: Array.isArray(row.neighborhoods) ? (row.neighborhoods as string[]) : [],
+    neighborhoods: Array.isArray(row.neighborhoods)
+      ? (row.neighborhoods as string[])
+      : [],
     audience: row.audience,
   }));
 }

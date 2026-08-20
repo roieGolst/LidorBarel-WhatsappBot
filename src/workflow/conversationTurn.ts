@@ -421,7 +421,12 @@ export function createConversationWorkflow(
           extracted: ctx.known,
           outbound: [{ body: ENGLISH_ONLY_REPLY, providerMessageId }],
         });
-        return { stage: holdStage, text: ENGLISH_ONLY_REPLY, action: 'reject_english', sent: true };
+        return {
+          stage: holdStage,
+          text: ENGLISH_ONLY_REPLY,
+          action: 'reject_english',
+          sent: true,
+        };
       }
 
       const { analysis } = await classify({

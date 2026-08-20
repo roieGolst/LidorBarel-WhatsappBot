@@ -90,7 +90,12 @@ describe('selectVideo — investment promo', () => {
 
   it('withholds the promo from a seller and when intent is unclear', () => {
     for (const intent of ['seller', 'unclear'] as const) {
-      const result = selectVideo({ track: 'investment_promo', intent, assets: [promo], random: first });
+      const result = selectVideo({
+        track: 'investment_promo',
+        intent,
+        assets: [promo],
+        random: first,
+      });
       expect(result.kind).toBe('none');
     }
   });

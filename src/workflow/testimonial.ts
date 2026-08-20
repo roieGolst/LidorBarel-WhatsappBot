@@ -53,7 +53,8 @@ export function selectVideo(input: SelectInput): SelectResult {
       return { kind: 'none', reason: 'Not a buyer/investor — promo withheld' };
     }
     const promos = input.assets.filter((a) => a.type === PROMO);
-    if (promos.length === 0) return { kind: 'none', reason: 'No investment promo available' };
+    if (promos.length === 0)
+      return { kind: 'none', reason: 'No investment promo available' };
     return {
       kind: 'send',
       asset: pick(promos),

@@ -1,6 +1,7 @@
 import 'dotenv/config';
 import type { PostgresSaver } from '@langchain/langgraph-checkpoint-postgres';
 import { ConfigError, getConfig, type Config } from './config.js';
+import { refreshMediaCatalog } from './whatsapp/mediaCatalog.js';
 import { closeDatabase, getDatabase } from './db/client.js';
 import { getFreshMediaId, saveMediaId } from './db/repositories/mediaUploads.js';
 import { AnthropicLlmClient } from './llm/client.js';
@@ -169,6 +170,14 @@ async function main(): Promise<void> {
   });
 
   await app.listen({ port: config.port, host: '0.0.0.0' });
+
+  // Catalog the testimonial/promo videos in the background — after the server is
+  // listening, so it never delays serving conversations. Metadata only; the
+  // channel uploads a video's bytes to Meta lazily on first send. Failure is
+  // logged, not fatal.
+  void refreshMediaCatalog(db, 'assets', log).catch((err: unknown) => {
+    log.error({ err }, 'media catalog scan failed');
+  });
 
   log.info(
     {

@@ -552,6 +552,33 @@ export const mediaUploads = pgTable('media_uploads', {
 });
 
 /**
+ * Catalog of testimonial / promo videos under `assets/recommendations/`.
+ *
+ * This holds only the *metadata* used to pick which video to send (its type,
+ * the neighborhoods it targets, its audience) plus the file path. The bytes are
+ * uploaded to Meta lazily by the channel on first send (cached in
+ * {@link mediaUploads}), so no media id is stored here. Populated on startup by
+ * scanning each video's `<name>.json` sidecar; unknown neighborhoods are kept as
+ * written. Source of truth is the files — this is a rebuildable projection.
+ */
+export const mediaAssets = pgTable(
+  'media_assets',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    /** Path relative to the assets root, e.g. `recommendations/story.mp4`. */
+    path: text('path').notNull(),
+    /** `testimonial` | `promo_investment`. */
+    type: text('type').notNull(),
+    /** Canonical neighborhoods this video targets. Empty = general. */
+    neighborhoods: jsonb('neighborhoods').notNull().default([]),
+    /** `seller` | `buyer` | `investor` | null. */
+    audience: text('audience'),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [uniqueIndex('media_assets_path_unique').on(table.path)],
+);
+
+/**
  * A readable, human-facing view of each lead — one row per conversation, with the
  * contact's phone/name and the screening answers flattened out of the `extracted`
  * JSONB. It exists purely for eyeballing leads in a DB tool (`SELECT * FROM leads`)

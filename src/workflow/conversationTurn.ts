@@ -1,7 +1,9 @@
+import { resolve } from 'node:path';
 import { entrypoint, task } from '@langchain/langgraph';
 import type { BaseCheckpointSaver } from '@langchain/langgraph-checkpoint';
 import type { Database } from '../db/client.js';
 import { findContactById } from '../db/repositories/contacts.js';
+import { listMediaAssets } from '../db/repositories/mediaAssets.js';
 import {
   getConversationById,
   type ConversationStage,
@@ -43,6 +45,7 @@ import {
   type OutboundMessageRecord,
   type PersistTurnInput,
 } from './persist.js';
+import { selectVideo } from './testimonial.js';
 import { sanitizeExtraction } from './validateAnswer.js';
 
 /**
@@ -471,6 +474,42 @@ export function createConversationWorkflow(
           part: { kind: 'video', filePath: INTRO_VIDEO_PATH },
           storeBody: VIDEO_PLACEHOLDER,
         });
+      }
+
+      // Testimonial video (Part B): when the customer asks for social proof,
+      // attach a matching customer video before the model-written text, if one is
+      // catalogued. Neighborhood-specific is preferred; unknown neighborhoods are
+      // never guessed. The channel uploads and caches the file on first send.
+      if (decision.action === 'send_social_proof') {
+        const selection = selectVideo({
+          track: 'testimonial',
+          intent: 'seller',
+          neighborhoodCanonical: ctx.known.neighborhood ?? null,
+          assets: await listMediaAssets(deps.db),
+        });
+        logger.info(
+          {
+            conversationId,
+            decision: selection.kind,
+            reason: selection.reason,
+            ...(selection.kind === 'send'
+              ? {
+                  asset: selection.asset.path,
+                  matchedNeighborhood: selection.matchedNeighborhood,
+                }
+              : {}),
+          },
+          'testimonial video selection',
+        );
+        if (selection.kind === 'send') {
+          plan.push({
+            part: {
+              kind: 'video',
+              filePath: resolve(process.cwd(), 'assets', selection.asset.path),
+            },
+            storeBody: '[סרטון המלצה]',
+          });
+        }
       }
 
       // The action's message. The main menu and the screening questions are fixed

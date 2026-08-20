@@ -50,6 +50,13 @@
       "when": 1787171211817,
       "tag": "0006_bright_iron_monger",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1787226998980,
+      "tag": "0007_lovely_rictor",
+      "breakpoints": true
     }
   ]
 }

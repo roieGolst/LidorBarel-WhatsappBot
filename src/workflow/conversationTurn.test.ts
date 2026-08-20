@@ -12,6 +12,7 @@ import {
   type ConversationStage,
 } from '../db/repositories/conversations.js';
 import { recentMessages, recordInboundMessage } from '../db/repositories/messages.js';
+import { upsertMediaAsset } from '../db/repositories/mediaAssets.js';
 import { recordOptOut } from '../db/repositories/optOuts.js';
 import { conversations, messages, optOuts } from '../db/schema.js';
 import { setupTestDatabase, truncateAll } from '../db/testing.js';
@@ -680,5 +681,39 @@ describe('conversationTurn', () => {
     expect(llm.requests).toHaveLength(0);
     const sent = channel.sent.at(-1);
     expect(sent).toMatchObject({ kind: 'text', text: ENGLISH_ONLY_REPLY });
+  });
+
+  it('attaches a testimonial video when social proof is requested (Part B)', async () => {
+    await upsertMediaAsset(db, {
+      path: 'recommendations/general.mp4',
+      type: 'testimonial',
+      neighborhoods: [],
+      audience: 'seller',
+    });
+    const llm = new FakeLlmClient([
+      '{"intent":"FAQ","confidence":0.9,"extracted":{}}',
+      'בשמחה, הנה כמה מהתוצאות שלנו. מתי נוח לך לשיחה קצרה?',
+    ]);
+    const channel = new FakeChannel();
+    const { conversationId } = await seed({
+      inbound: '⭐ המלצות',
+      stage: 'engaged',
+      extracted: { neighborhood: 'רמות' },
+      priorReply: 'איך תרצה להתחיל?',
+    });
+
+    const result = await workflow({ db, llm, channel }).invoke(
+      conversationId,
+      config(conversationId),
+    );
+
+    expect(result.action).toBe('send_social_proof');
+    const video = channel.sent.find((s) => s.kind === 'video');
+    expect(video).toBeDefined();
+    if (video?.kind === 'video') {
+      expect(video.filePath).toContain('recommendations/general.mp4');
+    }
+    // The model-written social-proof text still goes out too.
+    expect(channel.sent.some((s) => s.kind === 'text')).toBe(true);
   });
 });

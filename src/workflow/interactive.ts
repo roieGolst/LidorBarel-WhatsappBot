@@ -24,10 +24,12 @@ import type { TurnAction } from './decide.js';
  * back, or end.
  */
 export const WELCOME_MESSAGE =
-  'היי! 👋 תודה שהשארת פרטים לגבי הנכס שלך. אני רק רוצה להכיר אותו קצת כדי שנוכל לתת לך הערכת שווי כמה שיותר מדויקת ולהבין מה פוטנציאל המכירה שלו. נתחיל בכמה שאלות קצרות?\n\n(בכל שלב אפשר לכתוב:\n' +
-  '*התחל מחדש* כדי להתחיל מההתחלה\n' +
-  '*חזור* כדי לתקן תשובה\n' +
-  '*עצור* כדי לסיים את השיחה)';
+  'היי! 👋 תודה שהשארת פרטים לגבי הנכס.\n\n' +
+  'כדי שנוכל להעריך את שווי הנכס ולהתקדם לקביעת שיחה, אשאל אותך כמה שאלות קצרות. שנתחיל?\n\n' +
+  'בכל שלב אפשר לכתוב:\n' +
+  '*התחל מחדש* – כדי להתחיל מההתחלה\n' +
+  '*חזור* – כדי לתקן את התשובה האחרונה\n' +
+  '*עצור* – כדי לסיים את השיחה';
 
 /**
  * Mandatory, model-free replies for the guard rails. Each is sent instead of an
@@ -213,7 +215,9 @@ const CANNED_REPLIES: Partial<Record<TurnAction, string>> = {
   proceed_qualified: QUALIFIED_HANDOFF_MESSAGE,
   handoff_to_human: HANDOFF_TO_HUMAN_MESSAGE,
   acknowledge_additional_info: ADDITIONAL_INFO_ACK_MESSAGE,
-  ask_intent: INTENT_QUESTION,
+  // `ask_intent` is intentionally NOT here: it is model-written and
+  // context-aware (see generate.ts), so it acknowledges what the seller already
+  // shared and asks only for what is missing, rather than a blind fixed script.
   low_intent_hold: LOW_INTENT_MESSAGE,
   stay_on_topic: OFF_TOPIC_REDIRECT_MESSAGE,
 };

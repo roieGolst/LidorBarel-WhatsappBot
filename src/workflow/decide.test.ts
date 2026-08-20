@@ -17,6 +17,7 @@ function analysis(overrides: Partial<Analysis> = {}): Analysis {
     extracted: {},
     needsEscalation: false,
     wantsBuyerProof: false,
+    wantsSocialProof: false,
     ...overrides,
   };
 }
@@ -118,6 +119,17 @@ describe('decideTransition', () => {
       expect(decision.qualified).toBe(true);
     });
 
+    it('qualifies when the intent answer adds real property detail', () => {
+      const decision = decideTransition(
+        'assessing_intent',
+        analysis({ extracted: { additionalNotes: 'רחוב רגר 5, קומה 2, 4 חדרים' } }),
+        answered,
+        true,
+      );
+      expect(decision.nextStage).toBe('qualified');
+      expect(decision.qualified).toBe(true);
+    });
+
     it('does not forward a price-checker — holds them instead', () => {
       const decision = decideTransition(
         'assessing_intent',
@@ -129,9 +141,14 @@ describe('decideTransition', () => {
       expect(decision.qualified).toBeUndefined();
     });
 
-    it('gives the benefit of the doubt if intent stays unclear after asking', () => {
+    it('does NOT forward an empty intent answer — re-asks for the specifics', () => {
+      // A contentless reply at the intent check (a bare "כן"/filler) carries no
+      // property detail or intent signal. It must not be forwarded as "got your
+      // details"; the bot asks once more for the specifics instead.
       const decision = decideTransition('assessing_intent', analysis(), answered, true);
-      expect(decision.action).toBe('proceed_qualified');
+      expect(decision.action).toBe('ask_intent');
+      expect(decision.nextStage).toBe('assessing_intent');
+      expect(decision.qualified).toBeUndefined();
     });
 
     it('still asks the intent question when seriousSeller was set before it was asked', () => {
@@ -208,6 +225,18 @@ describe('decideTransition', () => {
   it('answers an FAQ in place', () => {
     const decision = decideTransition('engaged', analysis({ intent: 'FAQ' }));
     expect(decision).toMatchObject({ action: 'answer_faq', nextStage: 'engaged' });
+  });
+
+  it('routes a free-text testimonials request to social proof, not a text FAQ', () => {
+    // "יש ממליצים?" classifies as FAQ but carries wantsSocialProof — it should
+    // send the testimonial video, not a text-only FAQ answer that re-asks details.
+    const decision = decideTransition(
+      'assessing_intent',
+      analysis({ intent: 'FAQ', wantsSocialProof: true }),
+      { neighborhood: 'רמות', currentlyMarketed: 'no' },
+    );
+    expect(decision.action).toBe('send_social_proof');
+    expect(decision.action).not.toBe('answer_faq');
   });
 
   it('redirects a confident off-topic message instead of engaging with it', () => {

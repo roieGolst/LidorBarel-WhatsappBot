@@ -20,6 +20,7 @@ describe('parseAnalysis', () => {
       extracted: { neighborhood: 'רמות', timeline: 'immediate' },
       needsEscalation: false,
       wantsBuyerProof: false,
+      wantsSocialProof: false,
     });
   });
 
@@ -31,6 +32,7 @@ describe('parseAnalysis', () => {
       extracted: {},
       needsEscalation: false,
       wantsBuyerProof: false,
+      wantsSocialProof: false,
     });
   });
 

@@ -17,7 +17,7 @@ const SCREENING_ACTIONS: TurnAction[] = [
 
 describe('interactive content', () => {
   it('has a verbatim welcome and the intro video asset path', () => {
-    expect(WELCOME_MESSAGE).toContain('נתחיל בכמה שאלות קצרות?');
+    expect(WELCOME_MESSAGE).toContain('שאלות קצרות');
     expect(INTRO_VIDEO_PATH.endsWith('assets/intro_video.mp4')).toBe(true);
   });
 

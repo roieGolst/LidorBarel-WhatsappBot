@@ -100,6 +100,21 @@ export function decideTransition(
     analysis.intent !== 'UNCLEAR' && analysis.confidence >= CONFIDENCE_THRESHOLD;
   const facts: KnownFacts = confident ? { ...known, ...analysis.extracted } : known;
 
+  // Whether THIS message actually carried NEW intent/detail — used at the
+  // intent-check gate so a bare "כן"/filler is not forwarded as "got your
+  // details". The classifier re-emits merged facts every turn, so a value only
+  // counts as substance when it is NEW relative to what is already known: fresh
+  // property notes, a newly-serious signal, a new booking ask, or a new stated
+  // motivation. (additionalNotes is emitted only when the message adds a detail —
+  // see classify.ts — so its presence marks genuinely new content.)
+  const e = analysis.extracted;
+  const intentSubstance =
+    confident &&
+    (e.additionalNotes !== undefined ||
+      (e.seriousSeller === true && known.seriousSeller !== true) ||
+      (e.bookingIntent === true && known.bookingIntent !== true) ||
+      (e.sellMotivation !== undefined && known.sellMotivation === undefined));
+
   // 2. Marketed through another agent, then disqualification — the highest
   //    business priority after opt-out. Checked on the merged facts so an answer
   //    given earlier still applies even when this turn is about something else.
@@ -112,7 +127,24 @@ export function decideTransition(
   //     priority (see leadPriorityScore). Not for an already-qualified lead —
   //     they are handled below.
   if (confident && facts.bookingIntent && current !== 'qualified') {
-    return nextScreeningStep(current, bookingFacts(facts), screenAll, escalate);
+    return nextScreeningStep(current, bookingFacts(facts), screenAll, escalate, true);
+  }
+
+  // 2c. An explicit request for testimonials / recommendations / reviews of past
+  //     clients — from free text, not only the menu button — sends social proof
+  //     (a matching testimonial video + a short line), without advancing
+  //     screening. Placed before FAQ so "יש ממליצים?" / "תציג לי המלצות" routes to
+  //     the video rather than a text-only FAQ answer that re-asks for details.
+  //   `wantsSocialProof` is a per-message signal (the latest message's own
+  //     words ask for testimonials), so it is trusted directly: the classifier
+  //     re-emits merged screening facts every turn, which makes any "does this
+  //     message carry facts?" guard useless here.
+  if (confident && analysis.wantsSocialProof) {
+    return {
+      nextStage: holdStage(current),
+      action: 'send_social_proof',
+      escalate: false,
+    };
   }
 
   // 3. A confident objection or FAQ gets a bespoke reply, without advancing
@@ -145,7 +177,7 @@ export function decideTransition(
   //    pending question (or qualify). An unparseable answer simply re-asks the
   //    same question, whose buttons are already in front of the person — the flow
   //    never dead-ends on "rephrase".
-  return nextScreeningStep(current, facts, screenAll, escalate);
+  return nextScreeningStep(current, facts, screenAll, escalate, intentSubstance);
 }
 
 /**
@@ -174,7 +206,15 @@ export function decideMainMenu(
         choice === 'book_meeting'
           ? bookingFacts({ ...known, bookingIntent: true })
           : known;
-      return nextScreeningStep(current, facts, screenAll, false);
+      // Booking is itself a strong intent signal, so it satisfies the substance
+      // gate if the flow reaches the intent check.
+      return nextScreeningStep(
+        current,
+        facts,
+        screenAll,
+        false,
+        choice === 'book_meeting',
+      );
     }
     case 'testimonials':
       return {
@@ -202,6 +242,7 @@ function nextScreeningStep(
   facts: KnownFacts,
   screenAll: boolean,
   escalate: boolean,
+  intentHasSubstance = false,
 ): Decision {
   if (screenAll && facts.sellIntent === undefined) {
     return { nextStage: 'screening_sell_intent', action: 'ask_sell_intent', escalate };
@@ -219,17 +260,26 @@ function nextScreeningStep(
       escalate,
     };
   }
-  // Intent check — always asked once after the four questions. `seriousSeller` is
+  // Intent check — asked once after the four questions. `seriousSeller` is
   // evaluated ONLY here, at the intent stage: a value the classifier may have set
   // earlier (e.g. from a screening-button answer) must not short-circuit the flow
-  // before the question is even asked.
+  // before the question is even asked. Escalated to the stronger model so the
+  // question is context-aware — it acknowledges what the seller already shared and
+  // only asks for what is genuinely missing, rather than a blind fixed script.
   if (current !== 'assessing_intent') {
-    return { nextStage: 'assessing_intent', action: 'ask_intent', escalate };
+    return { nextStage: 'assessing_intent', action: 'ask_intent', escalate: true };
   }
   // Evaluating the intent-check answer. Clearly just price-checking → do not
   // forward to Lidor; leave the door open.
   if (facts.seriousSeller === false) {
     return { nextStage: 'engaged', action: 'low_intent_hold', escalate };
+  }
+  // The answer carried no real detail or intent (a bare "כן", filler, an
+  // acknowledgement) — do NOT forward an empty "got your details" handoff. Ask
+  // once more for the specifics that help Lidor prepare; the model-written
+  // question is context-aware, so this is a fresh, natural nudge, not a repeat.
+  if (!intentHasSubstance) {
+    return { nextStage: 'assessing_intent', action: 'ask_intent', escalate: true };
   }
   return {
     nextStage: 'qualified',

@@ -19,6 +19,7 @@ const ENGAGING_ACTIONS: ReadonlySet<TurnAction> = new Set([
   'answer_faq',
   'handle_objection',
   'ask_exclusivity',
+  'ask_intent',
 ]);
 
 /**
@@ -99,6 +100,8 @@ const DIRECTIVES: Partial<Record<TurnAction, string>> = {
     'Acknowledge the concern briefly using the objection guidance above — never quote a fee/commission/price number. Then end with ONE gentle forward question that does NOT ask for a time or propose a slot — e.g. whether to pass everything to Lidor so he can address it in the call, or one more relevant detail about the property.',
   send_social_proof:
     'They asked for proof/testimonials. Share one or two of the strongest stats and one short success story from the KNOWLEDGE — concise, warm, no pressure. Do NOT ask a follow-up question and do NOT ask for more property details; just deliver the proof and stop.',
+  ask_intent:
+    'This is the one intent/seriousness check after the four screening questions. READ THE CONVERSATION ABOVE: the seller may have ALREADY given property details (neighborhood, size/מ"ר, garden, floor, condition, price, etc.). Do NOT ask again for anything they already told you. In one short, warm message: briefly acknowledge what you already know (a few words, do not list it all back), then ask — in ONE question — for the single most useful detail still MISSING to help Lidor prepare (typically the exact address, number of rooms, floor, or a rough asking price — pick what is missing). Keep it light and natural; you are also sensing whether they are a serious seller. Never promise a callback time and never quote any fee/price number.',
 };
 
 /**
@@ -116,6 +119,8 @@ export const SAFE_VARIANTS: Partial<Record<TurnAction, string>> = {
   handle_objection: 'בטח, זה לגמרי מובן. מה ההתלבטות העיקרית שלך כרגע?',
   send_social_proof:
     'לידור מלווה מוכרים בבאר שבע מעל 4 שנים, עם יותר מ-124 נכסים שנמכרו וכ-82% שנמכרו בפחות מחודשיים. מאגר הקונים והמשקיעים הפעיל שלו מאפשר לנכס חשיפה מיידית לקהל הנכון.',
+  ask_intent:
+    'אשמח לכמה פרטים אחרונים שיעזרו ללידור להתכונן לשיחה — מה הכתובת המדויקת, כמה חדרים ובאיזו קומה?',
 };
 
 export interface GenerateInput {

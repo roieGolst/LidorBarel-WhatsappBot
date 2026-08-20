@@ -79,6 +79,12 @@ export const analysisSchema = z.object({
    * investor-tour video answers by showing an active buyer/investor pool.
    */
   wantsBuyerProof: z.boolean().default(false),
+  /**
+   * True when the person asks for testimonials / recommendations / reviews of
+   * past clients ("יש ממליצים?", "תציג לי המלצות", "לקוחות מרוצים?") — routed to
+   * social proof (a matching testimonial video + a short line), not a text FAQ.
+   */
+  wantsSocialProof: z.boolean().default(false),
 });
 
 export type Analysis = z.infer<typeof analysisSchema>;
@@ -96,6 +102,7 @@ export const UNCLEAR_ANALYSIS: Analysis = {
   extracted: {},
   needsEscalation: true,
   wantsBuyerProof: false,
+  wantsSocialProof: false,
 };
 
 const SYSTEM_PROMPT = `You are the classification stage of an inbound WhatsApp bot for a real estate agent in Beer Sheva, Israel. Leads write in Hebrew, often informally, with typos, slang, or voice-to-text artifacts.
@@ -112,12 +119,13 @@ Return JSON with exactly these fields:
     - "currentlyMarketed" (Q4 — "האם הנכס משווק כרגע?"): "no" (לא) | "privately" (כן, באופן פרטי) | "with_agent" (כן, עם מתווך)
     - "exclusivityEndsAt": when the current agent's exclusivity ends, as free text (e.g. "עוד חודשיים", "בסוף מרץ", "לא יודע") — only when they say it
     - "wantsExclusivityFollowup": true/false if they say whether they want us to follow up once the exclusivity ends
-    - "additionalNotes": ONLY when THIS message adds or clarifies property details (rooms, size/מ"ר, floor, condition/renovation, parking, price expectation, etc.), return the FULL consolidated Hebrew summary of ALL property details so far — merge any "פרטי הנכס עד כה" context shown to you with the new details, into ONE concise line with NO duplication and no repeated facts. If this message adds no property details, omit it entirely.
+    - "additionalNotes": ONLY when THIS message adds or clarifies a NEW property detail (rooms, size/מ"ר, floor, condition/renovation, parking, price expectation, exact street/address, etc.), return the FULL consolidated Hebrew summary of ALL property details so far — merge any "פרטי הנכס עד כה" context shown to you with the new details, into ONE concise line with NO duplication and no repeated facts. CRITICAL: if this message adds NO new property detail (a question, a bare "כן"/"אוקיי", a request for testimonials, small talk), you MUST omit "additionalNotes" entirely — do NOT echo the consolidated notes just because context exists. Its presence must mean "this message added a detail".
     - "sellMotivation": a short Hebrew note of WHY they are (or are not) looking to sell, when they say it (e.g. "עוברים דירה", "צריך נזילות", "רק בודק מחיר").
     - "seriousSeller": true if they read as a genuine, motivated seller (a real reason, actively planning to sell); false if they are mainly checking the price or not really intending to sell. Set it only once they've indicated their intent/motivation, otherwise omit.
     - "bookingIntent": true when they explicitly ask to schedule a meeting/call or to move forward with selling now (e.g. "תקבע לי פגישה", "אני רוצה למכור את הנכס", "בוא נתקדם", "מתי אפשר להיפגש?"). Omit otherwise.
 - "needsEscalation": true if the message shows anger, frustration, or something a bot should not handle alone.
 - "wantsBuyerProof": true if the seller is asking how the property will be marketed, whether there are ready/potential buyers, or what value/results the agent brings (e.g. "יש לך קונים?", "איך תשווק את הנכס?", "למה כדאי לעבוד איתך?", "מאיפה יגיעו הקונים?"). Otherwise false.
+- "wantsSocialProof": true ONLY if the LATEST message's OWN WORDS ask to see/hear testimonials, recommendations, reviews, or references from past clients (contains words like "ממליצים", "המלצות", "חוות דעת", "לקוחות מרוצים", "ביקורות", or asks to speak with someone who sold with him). This is a per-message property of the latest message's text ALONE. Apply this hard rule: if the latest message contains an address, a room count, a floor, a size (מ"ר), or a price — and does NOT contain any testimonial/recommendation word — then wantsSocialProof MUST be false, no matter what earlier messages said. Likewise a bare "כן"/"אוקיי"/"טוב" with no testimonial word is false. Do NOT carry it over from earlier turns. Example: latest="רחוב רבין 12, 5 חדרים, קומה 2, 2.4 מיליון" → wantsSocialProof=false (it is property details). Example: latest="יש ממליצים?" → wantsSocialProof=true. Distinct from "wantsBuyerProof" (marketing/buyers). Otherwise false.
 
 Rules:
 - Output ONLY the JSON object. No prose, no code fences, no explanation.

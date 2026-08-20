@@ -6,8 +6,10 @@ import { findContactById } from '../db/repositories/contacts.js';
 import { listMediaAssets } from '../db/repositories/mediaAssets.js';
 import {
   getConversationById,
+  resetConversationForDev,
   type ConversationStage,
 } from '../db/repositories/conversations.js';
+import { getConfig } from '../config.js';
 import { countInboundMessages, recentMessages } from '../db/repositories/messages.js';
 import { isOptedOut } from '../db/repositories/optOuts.js';
 import { getLogger } from '../logger.js';
@@ -260,6 +262,18 @@ function questionPart(question: ScreeningQuestion): OutboundPart {
   }
 }
 
+/**
+ * DEV-ONLY trigger word that hard-resets the conversation to a clean slate (see
+ * {@link resetConversationForDev}). A developer sends exactly this string to wipe
+ * everything collected and re-drive the same thread from the opening sequence.
+ * Gated to non-production; in production this is treated as an ordinary message.
+ * A long random token so a real customer can never send it by accident.
+ */
+const DEV_RESET_TRIGGER = 'zTDjKr9Ip6mfYPkiH9iyNxWH';
+
+/** Dev-only confirmation sent after a reset, so the developer sees it worked. */
+const DEV_RESET_CONFIRMATION = '🧹 [dev] השיחה אופסה. שלח הודעה כדי להתחיל מחדש.';
+
 /** Stored placeholder for a media message, which has no text body. */
 const VIDEO_PLACEHOLDER = '[סרטון היכרות]';
 
@@ -426,6 +440,27 @@ export function createConversationWorkflow(
       // stale or duplicate enqueue). Skip silently rather than fail and retry.
       if (!ctx) {
         return { stage: 'engaged', action: 'skipped_no_inbound', text: '', sent: false };
+      }
+
+      // DEV-ONLY hard reset: an exact trigger word wipes everything collected in
+      // this conversation and re-drives the same thread from the opening
+      // sequence. Runs before every other branch (even opt-out) so a developer
+      // can always get a clean slate. Never active in production — there the
+      // token is just an ordinary inbound message. Sends a confirmation directly
+      // (not persisted), so the next inbound is treated as a fresh first contact.
+      if (
+        getConfig().nodeEnv !== 'production' &&
+        ctx.currentText.trim() === DEV_RESET_TRIGGER
+      ) {
+        await resetConversationForDev(deps.db, conversationId);
+        await deps.channel.sendText(ctx.contactPhone, DEV_RESET_CONFIRMATION);
+        logger.warn({ conversationId }, 'dev reset: conversation wiped');
+        return {
+          stage: 'new',
+          action: 'dev_reset',
+          text: DEV_RESET_CONFIRMATION,
+          sent: true,
+        };
       }
 
       // A contact who already opted out is left in silence — no reply is
@@ -610,7 +645,12 @@ export function createConversationWorkflow(
       // attach a matching customer video before the model-written text, if one is
       // catalogued. Neighborhood-specific is preferred; unknown neighborhoods are
       // never guessed. The channel uploads and caches the file on first send.
-      if (decision.action === 'send_social_proof') {
+      // Sent at most once per conversation — a repeat social-proof request gets
+      // the text again, but not the same clip over and over.
+      const testimonialAlreadySent = ctx.turns.some(
+        (t) => t.role === 'assistant' && t.content === TESTIMONIAL_PLACEHOLDER,
+      );
+      if (decision.action === 'send_social_proof' && !testimonialAlreadySent) {
         const selection = selectVideo({
           track: 'testimonial',
           intent: 'seller',

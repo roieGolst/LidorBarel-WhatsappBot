@@ -144,6 +144,35 @@ function config(conversationId: string) {
 }
 
 describe('conversationTurn', () => {
+  it('dev reset trigger wipes the conversation clean (non-production only)', async () => {
+    // A mid-flow conversation with collected facts and a transcript.
+    const { conversationId } = await seed({
+      inbound: 'zTDjKr9Ip6mfYPkiH9iyNxWH',
+      stage: 'assessing_intent',
+      extracted: { neighborhood: 'רמות', currentlyMarketed: 'no', seriousSeller: true },
+      priorReply: 'מה גורם לך לשקול למכור עכשיו?',
+    });
+    const channel = new FakeChannel();
+    // No LLM call happens on a dev reset — the trigger short-circuits.
+    const llm = new FakeLlmClient([]);
+
+    const result = await workflow({ db, llm, channel }).invoke(
+      conversationId,
+      config(conversationId),
+    );
+
+    expect(result.action).toBe('dev_reset');
+    expect(result.stage).toBe('new');
+    // The whole transcript is gone and the facts are reset to a clean slate.
+    expect(await recentMessages(db, conversationId)).toHaveLength(0);
+    const conversation = await getConversationById(db, conversationId);
+    expect(conversation?.stage).toBe('new');
+    expect(conversation?.extracted).toEqual({});
+    expect(conversation?.qualified).toBeNull();
+    // No model was consulted.
+    expect(llm.requests).toHaveLength(0);
+  });
+
   it('opens with welcome + intro video, then the main menu (§8)', async () => {
     // Whatever the opener says, the first response is welcome → video → menu.
     const llm = new FakeLlmClient([
@@ -268,9 +297,11 @@ describe('conversationTurn', () => {
   });
 
   it('asks the intent check after the four answers, then qualifies a serious seller', async () => {
-    // Turn 1: Q4 answered → the intent question (canned, no model reply).
+    // Turn 1: Q4 answered → the intent question (now model-written and
+    // context-aware, so a generation response follows the classification).
     const llm1 = new FakeLlmClient([
       '{"intent":"ANSWER","confidence":0.9,"extracted":{"currentlyMarketed":"no"}}',
+      'מעולה, יש לי כבר תמונה טובה. מה הכתובת המדויקת ובאיזו קומה?',
     ]);
     const { conversationId } = await seed({
       inbound: 'עדיין לא שיווקתי',

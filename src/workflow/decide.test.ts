@@ -16,6 +16,7 @@ function analysis(overrides: Partial<Analysis> = {}): Analysis {
     confidence: 0.9,
     extracted: {},
     needsEscalation: false,
+    wantsBuyerProof: false,
     ...overrides,
   };
 }

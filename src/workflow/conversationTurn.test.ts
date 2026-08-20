@@ -716,4 +716,33 @@ describe('conversationTurn', () => {
     // The model-written social-proof text still goes out too.
     expect(channel.sent.some((s) => s.kind === 'text')).toBe(true);
   });
+
+  it('sends the investor-tour video with a contextual caption when a seller asks about buyers', async () => {
+    await upsertMediaAsset(db, {
+      path: 'recommendations/investor_tour.mp4',
+      type: 'buyer_pool_proof',
+      neighborhoods: [],
+      audience: 'seller',
+    });
+    const llm = new FakeLlmClient([
+      '{"intent":"FAQ","confidence":0.9,"extracted":{},"wantsBuyerProof":true}',
+      'בטח, יש לנו מאגר קונים פעיל. מתי נוח לך לשיחה קצרה?',
+    ]);
+    const channel = new FakeChannel();
+    const { conversationId } = await seed({
+      inbound: 'יש לך קונים לנכס שלי?',
+      stage: 'engaged',
+      priorReply: 'איך אפשר לעזור?',
+    });
+
+    await workflow({ db, llm, channel }).invoke(conversationId, config(conversationId));
+
+    const video = channel.sent.find((s) => s.kind === 'video');
+    expect(video).toBeDefined();
+    if (video?.kind === 'video') {
+      expect(video.filePath).toContain('recommendations/investor_tour.mp4');
+      expect(video.caption).toContain('סיור');
+    }
+    expect(channel.sent.some((s) => s.kind === 'text')).toBe(true);
+  });
 });

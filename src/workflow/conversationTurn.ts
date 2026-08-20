@@ -225,6 +225,24 @@ function sumUsage(
 /** Stored placeholder for a media message, which has no text body. */
 const VIDEO_PLACEHOLDER = '[סרטון היכרות]';
 
+/** Stored placeholder for the sent testimonial video. */
+const TESTIMONIAL_PLACEHOLDER = '[סרטון המלצה]';
+
+/** Stored placeholder for the investor-tour (buyer-pool proof) video. */
+const BUYER_POOL_PLACEHOLDER = '[סרטון סיור משקיעים]';
+
+/**
+ * The contextual intro sent as the investor-tour video's caption, so it is
+ * introduced naturally and its relevance explained rather than sent bare. This
+ * is proof of Lidor's active buyer/investor pool, used to build trust with a
+ * seller who asks about marketing, buyers, or the agent's value.
+ */
+const BUYER_POOL_PROOF_INTRO =
+  'מצרף לך סרטון קצר מסיור שלידור ערך למשקיעים מאזור המרכז. זו דוגמה לעבודה שלו עם מאגר קונים ומשקיעים פעיל, שיכול לסייע בחשיפה ובשיווק הנכס לקהל רלוונטי.';
+
+/** The catalog type of the investor-tour / buyer-pool-proof video. */
+const BUYER_POOL_PROOF_TYPE = 'buyer_pool_proof';
+
 /**
  * Builds the checkpointed conversation-turn workflow.
  *
@@ -512,7 +530,36 @@ export function createConversationWorkflow(
               kind: 'video',
               filePath: resolve(process.cwd(), 'assets', selection.asset.path),
             },
-            storeBody: '[סרטון המלצה]',
+            storeBody: TESTIMONIAL_PLACEHOLDER,
+          });
+        }
+      }
+
+      // Investor-tour video: a seller asking how the property will be marketed,
+      // whether there are buyers, or what value the agent brings gets the
+      // buyer-pool proof video — introduced with a contextual caption, sent at
+      // most once per conversation, and additive to the model's reply.
+      if (validated.wantsBuyerProof) {
+        const alreadySent = ctx.turns.some(
+          (t) => t.role === 'assistant' && t.content === BUYER_POOL_PLACEHOLDER,
+        );
+        const proof = alreadySent
+          ? undefined
+          : (await listMediaAssets(deps.db)).find(
+              (a) => a.type === BUYER_POOL_PROOF_TYPE,
+            );
+        logger.info(
+          { conversationId, wantsBuyerProof: true, alreadySent, found: Boolean(proof) },
+          'buyer-pool proof video selection',
+        );
+        if (proof) {
+          plan.push({
+            part: {
+              kind: 'video',
+              filePath: resolve(process.cwd(), 'assets', proof.path),
+              caption: BUYER_POOL_PROOF_INTRO,
+            },
+            storeBody: BUYER_POOL_PLACEHOLDER,
           });
         }
       }

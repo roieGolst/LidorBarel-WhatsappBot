@@ -70,6 +70,12 @@ export const analysisSchema = z.object({
   confidence: z.number().min(0).max(1),
   extracted: extractedSchema.default({}),
   needsEscalation: z.boolean().default(false),
+  /**
+   * True when a seller asks how their property will be marketed, whether there
+   * are ready buyers, or what value the agent brings — the questions the
+   * investor-tour video answers by showing an active buyer/investor pool.
+   */
+  wantsBuyerProof: z.boolean().default(false),
 });
 
 export type Analysis = z.infer<typeof analysisSchema>;
@@ -86,6 +92,7 @@ export const UNCLEAR_ANALYSIS: Analysis = {
   confidence: 0,
   extracted: {},
   needsEscalation: true,
+  wantsBuyerProof: false,
 };
 
 const SYSTEM_PROMPT = `You are the classification stage of an inbound WhatsApp bot for a real estate agent in Beer Sheva, Israel. Leads write in Hebrew, often informally, with typos, slang, or voice-to-text artifacts.
@@ -106,6 +113,7 @@ Return JSON with exactly these fields:
     - "sellMotivation": a short Hebrew note of WHY they are (or are not) looking to sell, when they say it (e.g. "עוברים דירה", "צריך נזילות", "רק בודק מחיר").
     - "seriousSeller": true if they read as a genuine, motivated seller (a real reason, actively planning to sell); false if they are mainly checking the price or not really intending to sell. Set it only once they've indicated their intent/motivation, otherwise omit.
 - "needsEscalation": true if the message shows anger, frustration, or something a bot should not handle alone.
+- "wantsBuyerProof": true if the seller is asking how the property will be marketed, whether there are ready/potential buyers, or what value/results the agent brings (e.g. "יש לך קונים?", "איך תשווק את הנכס?", "למה כדאי לעבוד איתך?", "מאיפה יגיעו הקונים?"). Otherwise false.
 
 Rules:
 - Output ONLY the JSON object. No prose, no code fences, no explanation.

@@ -133,6 +133,20 @@ describe('decideTransition', () => {
       const decision = decideTransition('assessing_intent', analysis(), answered, true);
       expect(decision.action).toBe('proceed_qualified');
     });
+
+    it('still asks the intent question when seriousSeller was set before it was asked', () => {
+      // Regression: a Q4 answer ("כן, באופן פרטי") the classifier mis-tagged as
+      // seriousSeller:false must not short-circuit to low_intent_hold before the
+      // intent question is even asked.
+      const decision = decideTransition(
+        'screening_currently_marketed',
+        analysis({ extracted: { currentlyMarketed: 'privately', seriousSeller: false } }),
+        { sellIntent: 'ready', neighborhood: 'רמות', timeline: 'within_month' },
+        true,
+      );
+      expect(decision.action).toBe('ask_intent');
+      expect(decision.action).not.toBe('low_intent_hold');
+    });
   });
 
   describe('leadPriorityScore', () => {

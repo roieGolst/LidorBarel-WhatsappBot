@@ -219,11 +219,15 @@ function nextScreeningStep(
       escalate,
     };
   }
-  // Intent check — asked only if we have not asked it yet.
-  if (facts.seriousSeller === undefined && current !== 'assessing_intent') {
+  // Intent check — always asked once after the four questions. `seriousSeller` is
+  // evaluated ONLY here, at the intent stage: a value the classifier may have set
+  // earlier (e.g. from a screening-button answer) must not short-circuit the flow
+  // before the question is even asked.
+  if (current !== 'assessing_intent') {
     return { nextStage: 'assessing_intent', action: 'ask_intent', escalate };
   }
-  // Clearly just price-checking → do not forward to Lidor; leave the door open.
+  // Evaluating the intent-check answer. Clearly just price-checking → do not
+  // forward to Lidor; leave the door open.
   if (facts.seriousSeller === false) {
     return { nextStage: 'engaged', action: 'low_intent_hold', escalate };
   }

@@ -488,6 +488,15 @@ export function createConversationWorkflow(
       }
       const validated = { ...analysis, extracted: cleanExtracted };
 
+      // `seriousSeller` / `sellMotivation` are the answer to the intent question,
+      // not to a screening button. If the classifier inferred them from a
+      // screening answer (e.g. reading "כן, באופן פרטי" as low intent), drop them
+      // so only the real intent-check answer can set them.
+      if (ctx.stage !== 'assessing_intent') {
+        delete validated.extracted.seriousSeller;
+        delete validated.extracted.sellMotivation;
+      }
+
       // The one place a stage is chosen — pure code, never the model.
       // Opt-out always wins. Otherwise the very first response opens with the
       // main menu (§2/§8); a later main-menu tap routes deterministically; and

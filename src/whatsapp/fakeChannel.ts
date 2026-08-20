@@ -6,13 +6,6 @@ export type DraftMessage =
   | { kind: 'video'; to: string; filePath: string; caption?: string }
   | { kind: 'buttons'; to: string; body: string; buttons: readonly ReplyButton[] }
   | {
-      kind: 'video_buttons';
-      to: string;
-      filePath: string;
-      body: string;
-      buttons: readonly ReplyButton[];
-    }
-  | {
       kind: 'list';
       to: string;
       body: string;
@@ -57,20 +50,6 @@ export class FakeChannel implements WhatsAppChannel {
 
   sendText(to: string, text: string): Promise<OutboundResult> {
     return this.record({ kind: 'text', to, text });
-  }
-
-  sendVideoButtons(
-    to: string,
-    filePath: string,
-    body: string,
-    buttons: readonly ReplyButton[],
-  ): Promise<OutboundResult> {
-    // Mirror the real channel's fallback: if the video header can't be sent, the
-    // welcome + buttons still go out as a plain button message.
-    if (this.videoSendsFail) {
-      return this.record({ kind: 'buttons', to, body, buttons });
-    }
-    return this.record({ kind: 'video_buttons', to, filePath, body, buttons });
   }
 
   sendVideo(to: string, filePath: string, caption?: string): Promise<OutboundResult> {

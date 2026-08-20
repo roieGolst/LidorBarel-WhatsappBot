@@ -105,41 +105,40 @@ export const LOW_INTENT_MESSAGE =
 export const INTRO_VIDEO_PATH = resolve(process.cwd(), 'assets/intro_video.mp4');
 
 /**
- * The opening main menu (spec §8 `main_buttons`, conversation_style
- * hybrid_buttons_first). The two actions that move a lead forward — a fit check
- * and booking a meeting — come first, then the softer options. Booking runs the
- * same screening flow (a call is booked only after a few quick details), so there
- * is no separate "talk to a human" shortcut.
- *
- * `MAIN_MENU` is the full list, shown when a person restarts or goes back. The
- * OPENING is different (see {@link OPENING_MENU_BUTTONS}): it rides on the intro
- * video as reply buttons, and WhatsApp allows at most 3 buttons on a media
- * message — so the two priorities plus "learn more" are the buttons, and
- * testimonials stays in this list and reachable any time by asking ("יש המלצות?").
+ * The opening menu (spec §8), sent after the intro clip as an interactive LIST —
+ * WhatsApp renders it as a single "כל האפשרויות" button that opens a clean
+ * bottom-sheet of the options, each with a short description. A list (not reply
+ * buttons) is used so all the options fit and read elegantly; the two actions
+ * that move a lead forward — a fit check and booking — come first. Booking runs
+ * the same screening flow (a call is booked only after a few quick details), so
+ * there is no separate "talk to a human" shortcut.
  */
 export const MAIN_MENU = {
-  body: 'איך תרצה להתחיל? אפשר לבדוק התאמה מהירה, לקבוע פגישה, לשמוע פרטים, או לראות המלצות.',
-  buttonLabel: 'בחירת אפשרות',
+  body: 'אשמח לעזור לך למכור את הנכס במחיר הטוב ביותר 🏠\nאיך תרצה להתחיל?',
+  buttonLabel: 'כל האפשרויות',
   rows: [
-    { id: 'menu:check_fit', title: 'בדיקת התאמה ✅' },
-    { id: 'menu:book_meeting', title: 'קביעת פגישה 📅' },
-    { id: 'menu:learn_more', title: 'ℹ️ לשמוע פרטים' },
-    { id: 'menu:testimonials', title: 'המלצות ⭐' },
+    {
+      id: 'menu:check_fit',
+      title: 'בדיקת התאמה',
+      description: 'נבדוק יחד אם הנכס מתאים ונתחיל בהערכה',
+    },
+    {
+      id: 'menu:book_meeting',
+      title: 'קביעת פגישה',
+      description: 'לתאם שיחה אישית עם לידור',
+    },
+    {
+      id: 'menu:testimonials',
+      title: 'המלצות',
+      description: 'לקוחות שכבר מכרו עם לידור',
+    },
+    {
+      id: 'menu:learn_more',
+      title: 'מידע עלי',
+      description: 'מי זה לידור ואיך הוא עובד',
+    },
   ],
 } as const;
-
-/**
- * The opening menu as reply BUTTONS, attached to the intro video (§2) so the
- * clip, the welcome and the options all arrive as one message. WhatsApp caps a
- * media-header button message at 3 buttons, so these are the priority actions —
- * a fit check and booking first, then learning more; testimonials lives in
- * {@link MAIN_MENU} and is reachable by asking.
- */
-export const OPENING_MENU_BUTTONS: readonly ReplyButton[] = [
-  { id: 'menu:check_fit', title: 'בדיקת התאמה ✅' },
-  { id: 'menu:book_meeting', title: 'קביעת פגישה 📅' },
-  { id: 'menu:learn_more', title: 'ℹ️ לשמוע פרטים' },
-];
 
 /** A main-menu choice, resolved from the tapped row (or typed text). */
 export type MainMenuChoice = 'check_fit' | 'learn_more' | 'book_meeting' | 'testimonials';
@@ -154,9 +153,10 @@ export type MainMenuChoice = 'check_fit' | 'learn_more' | 'book_meeting' | 'test
 export function mainMenuChoiceFor(text: string): MainMenuChoice | undefined {
   const t = text.trim();
   if (t.includes('בדיקת התאמה')) return 'check_fit';
-  if (t.includes('לשמוע פרטים')) return 'learn_more';
   if (t.includes('קביעת פגישה')) return 'book_meeting';
   if (t.includes('המלצות')) return 'testimonials';
+  // "מידע עלי" is the menu label; "לשמוע פרטים" is the older wording, still honored.
+  if (t.includes('מידע עלי') || t.includes('לשמוע פרטים')) return 'learn_more';
   return undefined;
 }
 

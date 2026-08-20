@@ -39,7 +39,6 @@ import {
   MAIN_MENU,
   mainMenuChoiceFor,
   OFF_TOPIC_REDIRECT_MESSAGE,
-  OPENING_MENU_BUTTONS,
   screeningAnswerFor,
   screeningQuestionFor,
   WELCOME_MESSAGE,
@@ -93,7 +92,6 @@ export type OutboundPart =
   | { kind: 'text'; text: string }
   | { kind: 'video'; filePath: string; caption?: string }
   | { kind: 'buttons'; body: string; buttons: ReplyButton[] }
-  | { kind: 'video_buttons'; filePath: string; body: string; buttons: ReplyButton[] }
   | { kind: 'list'; body: string; buttonLabel: string; rows: ListRow[] };
 
 export interface TurnContext {
@@ -252,8 +250,6 @@ function sendOutbound(
       return channel.sendVideo(to, part.filePath, part.caption);
     case 'buttons':
       return channel.sendButtons(to, part.body, part.buttons);
-    case 'video_buttons':
-      return channel.sendVideoButtons(to, part.filePath, part.body, part.buttons);
     case 'list':
       return channel.sendList(to, part.body, part.buttonLabel, part.rows);
   }
@@ -756,20 +752,14 @@ export function createConversationWorkflow(
       const plan: { part: OutboundPart; storeBody: string; usage?: LlmUsage[] }[] = [];
 
       // Opening (§2) on the very first bot response — but never greet someone
-      // whose opening move is to opt out; that turn only acknowledges. It is a
-      // single all-in-one message: the intro video as the header, the welcome as
-      // the body, and the menu as reply buttons riding on the clip. The channel
-      // degrades to a plain button message if the video cannot be sent, so the
-      // welcome + menu always arrive. Because this carries the menu, the
-      // `show_main_menu` action below adds nothing more.
+      // whose opening move is to opt out; that turn only acknowledges. Two
+      // messages: the intro clip carrying the welcome as its caption, then the
+      // elegant list menu (`show_main_menu` below). If the clip can't be sent it
+      // is dropped (see the video-send handling); the welcome then arrives with
+      // the menu that follows, so the greeting is never lost.
       if (ctx.isFirstResponse && decision.action !== 'acknowledge_opt_out') {
         plan.push({
-          part: {
-            kind: 'video_buttons',
-            filePath: INTRO_VIDEO_PATH,
-            body: WELCOME_MESSAGE,
-            buttons: [...OPENING_MENU_BUTTONS],
-          },
+          part: { kind: 'video', filePath: INTRO_VIDEO_PATH, caption: WELCOME_MESSAGE },
           storeBody: WELCOME_MESSAGE,
         });
       }
@@ -861,8 +851,15 @@ export function createConversationWorkflow(
       const question = screeningQuestionFor(decision.action);
       const canned = cannedReplyFor(decision.action);
       if (decision.action === 'show_main_menu') {
-        // The all-in-one opening message above already carried the menu buttons;
-        // there is nothing more to add for this action.
+        plan.push({
+          part: {
+            kind: 'list',
+            body: MAIN_MENU.body,
+            buttonLabel: MAIN_MENU.buttonLabel,
+            rows: [...MAIN_MENU.rows],
+          },
+          storeBody: MAIN_MENU.body,
+        });
       } else if (canned) {
         // Fixed closes and the intent check — canned so the wording, grammar and
         // "no callback-time promise" rule can never drift.
@@ -897,7 +894,20 @@ export function createConversationWorkflow(
             to: ctx.contactPhone,
             part: planned.part,
           });
-          if (providerMessageId === null) continue; // clip dropped; carry on
+          if (providerMessageId === null) {
+            // The clip was dropped. If it carried a caption — the opening welcome
+            // rides on the intro video — send that caption as plain text so the
+            // greeting is never lost, then carry on. (A failed text send here is
+            // fatal, as it should be: the welcome is essential.)
+            if (planned.part.caption) {
+              const { providerMessageId: textId } = await send({
+                to: ctx.contactPhone,
+                part: { kind: 'text', text: planned.part.caption },
+              });
+              outbound.push({ body: planned.storeBody, providerMessageId: textId });
+            }
+            continue;
+          }
           outbound.push({ body: planned.storeBody, providerMessageId });
           continue;
         }

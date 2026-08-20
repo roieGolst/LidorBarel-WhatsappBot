@@ -68,56 +68,6 @@ describe('CloudApiChannel', () => {
     expect(result).toEqual({ providerMessageId: 'wamid.XYZ' });
   });
 
-  it('sendVideoButtons uploads the clip and posts a button message with a video header', async () => {
-    const filePath = join(tmpdir(), `intro-vb-${Date.now()}.mp4`);
-    await writeFile(filePath, Buffer.from([0, 1, 2, 3]));
-    fetchMock
-      .mockResolvedValueOnce(jsonResponse({ id: 'media-vid-1' })) // upload
-      .mockResolvedValueOnce(jsonResponse({ messages: [{ id: 'wamid.VB' }] })); // send
-    const channel = new CloudApiChannel(CREDENTIALS);
-
-    const result = await channel.sendVideoButtons('+972521234501', filePath, 'שלום', [
-      { id: 'menu:check_fit', title: 'בדיקת התאמה' },
-      { id: 'menu:book_meeting', title: 'קביעת פגישה' },
-    ]);
-
-    expect(result).toEqual({ providerMessageId: 'wamid.VB' });
-    const [, sendInit] = fetchMock.mock.calls[1] as [string, RequestInit];
-    const payload = JSON.parse(sendInit.body as string) as {
-      type: string;
-      interactive: { type: string; header: { type: string; video: { id: string } } };
-    };
-    expect(payload.type).toBe('interactive');
-    expect(payload.interactive.type).toBe('button');
-    expect(payload.interactive.header).toEqual({
-      type: 'video',
-      video: { id: 'media-vid-1' },
-    });
-  });
-
-  it('sendVideoButtons degrades to a plain button message when the clip cannot be uploaded', async () => {
-    const filePath = join(tmpdir(), `intro-vb-fail-${Date.now()}.mp4`);
-    await writeFile(filePath, Buffer.from([0, 1, 2, 3]));
-    fetchMock
-      .mockResolvedValueOnce(
-        jsonResponse({ error: { message: 'bad' } }, { status: 400, ok: false }),
-      ) // upload fails
-      .mockResolvedValueOnce(jsonResponse({ messages: [{ id: 'wamid.VB2' }] })); // fallback send
-    const channel = new CloudApiChannel(CREDENTIALS);
-
-    const result = await channel.sendVideoButtons('+972521234501', filePath, 'שלום', [
-      { id: 'menu:check_fit', title: 'בדיקת התאמה' },
-    ]);
-
-    expect(result).toEqual({ providerMessageId: 'wamid.VB2' });
-    const [, sendInit] = fetchMock.mock.calls[1] as [string, RequestInit];
-    const payload = JSON.parse(sendInit.body as string) as {
-      interactive: { header?: unknown };
-    };
-    // No video header on the fallback — just the welcome text + buttons.
-    expect(payload.interactive.header).toBeUndefined();
-  });
-
   it('markTyping POSTs a read + typing-indicator status for the inbound id', async () => {
     fetchMock.mockResolvedValue(jsonResponse({ success: true }));
     const channel = new CloudApiChannel(CREDENTIALS);

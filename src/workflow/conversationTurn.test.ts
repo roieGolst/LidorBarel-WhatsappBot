@@ -242,7 +242,7 @@ describe('conversationTurn', () => {
     expect(channel.typingFor).toContain(`in-${conversationId}`);
   });
 
-  it('opens with a single all-in-one message: intro video + welcome + menu buttons (§8)', async () => {
+  it('opens with the intro video (welcome as caption) then the elegant list menu (§8)', async () => {
     const llm = new FakeLlmClient([
       '{"intent":"UNCLEAR","confidence":0.2,"extracted":{}}',
     ]);
@@ -257,17 +257,21 @@ describe('conversationTurn', () => {
     expect(result.stage).toBe('engaged');
     expect(result.action).toBe('show_main_menu');
 
-    // ONE message: the intro clip as the header, the welcome as the body, and the
-    // menu as reply buttons — priorities first (fit check, booking), then learn more.
-    expect(channel.sent).toHaveLength(1);
-    const opening = channel.sent[0];
-    expect(opening?.kind).toBe('video_buttons');
-    if (opening?.kind === 'video_buttons') {
-      expect(opening.filePath).toBe(INTRO_VIDEO_PATH);
-      expect(opening.body).toBe(WELCOME_MESSAGE);
-      expect(opening.buttons.map((b) => b.id)).toEqual([
+    // Two messages: the intro clip carrying the welcome, then the list menu.
+    expect(channel.sent).toHaveLength(2);
+    const [video, menu] = channel.sent;
+    expect(video).toMatchObject({
+      kind: 'video',
+      filePath: INTRO_VIDEO_PATH,
+      caption: WELCOME_MESSAGE,
+    });
+    expect(menu?.kind).toBe('list');
+    if (menu?.kind === 'list') {
+      expect(menu.buttonLabel).toBe('כל האפשרויות');
+      expect(menu.rows.map((r) => r.id)).toEqual([
         'menu:check_fit',
         'menu:book_meeting',
+        'menu:testimonials',
         'menu:learn_more',
       ]);
     }
@@ -275,11 +279,10 @@ describe('conversationTurn', () => {
     const outbound = (await recentMessages(db, conversationId)).filter(
       (m) => m.direction === 'outbound',
     );
-    expect(outbound).toHaveLength(1);
-    expect(outbound[0]?.body).toBe(WELCOME_MESSAGE);
+    expect(outbound).toHaveLength(2);
   });
 
-  it('opening degrades to welcome + menu buttons when the intro video fails', async () => {
+  it('opening keeps the welcome (as text) and the menu even if the intro video fails', async () => {
     const llm = new FakeLlmClient([
       '{"intent":"UNCLEAR","confidence":0.2,"extracted":{}}',
     ]);
@@ -292,15 +295,10 @@ describe('conversationTurn', () => {
       config(conversationId),
     );
 
-    // The person is still welcomed and shown the menu — just without the clip.
     expect(result.sent).toBe(true);
-    expect(channel.sent).toHaveLength(1);
-    const opening = channel.sent[0];
-    expect(opening?.kind).toBe('buttons');
-    if (opening?.kind === 'buttons') {
-      expect(opening.body).toBe(WELCOME_MESSAGE);
-      expect(opening.buttons).toHaveLength(3);
-    }
+    // The clip is dropped, but its caption (the welcome) is sent as text, then the menu.
+    expect(channel.sent.map((s) => s.kind)).toEqual(['text', 'list']);
+    expect(channel.sent[0]).toMatchObject({ kind: 'text', text: WELCOME_MESSAGE });
   });
 
   it('tapping "check fit" starts the screening flow (buttons/list)', async () => {

@@ -29,21 +29,6 @@ export interface WhatsAppChannel {
     buttons: readonly ReplyButton[],
   ): Promise<OutboundResult>;
 
-  /**
-   * Sends an interactive reply-button message with a VIDEO header — the buttons
-   * ride directly on the video bubble. Used for the opening: the intro clip and
-   * the "how would you like to start" options arrive as one message. WhatsApp
-   * allows a media header only on button messages (not lists), and at most 3
-   * buttons. The implementation uploads the file for a media id, like
-   * {@link sendVideo}.
-   */
-  sendVideoButtons(
-    to: string,
-    filePath: string,
-    body: string,
-    buttons: readonly ReplyButton[],
-  ): Promise<OutboundResult>;
-
   /** Sends an interactive list message. WhatsApp allows at most 10 rows. */
   sendList(
     to: string,

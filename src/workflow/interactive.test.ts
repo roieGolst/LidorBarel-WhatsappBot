@@ -4,7 +4,6 @@ import {
   INTRO_VIDEO_PATH,
   MAIN_MENU,
   mainMenuChoiceFor,
-  OPENING_MENU_BUTTONS,
   screeningAnswerFor,
   screeningQuestionFor,
   WELCOME_MESSAGE,
@@ -46,38 +45,30 @@ describe('interactive content', () => {
     expect(screeningQuestionFor('ask_timeline')?.kind).toBe('list');
   });
 
-  it('lists the full menu with the two priority actions first', () => {
+  it('is an elegant list: priorities first, a description per row, within the caps', () => {
     expect(MAIN_MENU.rows.map((r) => r.id)).toEqual([
       'menu:check_fit',
       'menu:book_meeting',
-      'menu:learn_more',
       'menu:testimonials',
+      'menu:learn_more',
     ]);
+    // The single "open the list" button label, within Meta's 20-char cap.
+    expect(MAIN_MENU.buttonLabel).toBe('כל האפשרויות');
     expect(MAIN_MENU.buttonLabel.length).toBeLessThanOrEqual(20);
     for (const row of MAIN_MENU.rows) {
       expect(row.title.length).toBeLessThanOrEqual(24);
-    }
-  });
-
-  it('opening buttons ride on the video (≤3), priorities first, testimonials not among them', () => {
-    expect(OPENING_MENU_BUTTONS.length).toBeLessThanOrEqual(3);
-    expect(OPENING_MENU_BUTTONS.map((b) => b.id)).toEqual([
-      'menu:check_fit',
-      'menu:book_meeting',
-      'menu:learn_more',
-    ]);
-    for (const b of OPENING_MENU_BUTTONS) {
-      expect(b.title.length).toBeLessThanOrEqual(20); // button-title cap
+      expect(row.description.length).toBeGreaterThan(0);
+      expect(row.description.length).toBeLessThanOrEqual(72);
     }
   });
 
   it('maps a tapped or typed menu option to its choice', () => {
-    expect(mainMenuChoiceFor('בדיקת התאמה ✅')).toBe('check_fit');
+    expect(mainMenuChoiceFor('בדיקת התאמה')).toBe('check_fit');
+    expect(mainMenuChoiceFor('קביעת פגישה')).toBe('book_meeting');
+    expect(mainMenuChoiceFor('המלצות')).toBe('testimonials');
+    expect(mainMenuChoiceFor('מידע עלי')).toBe('learn_more');
+    // The older "לשמוע פרטים" wording still maps to learn_more.
     expect(mainMenuChoiceFor('ℹ️ לשמוע פרטים')).toBe('learn_more');
-    expect(mainMenuChoiceFor('קביעת פגישה 📅')).toBe('book_meeting');
-    expect(mainMenuChoiceFor('המלצות ⭐')).toBe('testimonials');
-    // The talk-to-human option was removed; it is no longer a menu choice.
-    expect(mainMenuChoiceFor('דברו איתי 👤')).toBeUndefined();
     // A normal answer is not a menu choice.
     expect(mainMenuChoiceFor('שכונת רמות')).toBeUndefined();
     expect(mainMenuChoiceFor('יאללה')).toBeUndefined();

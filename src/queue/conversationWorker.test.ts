@@ -80,15 +80,16 @@ describe('processTurn', () => {
     const conversation = await getConversationById(db, conversationId);
     expect(conversation?.stage).toBe('engaged');
 
-    // The first response is a single all-in-one opening: intro video header +
-    // welcome body + menu buttons, to the right recipient, persisted.
-    expect(channel.sent).toHaveLength(1);
+    // The first response opens with the intro video (welcome as caption) then the
+    // list menu, all to the right recipient, all persisted.
+    expect(channel.sent).toHaveLength(2);
     expect(channel.sent.every((m) => m.to === phone)).toBe(true);
-    expect(channel.sent.at(-1)?.kind).toBe('video_buttons');
+    expect(channel.sent[0]?.kind).toBe('video');
+    expect(channel.sent.at(-1)?.kind).toBe('list');
 
     const outbound = (await recentMessages(db, conversationId)).filter(
       (m) => m.direction === 'outbound',
     );
-    expect(outbound).toHaveLength(1);
+    expect(outbound).toHaveLength(2);
   });
 });

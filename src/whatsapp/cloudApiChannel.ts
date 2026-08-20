@@ -109,50 +109,6 @@ export class CloudApiChannel implements WhatsAppChannel {
     });
   }
 
-  /**
-   * Interactive reply buttons with a VIDEO header (the opening: intro clip +
-   * welcome + menu in one message). If the video cannot be uploaded/sent, it
-   * degrades to a plain button message so the welcome and the options still
-   * arrive — the buttons are the essential content, the clip is the enhancement.
-   */
-  async sendVideoButtons(
-    to: string,
-    filePath: string,
-    body: string,
-    buttons: readonly ReplyButton[],
-  ): Promise<OutboundResult> {
-    const action = {
-      buttons: buttons.map((b) => ({
-        type: 'reply',
-        reply: { id: b.id, title: b.title },
-      })),
-    };
-    try {
-      const id = await this.uploadMediaCached(filePath, 'video/mp4');
-      return await this.postMessage({
-        to,
-        type: 'interactive',
-        interactive: {
-          type: 'button',
-          header: { type: 'video', video: { id } },
-          body: { text: body },
-          action,
-        },
-      });
-    } catch (error) {
-      this.logger.warn(
-        { op: 'sendVideoButtons', phoneNumberId: this.credentials.phoneNumberId },
-        'video header failed — sending the welcome and menu without the clip',
-      );
-      void error;
-      return this.postMessage({
-        to,
-        type: 'interactive',
-        interactive: { type: 'button', body: { text: body }, action },
-      });
-    }
-  }
-
   sendList(
     to: string,
     body: string,

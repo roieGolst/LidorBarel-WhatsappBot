@@ -1,5 +1,21 @@
 import { describe, expect, it } from 'vitest';
-import { ENGLISH_ONLY_REPLY, isPredominantlyEnglish } from './language.js';
+import { ENGLISH_ONLY_REPLY, hasHebrew, isPredominantlyEnglish } from './language.js';
+
+describe('hasHebrew', () => {
+  it('is true for any text containing a Hebrew letter', () => {
+    expect(hasHebrew('שלום')).toBe(true);
+    expect(hasHebrew('רגר 15')).toBe(true);
+    expect(hasHebrew('ok שלום')).toBe(true);
+  });
+
+  it('is false for text with no Hebrew — digits, symbols, emoji, gibberish', () => {
+    expect(hasHebrew('12345')).toBe(false);
+    expect(hasHebrew('!!!???')).toBe(false);
+    expect(hasHebrew('😀😀')).toBe(false);
+    expect(hasHebrew('asdfg')).toBe(false);
+    expect(hasHebrew('')).toBe(false);
+  });
+});
 
 describe('isPredominantlyEnglish', () => {
   it('flags real English prose', () => {

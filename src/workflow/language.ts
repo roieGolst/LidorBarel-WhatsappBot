@@ -24,6 +24,19 @@ export const ENGLISH_ONLY_REPLY =
 const LONG_LATIN_RUN = 8;
 
 /**
+ * Whether the text contains any Hebrew letter.
+ *
+ * This bot converses in Hebrew, so a message with **no Hebrew at all** — random
+ * symbols, digits, emoji, or gibberish — carries no information: it must not be
+ * processed as an answer or acknowledged as property details. (English prose is
+ * caught earlier by {@link isPredominantlyEnglish}; this catches everything else
+ * with no Hebrew content.)
+ */
+export function hasHebrew(text: string): boolean {
+  return /\p{Script=Hebrew}/u.test(text);
+}
+
+/**
  * Whether a message is predominantly English and should be refused.
  *
  * True only when the text contains **no Hebrew letters** and carries substantive

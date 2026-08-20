@@ -36,11 +36,12 @@ import {
   INTRO_VIDEO_PATH,
   MAIN_MENU,
   mainMenuChoiceFor,
+  OFF_TOPIC_REDIRECT_MESSAGE,
   screeningQuestionFor,
   WELCOME_MESSAGE,
   type ScreeningQuestion,
 } from './interactive.js';
-import { ENGLISH_ONLY_REPLY, isPredominantlyEnglish } from './language.js';
+import { ENGLISH_ONLY_REPLY, hasHebrew, isPredominantlyEnglish } from './language.js';
 import { isOptOutKeyword } from './optOutKeywords.js';
 import {
   persistTurn,
@@ -227,6 +228,20 @@ function sumUsage(
 ): number {
   return usage.reduce((total, u) => total + u[field], 0);
 }
+
+/**
+ * Stages where the bot is actively collecting a specific answer. A non-Hebrew or
+ * terse reply here is handled by the normal validation/classification path (which
+ * re-asks the pending question), so the no-Hebrew redirect is skipped for them.
+ */
+const COLLECTING_STAGES: ReadonlySet<ConversationStage> = new Set([
+  'screening_sell_intent',
+  'screening_neighborhood',
+  'screening_timeline',
+  'screening_currently_marketed',
+  'screening_exclusivity',
+  'assessing_intent',
+]);
 
 /** Renders a screening question into the outbound part that carries it. */
 function questionPart(question: ScreeningQuestion): OutboundPart {
@@ -464,6 +479,43 @@ export function createConversationWorkflow(
           stage: holdStage,
           text: ENGLISH_ONLY_REPLY,
           action: 'reject_english',
+          sent: true,
+        };
+      }
+
+      // No-Hebrew filter: a message with no Hebrew letters at all — random
+      // symbols, digits, emoji, or gibberish — carries no information for this
+      // Hebrew-only bot. It must not be processed as an answer or acknowledged as
+      // property details (which produced a spurious "תודה על הפרטים"). Redirect it
+      // to keep the conversation on the property, with no model call. Skipped
+      // during the opening and while collecting a specific answer (there the
+      // normal validation/classification re-asks the pending question); an
+      // explicit opt-out is still honored below.
+      if (
+        !hasHebrew(ctx.currentText) &&
+        !isOptOutKeyword(ctx.currentText) &&
+        !ctx.isFirstResponse &&
+        !COLLECTING_STAGES.has(ctx.stage)
+      ) {
+        const holdStage: ConversationStage = ctx.stage === 'new' ? 'engaged' : ctx.stage;
+        const { providerMessageId } = await send({
+          to: ctx.contactPhone,
+          part: { kind: 'text', text: OFF_TOPIC_REDIRECT_MESSAGE },
+        });
+        await persist({
+          conversationId,
+          contactId: ctx.contactId,
+          contactPhone: ctx.contactPhone,
+          fromStage: ctx.stage,
+          toStage: holdStage,
+          action: 'stay_on_topic',
+          extracted: ctx.known,
+          outbound: [{ body: OFF_TOPIC_REDIRECT_MESSAGE, providerMessageId }],
+        });
+        return {
+          stage: holdStage,
+          text: OFF_TOPIC_REDIRECT_MESSAGE,
+          action: 'stay_on_topic',
           sent: true,
         };
       }

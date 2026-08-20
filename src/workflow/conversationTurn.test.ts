@@ -776,4 +776,24 @@ describe('conversationTurn', () => {
     const sent = channel.sent.at(-1);
     expect(sent).toMatchObject({ kind: 'text', text: OFF_TOPIC_REDIRECT_MESSAGE });
   });
+
+  it('does not acknowledge a no-Hebrew random message as details (no model call)', async () => {
+    const llm = new FakeLlmClient([]); // must never be called
+    const channel = new FakeChannel();
+    const { conversationId } = await seed({
+      inbound: '12345 !!! 😀',
+      stage: 'qualified',
+      priorReply: QUALIFIED_HANDOFF_MESSAGE,
+    });
+
+    const result = await workflow({ db, llm, channel }).invoke(
+      conversationId,
+      config(conversationId),
+    );
+
+    expect(result.action).toBe('stay_on_topic');
+    expect(llm.requests).toHaveLength(0); // no classification for a no-Hebrew message
+    const sent = channel.sent.at(-1);
+    expect(sent).toMatchObject({ kind: 'text', text: OFF_TOPIC_REDIRECT_MESSAGE });
+  });
 });

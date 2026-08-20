@@ -28,6 +28,7 @@ import {
   INTRO_VIDEO_PATH,
   OFF_TOPIC_REDIRECT_MESSAGE,
   QUALIFIED_HANDOFF_MESSAGE,
+  UNSUPPORTED_MEDIA_MESSAGE,
   WELCOME_MESSAGE,
 } from './interactive.js';
 import { persistTurn, type PersistTurnInput } from './persist.js';
@@ -223,6 +224,54 @@ describe('conversationTurn', () => {
     expect(channel.sent).toHaveLength(1); // still just the one ack
     conversation = await getConversationById(db, conversationId);
     expect((conversation?.extracted as KnownFacts).photoCount).toBe(2);
+  });
+
+  it('answers a voice note / unsupported media with a "use text or buttons" message', async () => {
+    const { conversationId } = await seed({
+      inbound: 'שלום',
+      stage: 'screening_currently_marketed',
+      priorReply: 'האם הנכס משווק כרגע?',
+    });
+    // A voice note (audio, no caption) — the latest inbound.
+    await recordInboundMessage(db, {
+      conversationId,
+      providerMessageId: `voice1-${conversationId}`,
+      mediaType: 'audio',
+      mediaUrl: 'wamid-voice-1',
+      createdAt: new Date(Date.now() + 1000),
+    });
+    const channel = new FakeChannel();
+    const llm = new FakeLlmClient([]); // no classification for unsupported media
+
+    const result = await workflow({ db, llm, channel }).invoke(
+      conversationId,
+      config(conversationId),
+    );
+
+    expect(result.action).toBe('unsupported_media');
+    expect(result.stage).toBe('screening_currently_marketed'); // flow not derailed
+    expect(channel.sent).toHaveLength(1);
+    expect(channel.sent[0]).toMatchObject({
+      kind: 'text',
+      text: UNSUPPORTED_MEDIA_MESSAGE,
+    });
+    expect(llm.requests).toHaveLength(0);
+
+    // A second voice note in the same burst is not answered again.
+    await recordInboundMessage(db, {
+      conversationId,
+      providerMessageId: `voice2-${conversationId}`,
+      mediaType: 'audio',
+      mediaUrl: 'wamid-voice-2',
+      createdAt: new Date(Date.now() + 2000),
+    });
+    const result2 = await workflow({ db, llm, channel }).invoke(
+      conversationId,
+      config(conversationId),
+    );
+    expect(result2.action).toBe('unsupported_media');
+    expect(result2.sent).toBe(false); // deduped
+    expect(channel.sent).toHaveLength(1);
   });
 
   it('shows a typing indicator against the inbound message before the model replies', async () => {

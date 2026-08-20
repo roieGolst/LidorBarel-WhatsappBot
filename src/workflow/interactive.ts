@@ -51,6 +51,14 @@ export const ABUSE_WARNING_MESSAGE =
 export const OFF_TOPIC_REDIRECT_MESSAGE =
   'אני כאן כדי לעזור לך עם הנכס בלבד. נשמור על השיחה עניינית 🙂';
 export const ABUSE_BAN_MESSAGE = 'לא נוכל להמשיך בשיחה הזו. כל טוב.';
+/**
+ * Sent when the lead sends media the bot can't process — a voice note, an audio
+ * clip, a document, or a sticker. Friendly, and points them to the ways it CAN
+ * help: plain text or the menu buttons. (Photos are handled separately — they
+ * are useful property media and are acknowledged, not refused.)
+ */
+export const UNSUPPORTED_MEDIA_MESSAGE =
+  'סליחה, אני לא יכול לעבד הודעות מהסוג הזה 🙏 אפשר לכתוב לי בטקסט או לבחור מהכפתורים, ואשמח לעזור.';
 export const STOP_MESSAGE =
   'סגרתי את השיחה. אפשר לכתוב לנו שוב בכל עת כדי להתחיל מחדש 🙏';
 

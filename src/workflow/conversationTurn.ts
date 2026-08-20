@@ -41,6 +41,7 @@ import {
   OFF_TOPIC_REDIRECT_MESSAGE,
   screeningAnswerFor,
   screeningQuestionFor,
+  UNSUPPORTED_MEDIA_MESSAGE,
   WELCOME_MESSAGE,
   type ScreeningQuestion,
 } from './interactive.js';
@@ -593,6 +594,44 @@ export function createConversationWorkflow(
           action: 'acknowledge_photos',
           text: alreadyAcked ? '' : PHOTO_ACK_MESSAGE,
           sent: !alreadyAcked,
+        };
+      }
+
+      // Other media the bot can't process — a voice note, audio, a document, a
+      // sticker, a video. Reply, once, pointing them to what DOES work (text or the
+      // buttons) instead of the off-topic/gibberish redirect a caption-less media
+      // message would otherwise trigger below. No classification, no flow advance;
+      // a burst is answered once (dedupe on the last outbound). The opening takes
+      // precedence on the very first turn.
+      if (ctx.currentMedia && !ctx.isFirstResponse) {
+        const alreadyTold = ctx.lastOutboundText === UNSUPPORTED_MEDIA_MESSAGE;
+        logger.info(
+          { conversationId, mediaKind: ctx.currentMedia.kind, alreadyTold },
+          'unsupported media received',
+        );
+        const outbound: OutboundMessageRecord[] = [];
+        if (!alreadyTold) {
+          const { providerMessageId } = await send({
+            to: ctx.contactPhone,
+            part: { kind: 'text', text: UNSUPPORTED_MEDIA_MESSAGE },
+          });
+          outbound.push({ body: UNSUPPORTED_MEDIA_MESSAGE, providerMessageId });
+        }
+        await persist({
+          conversationId,
+          contactId: ctx.contactId,
+          contactPhone: ctx.contactPhone,
+          fromStage: ctx.stage,
+          toStage: ctx.stage,
+          action: 'unsupported_media',
+          extracted: ctx.known,
+          outbound,
+        });
+        return {
+          stage: ctx.stage,
+          action: 'unsupported_media',
+          text: alreadyTold ? '' : UNSUPPORTED_MEDIA_MESSAGE,
+          sent: !alreadyTold,
         };
       }
 

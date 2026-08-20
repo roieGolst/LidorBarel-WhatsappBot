@@ -4,6 +4,7 @@ import {
   INTRO_VIDEO_PATH,
   MAIN_MENU,
   mainMenuChoiceFor,
+  screeningAnswerFor,
   screeningQuestionFor,
   WELCOME_MESSAGE,
 } from './interactive.js';
@@ -68,6 +69,37 @@ describe('interactive content', () => {
     // A normal answer is not a menu choice.
     expect(mainMenuChoiceFor('שכונת רמות')).toBeUndefined();
     expect(mainMenuChoiceFor('יאללה')).toBeUndefined();
+  });
+
+  describe('screeningAnswerFor (deterministic option mapping)', () => {
+    it('maps an exact Q4 answer to the enum — the bare "לא" that was missed', () => {
+      expect(screeningAnswerFor('screening_currently_marketed', 'לא')).toEqual({
+        currentlyMarketed: 'no',
+      });
+      expect(
+        screeningAnswerFor('screening_currently_marketed', ' כן, עם מתווך '),
+      ).toEqual({ currentlyMarketed: 'with_agent' });
+    });
+
+    it('maps Q1 and Q3 options too', () => {
+      expect(screeningAnswerFor('screening_sell_intent', 'מתלבט, רוצה מחיר')).toEqual({
+        sellIntent: 'not_sure',
+      });
+      expect(screeningAnswerFor('screening_timeline', 'מיד')).toEqual({
+        timeline: 'immediate',
+      });
+    });
+
+    it('returns undefined for free-text stages, non-options, and non-screening stages', () => {
+      // Q2 is free text — no fixed options to match.
+      expect(screeningAnswerFor('screening_neighborhood', 'רמות')).toBeUndefined();
+      // Not one of Q4's option titles.
+      expect(
+        screeningAnswerFor('screening_currently_marketed', 'אולי בעתיד'),
+      ).toBeUndefined();
+      // "לא" only means "not marketed" at Q4, not at an unrelated stage.
+      expect(screeningAnswerFor('assessing_intent', 'לא')).toBeUndefined();
+    });
   });
 
   it('respects WhatsApp length caps: ≤3 buttons (title ≤20), ≤10 rows (title ≤24)', () => {

@@ -1,6 +1,7 @@
 import { resolve } from 'node:path';
+import type { ConversationStage } from '../db/repositories/conversations.js';
 import type { ListRow, ReplyButton } from '../whatsapp/channel.js';
-import type { TurnAction } from './decide.js';
+import type { KnownFacts, TurnAction } from './decide.js';
 
 /**
  * The spec's opening sequence (§2) and buttons-first screening (§8), as data.
@@ -19,13 +20,16 @@ import type { TurnAction } from './decide.js';
 
 /**
  * Welcome (spec §2), the first thing a new conversation receives. The spec text,
- * plus a note on the control words the person can type at any point (restart /
- * back / stop) — Roie's addition so they always know how to change an answer, go
- * back, or end.
+ * plus a note that answers can be tapped OR typed freely (the questions come with
+ * buttons, but every one is also answerable in the person's own words — see
+ * `screeningAnswerFor` and the classifier), and the control words they can type at
+ * any point (restart / back / stop) — Roie's addition so they always know how to
+ * change an answer, go back, or end.
  */
 export const WELCOME_MESSAGE =
   'היי! 👋 תודה שהשארת פרטים לגבי הנכס.\n\n' +
   'כדי שנוכל להעריך את שווי הנכס ולהתקדם לקביעת שיחה, אשאל אותך כמה שאלות קצרות. שנתחיל?\n\n' +
+  'אפשר לבחור מהכפתורים או פשוט לענות במילים שלך — מה שנוח לך 🙂\n\n' +
   'בכל שלב אפשר לכתוב:\n' +
   '*התחל מחדש* – כדי להתחיל מההתחלה\n' +
   '*חזור* – כדי לתקן את התשובה האחרונה\n' +
@@ -198,6 +202,56 @@ const SCREENING_QUESTIONS: Partial<Record<TurnAction, ScreeningQuestion>> = {
 /** The interactive question for an action, or `undefined` if it isn't a screen. */
 export function screeningQuestionFor(action: TurnAction): ScreeningQuestion | undefined {
   return SCREENING_QUESTIONS[action];
+}
+
+/** The screening stage where each interactive question is being collected. */
+const STAGE_TO_SCREENING_ACTION: Partial<Record<ConversationStage, TurnAction>> = {
+  screening_sell_intent: 'ask_sell_intent',
+  screening_timeline: 'ask_timeline',
+  screening_currently_marketed: 'ask_currently_marketed',
+};
+
+/**
+ * The `KnownFacts` field each option-id prefix fills. Button/list ids are authored
+ * as `<prefix>:<value>` where `<value>` is exactly the enum token (see
+ * SCREENING_QUESTIONS), so a matched option maps straight onto the fact.
+ */
+const OPTION_PREFIX_FIELD = {
+  sell_intent: 'sellIntent',
+  timeline: 'timeline',
+  marketed: 'currentlyMarketed',
+} as const;
+
+/**
+ * Deterministically resolves a screening answer from the message, when it is an
+ * EXACT match for one of the pending question's options.
+ *
+ * WhatsApp echoes a tapped button/list row back as its title text (see
+ * `payload.ts`), and a person may also just type that same word. Either way the
+ * answer to a fixed-option question is unambiguous — so it is mapped to the enum
+ * here, deterministically, rather than left to the classifier. That closes a real
+ * gap: a terse "לא" answering Q4 was sometimes missed by the model, which then
+ * re-asked the very same question. Returns the fact to merge, or `undefined` when
+ * the stage has no fixed options (Q2 is free-text) or the text is not an option.
+ */
+export function screeningAnswerFor(
+  stage: ConversationStage,
+  text: string,
+): Partial<KnownFacts> | undefined {
+  const action = STAGE_TO_SCREENING_ACTION[stage];
+  if (!action) return undefined;
+  const question = SCREENING_QUESTIONS[action];
+  if (!question || question.kind === 'text') return undefined;
+
+  const options = question.kind === 'buttons' ? question.buttons : question.rows;
+  const trimmed = text.trim();
+  const match = options.find((option) => option.title.trim() === trimmed);
+  if (!match) return undefined;
+
+  const [prefix, value] = match.id.split(':');
+  const field = OPTION_PREFIX_FIELD[prefix as keyof typeof OPTION_PREFIX_FIELD];
+  if (!field || !value) return undefined;
+  return { [field]: value };
 }
 
 /** The plain-text body of a screening question — the text stored for the turn. */

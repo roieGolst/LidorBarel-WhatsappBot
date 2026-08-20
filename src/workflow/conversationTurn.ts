@@ -39,6 +39,7 @@ import {
   MAIN_MENU,
   mainMenuChoiceFor,
   OFF_TOPIC_REDIRECT_MESSAGE,
+  screeningAnswerFor,
   screeningQuestionFor,
   WELCOME_MESSAGE,
   type ScreeningQuestion,
@@ -582,6 +583,20 @@ export function createConversationWorkflow(
       if (ctx.stage !== 'assessing_intent') {
         delete validated.extracted.seriousSeller;
         delete validated.extracted.sellMotivation;
+      }
+
+      // Deterministic screening answer: when the message exactly matches one of
+      // the pending question's fixed options (a tapped button, or the same word
+      // typed), map it straight to the enum instead of trusting the classifier —
+      // which occasionally missed a terse "לא"/"מיד" and re-asked the same
+      // question. Treated as a confident answer for that field; opt-out still
+      // wins (an option title is never an opt-out phrase, so this never fires on
+      // one, but the guard keeps that explicit).
+      const screeningAnswer = screeningAnswerFor(ctx.stage, ctx.currentText);
+      if (screeningAnswer && validated.intent !== 'OPT_OUT') {
+        validated.intent = 'ANSWER';
+        validated.confidence = Math.max(validated.confidence, 0.9);
+        Object.assign(validated.extracted, screeningAnswer);
       }
 
       // The one place a stage is chosen — pure code, never the model.

@@ -566,13 +566,20 @@ export function createConversationWorkflow(
       }
 
       // Booking intent: the "קביעת פגישה" menu choice, or a message the classifier
-      // read as wanting to schedule / proceed. It runs the same screening flow and
-      // is stored as a fact so it boosts the lead's weighted priority (see
-      // leadPriorityScore). `bookingTriggered` fires only the first time, so the
-      // brief booking lead-in is sent once.
+      // read as wanting to schedule / proceed. It is stored as a fact so it boosts
+      // the lead's weighted priority (see leadPriorityScore). The brief booking
+      // lead-in is sent only the first time AND only when this turn actually opens
+      // the screening flow — never for an already-qualified lead who just says
+      // "כן" (there is nothing left to collect; the acknowledgement is enough).
       const bookingIntent =
         menuChoice === 'book_meeting' || validated.extracted.bookingIntent === true;
-      const bookingTriggered = bookingIntent && ctx.known.bookingIntent !== true;
+      const enteringScreening =
+        decision.action === 'ask_sell_intent' ||
+        decision.action === 'ask_neighborhood' ||
+        decision.action === 'ask_timeline' ||
+        decision.action === 'ask_currently_marketed';
+      const bookingTriggered =
+        bookingIntent && ctx.known.bookingIntent !== true && enteringScreening;
 
       // Assemble the ordered messages this turn will send.
       const plan: { part: OutboundPart; storeBody: string; usage?: LlmUsage[] }[] = [];

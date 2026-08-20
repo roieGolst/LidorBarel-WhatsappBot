@@ -796,4 +796,28 @@ describe('conversationTurn', () => {
     const sent = channel.sent.at(-1);
     expect(sent).toMatchObject({ kind: 'text', text: OFF_TOPIC_REDIRECT_MESSAGE });
   });
+
+  it('does not send the booking lead-in to an already-qualified lead who says "כן"', async () => {
+    const llm = new FakeLlmClient([
+      '{"intent":"ANSWER","confidence":0.9,"extracted":{"bookingIntent":true}}',
+    ]);
+    const channel = new FakeChannel();
+    const { conversationId } = await seed({
+      inbound: 'כן',
+      stage: 'qualified',
+      priorReply: QUALIFIED_HANDOFF_MESSAGE,
+    });
+
+    const result = await workflow({ db, llm, channel }).invoke(
+      conversationId,
+      config(conversationId),
+    );
+
+    // Just the acknowledgement — no redundant "let me collect a few details" lead-in.
+    expect(result.action).toBe('acknowledge_additional_info');
+    expect(
+      channel.sent.some((s) => s.kind === 'text' && s.text === BOOKING_LEADIN_MESSAGE),
+    ).toBe(false);
+    expect(channel.sent).toHaveLength(1);
+  });
 });

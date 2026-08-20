@@ -13,9 +13,28 @@
 export interface WhatsAppChannel {
   /** Sends a free-form text reply, returning the provider's message id. */
   sendText(to: string, text: string): Promise<OutboundResult>;
+
+  /**
+   * Sends a video by its Meta media id (uploaded and cached ahead of time; see
+   * `whatsapp/media.ts`), with an optional caption. Used for testimonial and
+   * promo videos. Throwing {@link InvalidMediaError} tells the caller the id has
+   * expired so it can re-upload and retry.
+   */
+  sendVideo(to: string, mediaId: string, caption?: string): Promise<OutboundResult>;
 }
 
 export interface OutboundResult {
   /** Provider (Meta) message id, stored against the outbound `messages` row. */
   providerMessageId: string;
+}
+
+/**
+ * Thrown by {@link WhatsAppChannel.sendVideo} when Meta rejects the media id as
+ * expired/unknown, so the caller can re-upload the file and retry once.
+ */
+export class InvalidMediaError extends Error {
+  constructor(readonly mediaId: string) {
+    super(`Meta rejected media id ${mediaId} as invalid or expired`);
+    this.name = 'InvalidMediaError';
+  }
 }

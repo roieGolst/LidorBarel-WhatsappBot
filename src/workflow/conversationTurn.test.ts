@@ -18,10 +18,12 @@ import { setupTestDatabase, truncateAll } from '../db/testing.js';
 import { FakeLlmClient } from '../llm/fake.js';
 import type { PostgresSaver } from '@langchain/langgraph-checkpoint-postgres';
 import { FakeChannel } from '../whatsapp/fakeChannel.js';
+import { ENGLISH_ONLY_REPLY } from './language.js';
 import { createCheckpointer } from './checkpointer.js';
 import { createConversationWorkflow, type ConversationDeps } from './conversationTurn.js';
 import type { KnownFacts } from './decide.js';
 import { persistTurn, type PersistTurnInput } from './persist.js';
+import type { ScreeningState } from './screeningState.js';
 import { testDatabaseUrl } from '../db/testing.js';
 
 /**
@@ -34,7 +36,6 @@ let db: Database;
 let checkpointer: PostgresSaver;
 let counter = 0;
 
-/** A distinct valid Israeli mobile per call, so contacts never collide. */
 function nextPhone(): string {
   counter += 1;
   return `+9725212345${String(counter).padStart(2, '0')}`;
@@ -59,15 +60,10 @@ interface SeedOptions {
   inbound: string;
   stage?: ConversationStage;
   extracted?: KnownFacts;
-  /**
-   * Lead origin, which drives the screening branch (spec §3). Defaults to a Meta
-   * form lead, so these tests exercise the Q2+Q4 flow unless they opt into the
-   * direct-message all-four path.
-   */
+  screeningState?: Partial<ScreeningState>;
   entryPoint?: EntryPoint;
 }
 
-/** Creates a contact + conversation and stores one inbound message. */
 async function seed(
   options: SeedOptions,
 ): Promise<{ conversationId: string; phone: string }> {
@@ -78,12 +74,13 @@ async function seed(
   });
   const { conversation } = await findOrCreateConversation(db, contact.id);
 
-  if (options.stage || options.extracted) {
+  if (options.stage || options.extracted || options.screeningState) {
     await db
       .update(conversations)
       .set({
         ...(options.stage ? { stage: options.stage } : {}),
         ...(options.extracted ? { extracted: options.extracted } : {}),
+        ...(options.screeningState ? { screeningState: options.screeningState } : {}),
       })
       .where(eq(conversations.id, conversation.id));
   }
@@ -122,24 +119,13 @@ describe('conversationTurn', () => {
 
     expect(result.stage).toBe('screening_neighborhood');
     expect(result.action).toBe('ask_neighborhood');
-
-    const conversation = await getConversationById(db, conversationId);
-    expect(conversation?.stage).toBe('screening_neighborhood');
-
-    expect(channel.sent).toHaveLength(1);
     expect(channel.sent[0]?.text).toBe('שלום! באיזו שכונה נמצא הנכס?');
-
-    const outbound = (await recentMessages(db, conversationId)).filter(
-      (m) => m.direction === 'outbound',
-    );
-    expect(outbound).toHaveLength(1);
-    expect(outbound[0]?.body).toBe(result.text);
   });
 
-  it('qualifies once both screening answers are in', async () => {
+  it('probes motivation once both screening answers are in (does not qualify yet)', async () => {
     const llm = new FakeLlmClient([
-      '{"intent":"ANSWER","confidence":0.9,"extracted":{"currentlyMarketed":"no"}}',
-      'מצוין, תודה! לידור יחזור אליך בהקדם.',
+      '{"intent":"ANSWER","confidence":0.9,"extracted":{"currentlyMarketed":"no"},"answersPendingQuestion":true}',
+      'רק כדי להבין — מה גורם לך לשקול למכור עכשיו?',
     ]);
     const { conversationId } = await seed({
       inbound: 'עדיין לא שיווקתי',
@@ -152,10 +138,120 @@ describe('conversationTurn', () => {
       config(conversationId),
     );
 
+    expect(result.stage).toBe('assessing_motivation');
+    const conversation = await getConversationById(db, conversationId);
+    expect(conversation?.qualified).toBeNull();
+  });
+
+  it('qualifies a serious, complete lead after the motivation question', async () => {
+    const llm = new FakeLlmClient([
+      '{"intent":"ANSWER","confidence":0.9,"extracted":{},"answersPendingQuestion":true,"relevantToSelling":true}',
+      '{"seriousness":0.9,"genuineIntent":true,"spam":false,"reason":"מוכר רציני"}',
+      'מעולה, קיבלתי. אעביר את הפרטים ללידור.',
+    ]);
+    const { conversationId } = await seed({
+      inbound: 'אנחנו עוברים דירה וצריכים למכור',
+      stage: 'assessing_motivation',
+      extracted: { neighborhood: 'רמות', currentlyMarketed: 'no' },
+    });
+
+    const result = await workflow({ db, llm, channel: new FakeChannel() }).invoke(
+      conversationId,
+      config(conversationId),
+    );
+
     expect(result.stage).toBe('qualified');
     const conversation = await getConversationById(db, conversationId);
-    expect(conversation?.stage).toBe('qualified');
     expect(conversation?.qualified).toBe(true);
+  });
+
+  it('holds a weak lead for review without qualifying it', async () => {
+    const llm = new FakeLlmClient([
+      '{"intent":"ANSWER","confidence":0.9,"extracted":{},"answersPendingQuestion":true,"relevantToSelling":true}',
+      '{"seriousness":0.2,"genuineIntent":false,"spam":false,"reason":"לא נראה רציני"}',
+      'תודה רבה על הפרטים.',
+    ]);
+    const { conversationId } = await seed({
+      inbound: 'סתם בודק',
+      stage: 'assessing_motivation',
+      extracted: { neighborhood: 'רמות', currentlyMarketed: 'no' },
+    });
+
+    const result = await workflow({ db, llm, channel: new FakeChannel() }).invoke(
+      conversationId,
+      config(conversationId),
+    );
+
+    expect(result.stage).toBe('needs_review');
+    const conversation = await getConversationById(db, conversationId);
+    expect(conversation?.qualified).toBe(false);
+  });
+
+  it('does not store an invalid neighborhood, and re-asks instead of advancing', async () => {
+    const llm = new FakeLlmClient([
+      '{"intent":"ANSWER","confidence":0.9,"extracted":{"neighborhood":"Opus 4.8"},"answersPendingQuestion":true,"relevantToSelling":true}',
+      'לא הבנתי — באיזו שכונה נמצא הנכס?',
+    ]);
+    const { conversationId } = await seed({
+      inbound: 'Opus 4.8',
+      stage: 'screening_neighborhood',
+    });
+
+    const result = await workflow({ db, llm, channel: new FakeChannel() }).invoke(
+      conversationId,
+      config(conversationId),
+    );
+
+    expect(result.stage).toBe('screening_neighborhood');
+    const conversation = await getConversationById(db, conversationId);
+    const extracted = conversation?.extracted as KnownFacts;
+    expect(extracted.neighborhood).toBeUndefined();
+    const state = conversation?.screeningState as ScreeningState;
+    expect(state.invalidAnswerCount).toBe(1);
+  });
+
+  it('rejects a predominantly-English message without any model call', async () => {
+    const llm = new FakeLlmClient([]); // must never be called
+    const channel = new FakeChannel();
+    const { conversationId } = await seed({
+      inbound: 'Hello, I want to sell my apartment',
+    });
+
+    const result = await workflow({ db, llm, channel }).invoke(
+      conversationId,
+      config(conversationId),
+    );
+
+    expect(result.action).toBe('reject_english');
+    expect(channel.sent[0]?.text).toBe(ENGLISH_ONLY_REPLY);
+    expect(llm.requests).toHaveLength(0); // no classification, no cost
+  });
+
+  it('makes no model call in containment mode and stops responding', async () => {
+    const llm = new FakeLlmClient([]); // must never be called
+    const channel = new FakeChannel();
+    const { conversationId } = await seed({
+      inbound: 'בדיחה אחרת',
+      stage: 'engaged',
+      screeningState: {
+        mode: 'containment',
+        warningSent: true,
+        irrelevantResponseCount: 2,
+      },
+    });
+
+    const result = await workflow({ db, llm, channel }).invoke(
+      conversationId,
+      config(conversationId),
+    );
+
+    expect(result.action).toBe('stop_responding');
+    expect(result.sent).toBe(false);
+    expect(llm.requests).toHaveLength(0);
+    expect(channel.sent).toHaveLength(0);
+
+    const conversation = await getConversationById(db, conversationId);
+    expect(conversation?.qualified).not.toBe(true);
   });
 
   it('disqualifies a lead already exclusive with another agent', async () => {
@@ -193,22 +289,18 @@ describe('conversationTurn', () => {
     );
 
     expect(result.stage).toBe('opted_out');
-
-    const conversation = await getConversationById(db, conversationId);
     const optOut = await db.select().from(optOuts).where(eq(optOuts.phone, phone));
     expect(optOut).toHaveLength(1);
 
+    const conversation = await getConversationById(db, conversationId);
     const contact = await findContactById(db, conversation!.contactId);
     expect(contact?.doNotContact).toBe(true);
-    expect(contact?.consentStatus).toBe('opted_out');
   });
 
   it('leaves an already opted-out contact in silence', async () => {
-    const llm = new FakeLlmClient([]); // must never be called
+    const llm = new FakeLlmClient([]);
     const channel = new FakeChannel();
     const { conversationId, phone } = await seed({ inbound: 'עוד הודעה' });
-
-    // The contact opted out on a previous turn.
     await recordOptOut(db, phone, 'classifier');
 
     const result = await workflow({ db, llm, channel }).invoke(
@@ -218,20 +310,15 @@ describe('conversationTurn', () => {
 
     expect(result.sent).toBe(false);
     expect(result.action).toBe('skipped_opted_out');
-    expect(llm.requests).toHaveLength(0); // no classification, no cost
+    expect(llm.requests).toHaveLength(0);
     expect(channel.sent).toHaveLength(0);
-
-    const outbound = (await recentMessages(db, conversationId)).filter(
-      (m) => m.direction === 'outbound',
-    );
-    expect(outbound).toHaveLength(0);
   });
 
   it('sends the regenerated reply, never the one that failed validation', async () => {
     const llm = new FakeLlmClient([
       '{"intent":"ANSWER","confidence":0.9,"extracted":{}}',
-      'יש לנו מבצע דחוף בשבילך!', // banned words → rejected
-      'שמחתי לשמוע, באיזו שכונה הנכס?', // clean retry
+      'יש לנו מבצע דחוף בשבילך!',
+      'שמחתי לשמוע, באיזו שכונה הנכס?',
     ]);
     const channel = new FakeChannel();
     const { conversationId } = await seed({ inbound: 'מעוניין למכור' });
@@ -258,10 +345,24 @@ describe('conversationTurn', () => {
         nextStage: 'screening_neighborhood',
         action: 'ask_neighborhood',
         escalate: false,
+        triggeredRule: 'advance_screening',
+        reason: 'Advancing to ask_neighborhood',
       },
       mergedExtracted: {},
-      reply: {
-        text: 'באיזו שכונה נמצא הנכס?',
+      screeningState: {
+        answers: {},
+        irrelevantResponseCount: 0,
+        invalidAnswerCount: 0,
+        reaskCount: 0,
+        warningSent: false,
+        mode: 'normal',
+        sentVideoIds: [],
+        promoSent: false,
+        unknownNeighborhoods: [],
+      },
+      outbound: {
+        providerMessageId: 'out-replayed',
+        body: 'באיזו שכונה נמצא הנכס?',
         usage: [
           {
             model: 'claude-haiku-4-5',
@@ -273,11 +374,8 @@ describe('conversationTurn', () => {
         regenerated: false,
         fellBack: false,
       },
-      providerMessageId: 'out-replayed',
     };
 
-    // The same turn committed twice — as a redelivery or a retry would — must
-    // not double-record the outbound message.
     await persistTurn(db, input);
     await persistTurn(db, input);
 

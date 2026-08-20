@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { InvalidMediaError } from './channel.js';
 import { CloudApiChannel } from './cloudApiChannel.js';
 
 const CREDENTIALS = {
@@ -95,6 +96,36 @@ describe('CloudApiChannel', () => {
 
     await expect(channel.sendText('+972521234501', 'hi')).rejects.toThrow(
       /without a message id/,
+    );
+  });
+
+  it('sends a video by media id with an optional caption', async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ messages: [{ id: 'wamid.VID' }] }));
+    const channel = new CloudApiChannel(CREDENTIALS);
+
+    const result = await channel.sendVideo('+972521234501', 'media-9', 'המלצה');
+
+    expect(result.providerMessageId).toBe('wamid.VID');
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(JSON.parse(init.body as string)).toEqual({
+      messaging_product: 'whatsapp',
+      to: '+972521234501',
+      type: 'video',
+      video: { id: 'media-9', caption: 'המלצה' },
+    });
+  });
+
+  it('maps an expired media id to InvalidMediaError so the caller can re-upload', async () => {
+    fetchMock.mockResolvedValue(
+      jsonResponse(
+        { error: { message: 'media id does not exist', code: 100 } },
+        { status: 400, ok: false },
+      ),
+    );
+    const channel = new CloudApiChannel(CREDENTIALS);
+
+    await expect(channel.sendVideo('+972521234501', 'media-x')).rejects.toBeInstanceOf(
+      InvalidMediaError,
     );
   });
 });

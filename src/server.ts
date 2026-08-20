@@ -3,6 +3,7 @@ import type { Config } from './config.js';
 import type { Database } from './db/client.js';
 import type { TurnProducer } from './queue/conversationQueue.js';
 import { buildLoggerOptions } from './logger.js';
+import { registerDebugRoutes } from './admin/debugRoutes.js';
 import { registerWhatsAppRoutes } from './whatsapp/routes.js';
 
 export interface ServerOptions {
@@ -61,6 +62,13 @@ export function buildServer({ db, config, producer }: ServerOptions): FastifyIns
   });
 
   registerWhatsAppRoutes(app, { db, config, ...(producer ? { producer } : {}) });
+
+  // A development-only window into a lead's full state (validation, off-topic
+  // counters, qualification score/reasons, transition history). Never registered
+  // in production, so a WhatsApp customer can never reach it.
+  if (config.nodeEnv !== 'production') {
+    registerDebugRoutes(app, { db });
+  }
 
   return app;
 }

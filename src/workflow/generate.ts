@@ -7,6 +7,7 @@ import {
   type LlmUsage,
 } from '../llm/client.js';
 import type { TurnAction } from './decide.js';
+import { ENGLISH_ONLY_REPLY } from './language.js';
 import { validateReply } from './validate.js';
 
 /**
@@ -60,6 +61,23 @@ Social proof (use ONLY when asked or handling an objection — never proactively
 
 The conversation so far is below. The final turn is a bracketed instruction telling you what to say next — it is your director, not the customer speaking. Follow it and write the reply.`;
 
+/**
+ * The final off-topic warning, sent verbatim (deterministic, no model). Kept
+ * spec-clean so it passes {@link validateReply}.
+ */
+export const OFF_TOPIC_WARNING =
+  'אם השיחה תמשיך בנושאים שאינם קשורים למכירת הנכס, לא אוכל להמשיך לטפל בפנייה.';
+
+/**
+ * Redirect phrasings for an off-topic message — a small pool so the same line is
+ * never repeated. The first is the spec's exact wording. Selected by the
+ * off-topic count (see {@link deterministicReply}).
+ */
+export const REDIRECT_VARIANTS = [
+  'נראה שההודעות האחרונות לא קשורות למכירת הנכס. אשמח להמשיך לעזור, אבל כדי שאוכל להעביר ללידור פנייה רלוונטית, צריך להתמקד בפרטי הנכס ובתהליך המכירה.',
+  'בוא נחזור לנכס עצמו. כדי שאוכל לעזור ולהעביר ללידור פנייה רלוונטית, נתמקד בפרטי הנכס ובתהליך המכירה.',
+] as const;
+
 /** What to tell the model to produce, per decided action. */
 const DIRECTIVES: Record<TurnAction, string> = {
   ask_sell_intent:
@@ -70,8 +88,12 @@ const DIRECTIVES: Record<TurnAction, string> = {
     'Ask, if they got an offer matching their expectations, how soon they would want to sell. One short question.',
   ask_currently_marketed:
     'Ask whether the property is currently being marketed — privately, through another agent, or not at all. One short question.',
+  ask_motivation:
+    'Ask ONE short, natural question to understand what is prompting them to consider selling now, or how serious they are — warm and conversational, never an interrogation. One question only.',
   proceed_qualified:
-    'You have everything you need. Warmly thank them for the details and tell them you are now passing everything to Lidor, who will review it and get back to them shortly. Do not ask a question.',
+    'Warmly acknowledge in ONE short line that you have the details and are passing everything to Lidor, who will get back to them as soon as possible. Do NOT promise a specific time (no minutes, no hours). Do NOT repeat the property address or the answers. Do not ask a question.',
+  hold_needs_review:
+    'Thank them briefly for the details in ONE short line. Do NOT say the details were forwarded to Lidor and do NOT promise that anyone will call. Keep it warm and neutral. Do not ask a question.',
   send_disqualification:
     'Politely close the conversation: thank them for their time, leave the door open for the future if they decide to sell or want advice, apply no pressure, wish them well. Do not ask a question.',
   acknowledge_opt_out:
@@ -80,7 +102,17 @@ const DIRECTIVES: Record<TurnAction, string> = {
     'Answer their question briefly and helpfully in Lidor’s voice, using the KNOWLEDGE above. Do not over-explain.',
   handle_objection:
     'Acknowledge their concern with empathy and address it briefly, using the objection guidance above. You may ask one gentle follow-up.',
+  send_testimonial:
+    'Share brief, concrete social proof in Lidor’s voice — experience and results — because the customer asked for it. No pressure, no promises. Do not ask a question.',
+  send_investment_promo:
+    'Briefly acknowledge their interest in buying/investing and note that Lidor works with an active database of buyers and investors and can help. No pressure. Do not ask a question.',
   clarify: 'You did not fully understand. Ask them to rephrase. One short question.',
+  // Deterministic actions — never sent through the model; text comes from
+  // deterministicReply. Present only to keep the record exhaustive.
+  reject_english: ENGLISH_ONLY_REPLY,
+  redirect_off_topic: REDIRECT_VARIANTS[0],
+  warn_off_topic: OFF_TOPIC_WARNING,
+  stop_responding: '',
 };
 
 /**
@@ -93,15 +125,52 @@ export const SAFE_VARIANTS: Record<TurnAction, string> = {
   ask_neighborhood: 'באיזו שכונה נמצא הנכס?',
   ask_timeline: 'אם תקבל הצעה שמתאימה לציפיות שלך, תוך כמה זמן תרצה למכור?',
   ask_currently_marketed: 'האם הנכס משווק כרגע?',
-  proceed_qualified:
-    'מעולה, תודה רבה על כל הפרטים. אני מעביר עכשיו הכול ללידור, שיעבור על הנתונים ויחזור אליך בהקדם עם המשך התהליך.',
+  ask_motivation: 'רק כדי להבין קצת יותר — מה גורם לך לשקול את המכירה עכשיו?',
+  proceed_qualified: 'מעולה, קיבלתי. אעביר את כל הפרטים ללידור והוא יחזור אליך בהקדם.',
+  hold_needs_review:
+    'תודה רבה על הפרטים שמסרת. נעבור עליהם ונחזור אליך אם נצטרך עוד מידע. יום טוב 🙂',
   send_disqualification:
     'תודה רבה על הזמן שלך. אם בעתיד תחליט שהגיע הזמן למכור, או שתרצה להתייעץ, הדלת שלנו תמיד פתוחה ונשמח לעזור. בהצלחה ויום נפלא 😊',
   acknowledge_opt_out: 'קיבלתי, לא נפנה אליך יותר. תודה.',
   answer_faq: 'אשמח לעזור. מה תרצה לדעת?',
   handle_objection: 'בטח, זה לגמרי מובן. מה ההתלבטות העיקרית שלך כרגע?',
+  send_testimonial:
+    'בשמחה. לידור פעיל בבאר שבע מעל 4 שנים, עם עשרות עסקאות מוצלחות ומאגר קונים ומשקיעים פעיל. נכס שהיה תקוע חודשים נמכר אצלו תוך שבוע לקונה שחיכה באזור.',
+  send_investment_promo:
+    'מעולה. לידור עובד עם מאגר פעיל של קונים ומשקיעים ומלווה גם רוכשים למטרות השקעה. אשמח שיחזור אליך עם האפשרויות המתאימות.',
   clarify: 'לא הבנתי עד הסוף. אפשר לנסח שוב?',
+  // Deterministic — see deterministicReply; `stop_responding` sends nothing.
+  reject_english: ENGLISH_ONLY_REPLY,
+  redirect_off_topic: REDIRECT_VARIANTS[0],
+  warn_off_topic: OFF_TOPIC_WARNING,
+  stop_responding: '',
 };
+
+/**
+ * The deterministic reply for an action that must NOT go through the model, or
+ * `null` when the action is not deterministic (`stop_responding` sends nothing
+ * and also returns `null`, so the caller checks the action separately).
+ *
+ * `offTopicCount` selects the redirect variant so a repeated off-topic message
+ * never gets the identical line.
+ */
+export function deterministicReply(action: TurnAction, offTopicCount = 1): string | null {
+  switch (action) {
+    case 'reject_english':
+      return ENGLISH_ONLY_REPLY;
+    case 'warn_off_topic':
+      return OFF_TOPIC_WARNING;
+    case 'redirect_off_topic': {
+      const index = Math.min(
+        Math.max(offTopicCount - 1, 0),
+        REDIRECT_VARIANTS.length - 1,
+      );
+      return REDIRECT_VARIANTS[index]!;
+    }
+    default:
+      return null;
+  }
+}
 
 export interface GenerateInput {
   action: TurnAction;

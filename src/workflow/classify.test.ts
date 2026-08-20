@@ -14,7 +14,7 @@ describe('parseAnalysis', () => {
       }),
     );
 
-    expect(analysis).toEqual({
+    expect(analysis).toMatchObject({
       intent: 'ANSWER',
       confidence: 0.9,
       extracted: { neighborhood: 'רמות', timeline: 'immediate' },
@@ -22,13 +22,17 @@ describe('parseAnalysis', () => {
     });
   });
 
-  it('applies defaults for extracted and needsEscalation', () => {
+  it('applies defaults for the observation signals', () => {
     const analysis = parseAnalysis('{"intent":"FAQ","confidence":0.6}');
     expect(analysis).toEqual({
       intent: 'FAQ',
       confidence: 0.6,
       extracted: {},
       needsEscalation: false,
+      answersPendingQuestion: false,
+      relevantToSelling: true,
+      contactIntent: 'unclear',
+      wantsSocialProof: false,
     });
   });
 

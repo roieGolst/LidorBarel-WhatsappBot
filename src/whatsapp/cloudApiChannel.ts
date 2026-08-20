@@ -1,7 +1,11 @@
 import { z } from 'zod';
 import { getConfig } from '../config.js';
 import { getLogger } from '../logger.js';
-import type { OutboundResult, WhatsAppChannel } from './channel.js';
+import {
+  InvalidMediaError,
+  type OutboundResult,
+  type WhatsAppChannel,
+} from './channel.js';
 
 /**
  * The credentials a {@link CloudApiChannel} needs to reach Meta.
@@ -50,7 +54,35 @@ export class CloudApiChannel implements WhatsAppChannel {
 
   constructor(private readonly credentials: CloudApiCredentials) {}
 
-  async sendText(to: string, text: string): Promise<OutboundResult> {
+  sendText(to: string, text: string): Promise<OutboundResult> {
+    return this.send({
+      messaging_product: 'whatsapp',
+      to,
+      type: 'text',
+      text: { body: text },
+    });
+  }
+
+  async sendVideo(to: string, mediaId: string, caption = ''): Promise<OutboundResult> {
+    try {
+      return await this.send({
+        messaging_product: 'whatsapp',
+        to,
+        type: 'video',
+        video: { id: mediaId, ...(caption ? { caption } : {}) },
+      });
+    } catch (err) {
+      // An expired/unknown media id is recoverable: the caller re-uploads and
+      // retries. Distinguish it from a genuine send failure.
+      if (err instanceof SendError && err.isInvalidMedia) {
+        throw new InvalidMediaError(mediaId);
+      }
+      throw err;
+    }
+  }
+
+  /** POSTs one message payload and returns the provider id. */
+  private async send(payload: Record<string, unknown>): Promise<OutboundResult> {
     const { accessToken, phoneNumberId, graphApiVersion } = this.credentials;
     const url = `https://graph.facebook.com/${graphApiVersion}/${phoneNumberId}/messages`;
 
@@ -63,12 +95,7 @@ export class CloudApiChannel implements WhatsAppChannel {
         Authorization: `Bearer ${accessToken}`,
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({
-        messaging_product: 'whatsapp',
-        to,
-        type: 'text',
-        text: { body: text },
-      }),
+      body: JSON.stringify(payload),
     });
 
     if (!response.ok) {
@@ -82,9 +109,7 @@ export class CloudApiChannel implements WhatsAppChannel {
         { status: response.status, phoneNumberId },
         'WhatsApp Cloud API send failed',
       );
-      throw new Error(
-        `WhatsApp Cloud API send failed: ${response.status} ${response.statusText} — ${detail}`,
-      );
+      throw new SendError(response.status, response.statusText, detail);
     }
 
     const body: unknown = await response.json();
@@ -99,6 +124,30 @@ export class CloudApiChannel implements WhatsAppChannel {
     // messages[0] is guaranteed present: the schema requires a non-empty array.
     const providerMessageId = parsed.data.messages[0]!.id;
     return { providerMessageId };
+  }
+}
+
+/** A failed Cloud API send, carrying enough to classify a bad-media error. */
+class SendError extends Error {
+  constructor(
+    readonly status: number,
+    statusText: string,
+    readonly detail: string,
+  ) {
+    super(`WhatsApp Cloud API send failed: ${status} ${statusText} — ${detail}`);
+    this.name = 'SendError';
+  }
+
+  /**
+   * Whether the failure is an expired/unknown media id rather than a general
+   * error. Meta reports this on a 400 with error code 100 (subcode 33) or a
+   * message about the media id — matched loosely so a wording change still
+   * triggers the re-upload path.
+   */
+  get isInvalidMedia(): boolean {
+    if (this.status !== 400) return false;
+    const d = this.detail.toLowerCase();
+    return d.includes('media') && (d.includes('id') || d.includes('exist'));
   }
 }
 

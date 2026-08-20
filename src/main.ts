@@ -15,6 +15,8 @@ import {
 import { buildServer } from './server.js';
 import { createCheckpointer } from './workflow/checkpointer.js';
 import { createCloudApiChannel } from './whatsapp/cloudApiChannel.js';
+import { MetaMediaUploader } from './whatsapp/media.js';
+import { refreshMediaCache } from './whatsapp/mediaCache.js';
 
 /** Loads configuration, reporting problems clearly before the logger exists. */
 function loadConfig(): Config {
@@ -164,6 +166,25 @@ async function main(): Promise<void> {
   });
 
   await app.listen({ port: config.port, host: '0.0.0.0' });
+
+  // Refresh the testimonial/promo media cache in the background — after the
+  // server is already listening, so it never delays serving conversations. A
+  // failure here is logged, not fatal: the bot still answers in text.
+  if (config.metaAccessToken && config.metaPhoneNumberId) {
+    const uploader = new MetaMediaUploader({
+      accessToken: config.metaAccessToken,
+      phoneNumberId: config.metaPhoneNumberId,
+      graphApiVersion: config.metaGraphApiVersion,
+    });
+    void refreshMediaCache({
+      db,
+      uploader,
+      assetsRoot: config.assetsDir,
+      logger: log,
+    }).catch((err: unknown) => {
+      log.error({ err }, 'media cache refresh failed');
+    });
+  }
 
   log.info(
     {

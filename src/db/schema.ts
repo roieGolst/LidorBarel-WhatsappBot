@@ -75,7 +75,13 @@ export const conversationStage = pgEnum('conversation_stage', [
   'screening_neighborhood',
   'screening_timeline',
   'screening_currently_marketed',
+  // After the four screening answers are in and valid, one gentle question
+  // probes motivation/seriousness before any handoff (spec + review req #2).
+  'assessing_motivation',
   'qualified',
+  // In-between: enough was collected to decide, but the lead is not clearly
+  // qualified. Held for review — the customer is NOT told it was forwarded.
+  'needs_review',
   'disqualified',
   'appointment_proposed',
   'appointment_pending',
@@ -93,6 +99,10 @@ export const disqualificationReason = pgEnum('disqualification_reason', [
   'no_urgency',
   'exclusive_with_other_agent',
   'uncooperative',
+  // The conversation was spam, a test, or abusive/manipulative.
+  'spam_or_abuse',
+  // The customer kept the conversation off-topic through the warning and stop.
+  'off_topic_abandoned',
 ]);
 
 export const messageDirection = pgEnum('message_direction', ['inbound', 'outbound']);
@@ -284,8 +294,24 @@ export const conversations = pgTable(
     /**
      * Screening answers and anything else extracted from the conversation.
      * Q1/Q3 are pre-filled from the lead form; Q2/Q4 come from the bot.
+     *
+     * Only *validated* facts land here — an answer that failed validation (a
+     * nonsensical property type, an off-topic reply) is never stored as genuine
+     * property info. See `workflow/validateAnswer.ts` and `screeningState`.
      */
     extracted: jsonb('extracted').notNull().default({}),
+
+    /**
+     * Validation, off-topic containment, and qualification bookkeeping — the
+     * reasoning behind the stage, not the stage itself. Shape (see
+     * `screeningStateSchema`): per-answer `{value,isValid,reason}`,
+     * `irrelevantResponseCount`, `warningSent`, `mode` (normal | containment),
+     * `sentVideoIds`, and the `qualification` result `{status,score,reasons}`.
+     *
+     * Kept separate from `extracted` (business facts) so the debug endpoint and
+     * the audit trail can explain *why* a lead was or wasn't forwarded.
+     */
+    screeningState: jsonb('screening_state').notNull().default({}),
 
     /**
      * When the 24-hour customer service window closes. Past this, only approved
@@ -402,6 +428,52 @@ export const appointmentRequests = pgTable(
     index('appointment_requests_conversation_idx').on(table.conversationId),
     index('appointment_requests_status_idx').on(table.status),
   ],
+);
+
+// ---------------------------------------------------------------------------
+// Media assets (testimonial / promo videos cached at Meta)
+// ---------------------------------------------------------------------------
+
+/**
+ * A local media file (testimonial or promo video) and its cached Meta media id.
+ *
+ * Meta media ids are reusable but expire (~30 days) and can be invalidated, so
+ * the bot must not re-upload on every send. This table is the cache: on startup
+ * the media files under `assets/recommendations/` are scanned, and a file is
+ * (re)uploaded only when it is new, its bytes changed (`sha256`), or its stored
+ * id has aged past the refresh window. `mediaId` is then reused for sends until
+ * the next refresh. Postgres remains the source of truth; the Meta upload is a
+ * projection that can always be rebuilt from the files.
+ */
+export const mediaAssets = pgTable(
+  'media_assets',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+
+    /** Path relative to the assets root; the stable identity of an asset. */
+    path: text('path').notNull(),
+    /** SHA-256 of the file bytes, so a changed file forces a re-upload. */
+    sha256: text('sha256').notNull(),
+
+    /** Meta media id, reused for sends until refreshed. Null before first upload. */
+    mediaId: text('media_id'),
+
+    /** From the sidecar metadata: `testimonial` | `promo_investment`. */
+    type: text('type').notNull(),
+    /** Neighborhoods this video targets, canonical names. Empty = general. */
+    neighborhoods: jsonb('neighborhoods').notNull().default([]),
+    /** Intended audience: `seller` | `buyer` | `investor`. */
+    audience: text('audience'),
+
+    /** When the current `mediaId` was uploaded to Meta. */
+    uploadedAt: timestamp('uploaded_at', { withTimezone: true }),
+    /** Last time the cache refresh confirmed this row against the file. */
+    lastVerifiedAt: timestamp('last_verified_at', { withTimezone: true }),
+
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [uniqueIndex('media_assets_path_unique').on(table.path)],
 );
 
 // ---------------------------------------------------------------------------

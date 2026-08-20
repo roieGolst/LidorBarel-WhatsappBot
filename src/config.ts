@@ -74,6 +74,12 @@ const configSchema = z.object({
 
   /** API key for the Anthropic Messages API used by the conversation workflow. */
   anthropicApiKey: z.string().min(1).optional(),
+
+  /**
+   * Root directory for local media assets. The testimonial/promo videos live in
+   * its `recommendations/` subdirectory and are uploaded to Meta on startup.
+   */
+  assetsDir: z.string().min(1).default('assets'),
 });
 
 export type Config = z.infer<typeof configSchema>;
@@ -98,6 +104,7 @@ function readEnv(env: NodeJS.ProcessEnv): Record<string, unknown> {
     metaPhoneNumberId: env.META_PHONE_NUMBER_ID,
     metaGraphApiVersion: env.META_GRAPH_API_VERSION,
     anthropicApiKey: env.ANTHROPIC_API_KEY,
+    assetsDir: env.ASSETS_DIR,
   };
 }
 
@@ -115,6 +122,7 @@ const ENV_VAR_NAMES: Record<keyof Config, string> = {
   metaPhoneNumberId: 'META_PHONE_NUMBER_ID',
   metaGraphApiVersion: 'META_GRAPH_API_VERSION',
   anthropicApiKey: 'ANTHROPIC_API_KEY',
+  assetsDir: 'ASSETS_DIR',
 };
 
 export class ConfigError extends Error {

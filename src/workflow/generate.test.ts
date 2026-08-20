@@ -5,10 +5,14 @@ import type { TurnAction } from './decide.js';
 import { generateReply, generateValidatedReply, SAFE_VARIANTS } from './generate.js';
 import { validateReply } from './validate.js';
 
-const ALL_ACTIONS = Object.keys(SAFE_VARIANTS) as TurnAction[];
+// Every action carries a sendable safe variant except `stop_responding`, which
+// deliberately sends nothing (empty string).
+const SENDABLE_ACTIONS = (Object.keys(SAFE_VARIANTS) as TurnAction[]).filter(
+  (action) => action !== 'stop_responding',
+);
 
 describe('SAFE_VARIANTS', () => {
-  it.each(ALL_ACTIONS)('the safe variant for %s passes validation', (action) => {
+  it.each(SENDABLE_ACTIONS)('the safe variant for %s passes validation', (action) => {
     expect(validateReply(SAFE_VARIANTS[action]).ok).toBe(true);
   });
 });

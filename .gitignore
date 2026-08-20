@@ -37,3 +37,10 @@ Thumbs.db
 
 # Local database volumes
 .docker-data/
+
+# Media asset binaries — videos are uploaded to Meta, not committed. The
+# directory structure, README, and sidecar JSON metadata are kept.
+assets/recommendations/*.mp4
+assets/recommendations/*.webm
+assets/recommendations/*.mov
+assets/recommendations/*.3gp

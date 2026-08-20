@@ -17,6 +17,9 @@ const TERMINAL_STAGES = [
   'closed_no_response',
   'opted_out',
   'disqualified',
+  // In-between: the lead was assessed and held for review, not forwarded. A
+  // later inbound is a fresh opportunity, not a reopen of this decision.
+  'needs_review',
   'handed_off',
   'error',
 ] as const satisfies readonly ConversationStage[];

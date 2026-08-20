@@ -36,3 +36,21 @@ export async function guardedSend(
   }
   return channel.sendText(to, text);
 }
+
+/**
+ * The media equivalent of {@link guardedSend}. Testimonial and promo videos are
+ * outbound messages too, so they pass the same opt-out choke point — a video must
+ * never reach someone who asked us to stop.
+ */
+export async function guardedSendMedia(
+  db: Database,
+  channel: WhatsAppChannel,
+  to: string,
+  mediaId: string,
+  caption?: string,
+): Promise<OutboundResult> {
+  if (await isOptedOut(db, to)) {
+    throw new OptedOutError(to);
+  }
+  return channel.sendVideo(to, mediaId, caption);
+}

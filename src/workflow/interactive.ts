@@ -34,7 +34,7 @@ export const WELCOME_MESSAGE =
  * AI turn when a limit is hit, so they must stay clean and on-voice on their own.
  */
 export const THROTTLE_MESSAGE =
-  'קיבלתי את ההודעות שלך 🙏 אני חוזר אליך עוד רגע — אין צורך לשלוח שוב.';
+  'קיבלתי את כל הפרטים, תודה! 🙏 יש לי מספיק כדי להעביר את זה ללידור — הוא יעבור על הכול ויחזור אליך בהקדם. אין צורך לשלוח הודעות נוספות בינתיים.';
 export const QUOTA_HANDOFF_MESSAGE =
   'תודה על כל הפרטים! אני מעביר אותך עכשיו ללידור, שימשיך איתך אישית ויחזור אליך בהקדם.';
 export const EXPIRED_MESSAGE =

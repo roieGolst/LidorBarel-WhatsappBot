@@ -290,6 +290,19 @@ describe('decideTransition', () => {
     expect(decision.nextStage).toBe('qualified');
   });
 
+  it('answers a question from a qualified lead instead of brushing it off', () => {
+    // Roie asked a clarifying "את מה?" after qualifying and got the canned ack.
+    // A message with no new property details must get a real model reply.
+    const decision = decideTransition(
+      'qualified',
+      analysis({ intent: 'UNCLEAR', confidence: 0.3 }),
+      { sellIntent: 'ready', neighborhood: 'רמות', currentlyMarketed: 'no' },
+    );
+    expect(decision.action).toBe('assist_qualified');
+    expect(decision.action).not.toBe('acknowledge_additional_info');
+    expect(decision.nextStage).toBe('qualified');
+  });
+
   it('escalates the reply when the classifier flags frustration', () => {
     const decision = decideTransition('new', analysis({ needsEscalation: true }));
     expect(decision.escalate).toBe(true);

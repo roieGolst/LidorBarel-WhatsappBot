@@ -831,6 +831,7 @@ describe('conversationTurn', () => {
   it('does not send the booking lead-in to an already-qualified lead who says "כן"', async () => {
     const llm = new FakeLlmClient([
       '{"intent":"ANSWER","confidence":0.9,"extracted":{"bookingIntent":true}}',
+      'בטח, לידור יחזור אליך בהקדם. יש עוד משהו שחשוב שיידע?',
     ]);
     const channel = new FakeChannel();
     const { conversationId } = await seed({
@@ -844,8 +845,9 @@ describe('conversationTurn', () => {
       config(conversationId),
     );
 
-    // Just the acknowledgement — no redundant "let me collect a few details" lead-in.
-    expect(result.action).toBe('acknowledge_additional_info');
+    // A real reply (no new details volunteered) — no redundant "let me collect a
+    // few details" booking lead-in for an already-qualified lead.
+    expect(result.action).toBe('assist_qualified');
     expect(
       channel.sent.some((s) => s.kind === 'text' && s.text === BOOKING_LEADIN_MESSAGE),
     ).toBe(false);

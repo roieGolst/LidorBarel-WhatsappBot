@@ -42,7 +42,8 @@ export type TurnAction =
   | 'send_social_proof' // main-menu "testimonials"
   | 'handoff_to_human' // main-menu "talk to me" / "book a meeting"
   | 'stay_on_topic' // off-topic chatter → keep the conversation on the property
-  | 'acknowledge_additional_info'; // extra details after the lead already qualified
+  | 'acknowledge_additional_info' // extra details after the lead already qualified
+  | 'assist_qualified'; // a question/comment after qualifying → a real reply, not an ack
 
 export interface Decision {
   nextStage: ConversationStage;
@@ -165,11 +166,18 @@ export function decideTransition(
     return { nextStage: holdStage(current), action: 'stay_on_topic', escalate: false };
   }
 
-  // 4. Already qualified: the conversation stays open for more property details,
-  //    which are appended to the lead. Don't re-run screening or re-send the
-  //    handoff — just acknowledge.
+  // 4. Already qualified: the conversation stays OPEN and behaves like a real
+  //    assistant. New property details volunteered are appended to the lead with a
+  //    brief ack; ANYTHING ELSE — a question, a clarification ("את מה?"), a comment
+  //    — is answered by the model, not brushed off with the same canned ack. Never
+  //    re-run screening or re-send the handoff. (The dismissive "I already have
+  //    everything, no more needed" line is reserved for the rate-limit window; see
+  //    THROTTLE_MESSAGE — it must not be how the bot replies to a normal message.)
   if (current === 'qualified') {
-    return { nextStage: 'qualified', action: 'acknowledge_additional_info', escalate };
+    if (confident && analysis.extracted.additionalNotes !== undefined) {
+      return { nextStage: 'qualified', action: 'acknowledge_additional_info', escalate };
+    }
+    return { nextStage: 'qualified', action: 'assist_qualified', escalate: true };
   }
 
   // 5. Screening flow — the default. A greeting, filler ("יאללה"), an unclear or

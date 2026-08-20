@@ -110,14 +110,14 @@ describe('ingestMessage', () => {
     expect(await db.select().from(conversations)).toHaveLength(1);
   });
 
-  // Someone disqualified months ago who returns is a new opportunity. Reopening
-  // the old conversation would attach a stale outcome to fresh answers.
-  it('starts a new conversation when the previous one ended', async () => {
+  // One conversation record per contact, always — a return reopens the same row
+  // in place rather than spawning a duplicate that would fracture their history.
+  it('reopens the previous conversation in place instead of duplicating it', async () => {
     const first = await ingestMessage(db, messageEvent({ providerMessageId: 'wamid.1' }));
 
     await db
       .update(conversations)
-      .set({ stage: 'disqualified' })
+      .set({ stage: 'disqualified', qualified: false })
       .where(eq(conversations.id, first.conversationId!));
 
     const second = await ingestMessage(
@@ -125,8 +125,37 @@ describe('ingestMessage', () => {
       messageEvent({ providerMessageId: 'wamid.2' }),
     );
 
-    expect(second.conversationId).not.toBe(first.conversationId);
-    expect(second.conversationCreated).toBe(true);
+    // Same record, reopened clean — never a second row for the same contact.
+    expect(second.conversationId).toBe(first.conversationId);
+    expect(second.conversationCreated).toBe(false);
+    expect(await db.select().from(conversations)).toHaveLength(1);
+
+    const [reopened] = await db
+      .select()
+      .from(conversations)
+      .where(eq(conversations.id, first.conversationId!));
+    expect(reopened?.stage).toBe('engaged');
+    expect(reopened?.qualified).toBeNull();
+  });
+
+  // A banned / opted-out contact must never get a duplicate record or a fresh
+  // start — the conversation is reused so the worker can stay silent.
+  it('reuses a banned conversation instead of creating a new one', async () => {
+    const first = await ingestMessage(db, messageEvent({ providerMessageId: 'wamid.1' }));
+
+    await db
+      .update(conversations)
+      .set({ stage: 'blocked' })
+      .where(eq(conversations.id, first.conversationId!));
+
+    const second = await ingestMessage(
+      db,
+      messageEvent({ providerMessageId: 'wamid.2' }),
+    );
+
+    expect(second.conversationId).toBe(first.conversationId);
+    expect(second.conversationCreated).toBe(false);
+    expect(await db.select().from(conversations)).toHaveLength(1);
   });
 
   // The window decides whether the bot may reply in its own words at all.

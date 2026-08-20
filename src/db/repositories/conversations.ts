@@ -6,12 +6,13 @@ export type Conversation = typeof conversations.$inferSelect;
 export type ConversationStage = Conversation['stage'];
 
 /**
- * Stages from which a conversation will never continue.
+ * Stages from which a conversation will never continue on its own.
  *
- * A new inbound message from someone whose last conversation ended in one of
- * these starts a fresh conversation rather than reopening the old one. Someone
- * disqualified in March who returns in October is genuinely a new opportunity,
- * and merging the two would leave the old outcome attached to new answers.
+ * There is exactly **one conversation record per contact** — a returning contact
+ * never spawns a duplicate. A terminal end is handled without creating a new row:
+ * a ban/opt-out end is reused untouched (the bot stays silent), and any other
+ * terminal end is *reopened in place* so a genuine return continues in the same
+ * record with a clean slate rather than dragging the old outcome onto new answers.
  */
 const TERMINAL_STAGES = [
   'closed_no_response',
@@ -19,6 +20,18 @@ const TERMINAL_STAGES = [
   'disqualified',
   'handed_off',
   'blocked',
+  'error',
+] as const satisfies readonly ConversationStage[];
+
+/**
+ * Terminal ends a returning contact may legitimately continue from. These are
+ * *reopened in place* — same record, stage reset to `engaged` and the prior
+ * outcome cleared — so there is no duplicate and no stale outcome on new answers.
+ */
+const REOPENABLE_STAGES = [
+  'closed_no_response',
+  'disqualified',
+  'handed_off',
   'error',
 ] as const satisfies readonly ConversationStage[];
 
@@ -38,7 +51,7 @@ export async function getConversationById(
   return found;
 }
 
-/** Returns the contact's open conversation, if they have one. */
+/** Returns the contact's open (non-terminal) conversation, if they have one. */
 export async function findActiveConversation(
   db: DbClient,
   contactId: string,
@@ -57,24 +70,66 @@ export async function findActiveConversation(
   return found;
 }
 
+/** Returns the contact's most recent conversation, whatever its stage. */
+export async function findLatestConversation(
+  db: DbClient,
+  contactId: string,
+): Promise<Conversation | undefined> {
+  const [found] = await db
+    .select()
+    .from(conversations)
+    .where(eq(conversations.contactId, contactId))
+    .orderBy(desc(conversations.createdAt))
+    .limit(1);
+  return found;
+}
+
 /**
- * Returns the contact's open conversation, creating one if none exists.
+ * Returns the contact's conversation, creating one only if they have none.
  *
- * Callers hold a transaction so that this and the message insert commit
- * together — a conversation created without its triggering message would leave
- * a lead in the CRM with no visible reason for existing.
+ * **One conversation record per contact, always** — a returning contact never
+ * gets a duplicate row (which would fracture their history and break the CRM
+ * projection). The single record is reused:
+ *  - an open conversation continues as-is;
+ *  - a ban/opt-out end is reused untouched, so the worker stays silent (an
+ *    abuser or opted-out person is never handed a fresh start or re-greeted);
+ *  - any other terminal end is reopened in place — the same row, reset to a
+ *    clean `engaged` state — so a genuine return continues without a duplicate
+ *    and without the old outcome tainting new answers.
+ *
+ * Callers hold a transaction so that this and the message insert commit together.
  */
 export async function findOrCreateConversation(
   db: DbClient,
   contactId: string,
 ): Promise<{ conversation: Conversation; created: boolean }> {
-  const existing = await findActiveConversation(db, contactId);
-  if (existing) {
-    return { conversation: existing, created: false };
+  const latest = await findLatestConversation(db, contactId);
+
+  if (!latest) {
+    const [created] = await db.insert(conversations).values({ contactId }).returning();
+    return { conversation: created!, created: true };
   }
 
-  const [created] = await db.insert(conversations).values({ contactId }).returning();
-  return { conversation: created!, created: true };
+  // Reopen a non-ban terminal end in place, so a returning contact continues in
+  // the same record with a clean slate rather than a stale outcome.
+  if ((REOPENABLE_STAGES as readonly string[]).includes(latest.stage)) {
+    const [reopened] = await db
+      .update(conversations)
+      .set({
+        stage: 'engaged',
+        extracted: {},
+        qualified: null,
+        disqualificationReason: null,
+        priorityScore: null,
+        updatedAt: new Date(),
+      })
+      .where(eq(conversations.id, latest.id))
+      .returning();
+    return { conversation: reopened!, created: false };
+  }
+
+  // Open, or a ban/opt-out end: reuse untouched.
+  return { conversation: latest, created: false };
 }
 
 /**

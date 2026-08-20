@@ -106,22 +106,40 @@ export const INTRO_VIDEO_PATH = resolve(process.cwd(), 'assets/intro_video.mp4')
 
 /**
  * The opening main menu (spec §8 `main_buttons`, conversation_style
- * hybrid_buttons_first). After the welcome + video, the person is shown these
- * five choices and picks how to start — `check_fit` begins the screening, the
- * rest branch elsewhere. Four options fit a list. Booking a meeting runs the same
- * screening flow (a call is booked only after a few quick details), so there is
- * no separate "talk to a human" shortcut.
+ * hybrid_buttons_first). The two actions that move a lead forward — a fit check
+ * and booking a meeting — come first, then the softer options. Booking runs the
+ * same screening flow (a call is booked only after a few quick details), so there
+ * is no separate "talk to a human" shortcut.
+ *
+ * `MAIN_MENU` is the full list, shown when a person restarts or goes back. The
+ * OPENING is different (see {@link OPENING_MENU_BUTTONS}): it rides on the intro
+ * video as reply buttons, and WhatsApp allows at most 3 buttons on a media
+ * message — so the two priorities plus "learn more" are the buttons, and
+ * testimonials stays in this list and reachable any time by asking ("יש המלצות?").
  */
 export const MAIN_MENU = {
-  body: 'איך תרצה להתחיל? אפשר לבדוק התאמה מהירה, לשמוע פרטים, או לקבוע פגישה.',
+  body: 'איך תרצה להתחיל? אפשר לבדוק התאמה מהירה, לקבוע פגישה, לשמוע פרטים, או לראות המלצות.',
   buttonLabel: 'בחירת אפשרות',
   rows: [
     { id: 'menu:check_fit', title: 'בדיקת התאמה ✅' },
-    { id: 'menu:learn_more', title: 'ℹ️ לשמוע פרטים' },
     { id: 'menu:book_meeting', title: 'קביעת פגישה 📅' },
+    { id: 'menu:learn_more', title: 'ℹ️ לשמוע פרטים' },
     { id: 'menu:testimonials', title: 'המלצות ⭐' },
   ],
 } as const;
+
+/**
+ * The opening menu as reply BUTTONS, attached to the intro video (§2) so the
+ * clip, the welcome and the options all arrive as one message. WhatsApp caps a
+ * media-header button message at 3 buttons, so these are the priority actions —
+ * a fit check and booking first, then learning more; testimonials lives in
+ * {@link MAIN_MENU} and is reachable by asking.
+ */
+export const OPENING_MENU_BUTTONS: readonly ReplyButton[] = [
+  { id: 'menu:check_fit', title: 'בדיקת התאמה ✅' },
+  { id: 'menu:book_meeting', title: 'קביעת פגישה 📅' },
+  { id: 'menu:learn_more', title: 'ℹ️ לשמוע פרטים' },
+];
 
 /** A main-menu choice, resolved from the tapped row (or typed text). */
 export type MainMenuChoice = 'check_fit' | 'learn_more' | 'book_meeting' | 'testimonials';

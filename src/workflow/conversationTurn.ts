@@ -39,6 +39,7 @@ import {
   MAIN_MENU,
   mainMenuChoiceFor,
   OFF_TOPIC_REDIRECT_MESSAGE,
+  OPENING_MENU_BUTTONS,
   screeningAnswerFor,
   screeningQuestionFor,
   WELCOME_MESSAGE,
@@ -92,6 +93,7 @@ export type OutboundPart =
   | { kind: 'text'; text: string }
   | { kind: 'video'; filePath: string; caption?: string }
   | { kind: 'buttons'; body: string; buttons: ReplyButton[] }
+  | { kind: 'video_buttons'; filePath: string; body: string; buttons: ReplyButton[] }
   | { kind: 'list'; body: string; buttonLabel: string; rows: ListRow[] };
 
 export interface TurnContext {
@@ -250,6 +252,8 @@ function sendOutbound(
       return channel.sendVideo(to, part.filePath, part.caption);
     case 'buttons':
       return channel.sendButtons(to, part.body, part.buttons);
+    case 'video_buttons':
+      return channel.sendVideoButtons(to, part.filePath, part.body, part.buttons);
     case 'list':
       return channel.sendList(to, part.body, part.buttonLabel, part.rows);
   }
@@ -314,9 +318,6 @@ const DEV_RESET_CONFIRMATION =
  * the dedupe in the entrypoint), not once per image.
  */
 const PHOTO_ACK_MESSAGE = 'קיבלתי את התמונות, תודה! 📸 אצרף אותן לפרטים שיעברו ללידור.';
-
-/** Stored placeholder for a media message, which has no text body. */
-const VIDEO_PLACEHOLDER = '[סרטון היכרות]';
 
 /** Stored placeholder for the sent testimonial video. */
 const TESTIMONIAL_PLACEHOLDER = '[סרטון המלצה]';
@@ -754,16 +755,22 @@ export function createConversationWorkflow(
       // Assemble the ordered messages this turn will send.
       const plan: { part: OutboundPart; storeBody: string; usage?: LlmUsage[] }[] = [];
 
-      // Opening sequence on the very first bot response (§2) — but never greet
-      // someone whose opening move is to opt out; that turn only acknowledges.
+      // Opening (§2) on the very first bot response — but never greet someone
+      // whose opening move is to opt out; that turn only acknowledges. It is a
+      // single all-in-one message: the intro video as the header, the welcome as
+      // the body, and the menu as reply buttons riding on the clip. The channel
+      // degrades to a plain button message if the video cannot be sent, so the
+      // welcome + menu always arrive. Because this carries the menu, the
+      // `show_main_menu` action below adds nothing more.
       if (ctx.isFirstResponse && decision.action !== 'acknowledge_opt_out') {
         plan.push({
-          part: { kind: 'text', text: WELCOME_MESSAGE },
+          part: {
+            kind: 'video_buttons',
+            filePath: INTRO_VIDEO_PATH,
+            body: WELCOME_MESSAGE,
+            buttons: [...OPENING_MENU_BUTTONS],
+          },
           storeBody: WELCOME_MESSAGE,
-        });
-        plan.push({
-          part: { kind: 'video', filePath: INTRO_VIDEO_PATH },
-          storeBody: VIDEO_PLACEHOLDER,
         });
       }
 
@@ -854,15 +861,8 @@ export function createConversationWorkflow(
       const question = screeningQuestionFor(decision.action);
       const canned = cannedReplyFor(decision.action);
       if (decision.action === 'show_main_menu') {
-        plan.push({
-          part: {
-            kind: 'list',
-            body: MAIN_MENU.body,
-            buttonLabel: MAIN_MENU.buttonLabel,
-            rows: [...MAIN_MENU.rows],
-          },
-          storeBody: MAIN_MENU.body,
-        });
+        // The all-in-one opening message above already carried the menu buttons;
+        // there is nothing more to add for this action.
       } else if (canned) {
         // Fixed closes and the intent check — canned so the wording, grammar and
         // "no callback-time promise" rule can never drift.

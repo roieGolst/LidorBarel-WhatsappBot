@@ -4,6 +4,7 @@ import {
   INTRO_VIDEO_PATH,
   MAIN_MENU,
   mainMenuChoiceFor,
+  OPENING_MENU_BUTTONS,
   screeningAnswerFor,
   screeningQuestionFor,
   WELCOME_MESSAGE,
@@ -45,17 +46,28 @@ describe('interactive content', () => {
     expect(screeningQuestionFor('ask_timeline')?.kind).toBe('list');
   });
 
-  it('offers the four main-menu options within the list caps', () => {
-    expect(MAIN_MENU.rows).toHaveLength(4);
+  it('lists the full menu with the two priority actions first', () => {
     expect(MAIN_MENU.rows.map((r) => r.id)).toEqual([
       'menu:check_fit',
-      'menu:learn_more',
       'menu:book_meeting',
+      'menu:learn_more',
       'menu:testimonials',
     ]);
     expect(MAIN_MENU.buttonLabel.length).toBeLessThanOrEqual(20);
     for (const row of MAIN_MENU.rows) {
       expect(row.title.length).toBeLessThanOrEqual(24);
+    }
+  });
+
+  it('opening buttons ride on the video (≤3), priorities first, testimonials not among them', () => {
+    expect(OPENING_MENU_BUTTONS.length).toBeLessThanOrEqual(3);
+    expect(OPENING_MENU_BUTTONS.map((b) => b.id)).toEqual([
+      'menu:check_fit',
+      'menu:book_meeting',
+      'menu:learn_more',
+    ]);
+    for (const b of OPENING_MENU_BUTTONS) {
+      expect(b.title.length).toBeLessThanOrEqual(20); // button-title cap
     }
   });
 

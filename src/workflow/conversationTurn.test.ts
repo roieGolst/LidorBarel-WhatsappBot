@@ -242,8 +242,7 @@ describe('conversationTurn', () => {
     expect(channel.typingFor).toContain(`in-${conversationId}`);
   });
 
-  it('opens with welcome + intro video, then the main menu (§8)', async () => {
-    // Whatever the opener says, the first response is welcome → video → menu.
+  it('opens with a single all-in-one message: intro video + welcome + menu buttons (§8)', async () => {
     const llm = new FakeLlmClient([
       '{"intent":"UNCLEAR","confidence":0.2,"extracted":{}}',
     ]);
@@ -258,25 +257,50 @@ describe('conversationTurn', () => {
     expect(result.stage).toBe('engaged');
     expect(result.action).toBe('show_main_menu');
 
-    // welcome text → intro video → main-menu list, in that order.
-    expect(channel.sent).toHaveLength(3);
-    const [welcome, video, menu] = channel.sent;
-    expect(welcome).toMatchObject({ kind: 'text', text: WELCOME_MESSAGE });
-    expect(video).toMatchObject({ kind: 'video', filePath: INTRO_VIDEO_PATH });
-    expect(menu?.kind).toBe('list');
-    if (menu?.kind === 'list') {
-      expect(menu.rows.map((r) => r.id)).toEqual([
+    // ONE message: the intro clip as the header, the welcome as the body, and the
+    // menu as reply buttons — priorities first (fit check, booking), then learn more.
+    expect(channel.sent).toHaveLength(1);
+    const opening = channel.sent[0];
+    expect(opening?.kind).toBe('video_buttons');
+    if (opening?.kind === 'video_buttons') {
+      expect(opening.filePath).toBe(INTRO_VIDEO_PATH);
+      expect(opening.body).toBe(WELCOME_MESSAGE);
+      expect(opening.buttons.map((b) => b.id)).toEqual([
         'menu:check_fit',
-        'menu:learn_more',
         'menu:book_meeting',
-        'menu:testimonials',
+        'menu:learn_more',
       ]);
     }
 
     const outbound = (await recentMessages(db, conversationId)).filter(
       (m) => m.direction === 'outbound',
     );
-    expect(outbound).toHaveLength(3);
+    expect(outbound).toHaveLength(1);
+    expect(outbound[0]?.body).toBe(WELCOME_MESSAGE);
+  });
+
+  it('opening degrades to welcome + menu buttons when the intro video fails', async () => {
+    const llm = new FakeLlmClient([
+      '{"intent":"UNCLEAR","confidence":0.2,"extracted":{}}',
+    ]);
+    const channel = new FakeChannel();
+    channel.failVideoSends();
+    const { conversationId } = await seed({ inbound: 'היי' });
+
+    const result = await workflow({ db, llm, channel }).invoke(
+      conversationId,
+      config(conversationId),
+    );
+
+    // The person is still welcomed and shown the menu — just without the clip.
+    expect(result.sent).toBe(true);
+    expect(channel.sent).toHaveLength(1);
+    const opening = channel.sent[0];
+    expect(opening?.kind).toBe('buttons');
+    if (opening?.kind === 'buttons') {
+      expect(opening.body).toBe(WELCOME_MESSAGE);
+      expect(opening.buttons).toHaveLength(3);
+    }
   });
 
   it('tapping "check fit" starts the screening flow (buttons/list)', async () => {

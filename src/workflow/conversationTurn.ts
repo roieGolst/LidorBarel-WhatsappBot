@@ -31,6 +31,7 @@ import {
 import { evaluateGate, isMalicious, RATE_WINDOW_MS, type GateResult } from './gate.js';
 import { generateValidatedReply } from './generate.js';
 import {
+  BOOKING_LEADIN_MESSAGE,
   cannedReplyFor,
   INTRO_VIDEO_PATH,
   MAIN_MENU,
@@ -483,6 +484,15 @@ export function createConversationWorkflow(
         decision = decideTransition(ctx.stage, validated, ctx.known, ctx.screenAll);
       }
 
+      // Booking intent: the "קביעת פגישה" menu choice, or a message the classifier
+      // read as wanting to schedule / proceed. It runs the same screening flow and
+      // is stored as a fact so it boosts the lead's weighted priority (see
+      // leadPriorityScore). `bookingTriggered` fires only the first time, so the
+      // brief booking lead-in is sent once.
+      const bookingIntent =
+        menuChoice === 'book_meeting' || validated.extracted.bookingIntent === true;
+      const bookingTriggered = bookingIntent && ctx.known.bookingIntent !== true;
+
       // Assemble the ordered messages this turn will send.
       const plan: { part: OutboundPart; storeBody: string; usage?: LlmUsage[] }[] = [];
 
@@ -496,6 +506,15 @@ export function createConversationWorkflow(
         plan.push({
           part: { kind: 'video', filePath: INTRO_VIDEO_PATH },
           storeBody: VIDEO_PLACEHOLDER,
+        });
+      }
+
+      // Booking lead-in: brief and decisive, sent once when the booking flow
+      // starts, right before the first screening question.
+      if (bookingTriggered) {
+        plan.push({
+          part: { kind: 'text', text: BOOKING_LEADIN_MESSAGE },
+          storeBody: BOOKING_LEADIN_MESSAGE,
         });
       }
 
@@ -644,7 +663,12 @@ export function createConversationWorkflow(
         // additionalNotes is the model's consolidated summary, so overwrite (the
         // prior notes were fed to classify to merge) rather than appending. Uses
         // the validated extraction, so an invalid neighborhood is never stored.
-        extracted: { ...ctx.known, ...validated.extracted },
+        // A book-meeting tap sets bookingIntent even when the tap text carried none.
+        extracted: {
+          ...ctx.known,
+          ...validated.extracted,
+          ...(bookingIntent ? { bookingIntent: true } : {}),
+        },
         ...(decision.qualified !== undefined ? { qualified: decision.qualified } : {}),
         ...(decision.disqualificationReason !== undefined
           ? { disqualificationReason: decision.disqualificationReason }

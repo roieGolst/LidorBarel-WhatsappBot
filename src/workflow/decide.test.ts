@@ -348,12 +348,29 @@ describe('decideTransition', () => {
       expect(decideMainMenu('learn_more', 'engaged').action).toBe('answer_faq');
     });
 
-    it('talk_to_human and book_meeting both hand off', () => {
-      for (const choice of ['talk_to_human', 'book_meeting'] as const) {
-        const decision = decideMainMenu(choice, 'engaged');
-        expect(decision.action).toBe('handoff_to_human');
-        expect(decision.nextStage).toBe('handed_off');
-      }
+    it('book_meeting runs the screening flow (a call is booked after a few details)', () => {
+      const decision = decideMainMenu('book_meeting', 'engaged');
+      expect(decision.action).toBe('ask_neighborhood');
+      const direct = decideMainMenu('book_meeting', 'engaged', {}, true);
+      expect(direct.action).toBe('ask_sell_intent');
+    });
+  });
+
+  describe('booking intent', () => {
+    it('boosts the weighted priority score', () => {
+      expect(leadPriorityScore({ bookingIntent: true })).toBe(60);
+      expect(leadPriorityScore({ timeline: 'no_urgency', bookingIntent: true })).toBe(50);
+      expect(leadPriorityScore({ timeline: 'immediate', bookingIntent: true })).toBe(100);
+      // Without booking intent the timeline-only score is unchanged.
+      expect(leadPriorityScore({ timeline: 'no_urgency' })).toBe(25);
+    });
+
+    it('runs the screening flow even when the message reads like an FAQ', () => {
+      const decision = decideTransition(
+        'engaged',
+        analysis({ intent: 'FAQ', extracted: { bookingIntent: true } }),
+      );
+      expect(decision.action).toBe('ask_neighborhood');
     });
   });
 

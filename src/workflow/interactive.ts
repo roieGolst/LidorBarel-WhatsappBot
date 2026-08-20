@@ -62,6 +62,14 @@ export const HANDOFF_TO_HUMAN_MESSAGE =
   'מעולה, אני מעביר אותך ללידור עם כל הפרטים. הוא יחזור אליך בהקדם.';
 
 /**
+ * Sent when a lead asks to book a meeting (or otherwise shows clear intent to
+ * proceed). Brief and decisive, focused on scheduling the call, while making
+ * clear a few quick details come first. The screening question follows it.
+ */
+export const BOOKING_LEADIN_MESSAGE =
+  'מעולה, נתקדם לקביעת פגישה עם לידור 📅 רק אאסוף כמה פרטים קצרים על הנכס כדי שהשיחה תהיה ממוקדת, ואז אעביר את הפרטים ללידור שיצור איתך קשר.';
+
+/**
  * Acknowledges extra details a qualified lead sent. Short and natural — it does
  * NOT read the details back (they are already saved to the lead), and never
  * promises a callback time.
@@ -93,24 +101,23 @@ export const INTRO_VIDEO_PATH = resolve(process.cwd(), 'assets/intro_video.mp4')
  * The opening main menu (spec §8 `main_buttons`, conversation_style
  * hybrid_buttons_first). After the welcome + video, the person is shown these
  * five choices and picks how to start — `check_fit` begins the screening, the
- * rest branch elsewhere. Five options exceed WhatsApp's 3-button cap, so it is a
- * list. `talk_to_human` is last so the primary paths sit at the top.
+ * rest branch elsewhere. Four options fit a list. Booking a meeting runs the same
+ * screening flow (a call is booked only after a few quick details), so there is
+ * no separate "talk to a human" shortcut.
  */
 export const MAIN_MENU = {
-  body: 'איך תרצה להתחיל? אפשר לבדוק התאמה מהירה, לשמוע פרטים, או לדבר איתנו ישירות.',
+  body: 'איך תרצה להתחיל? אפשר לבדוק התאמה מהירה, לשמוע פרטים, או לקבוע פגישה.',
   buttonLabel: 'בחירת אפשרות',
   rows: [
-    { id: 'menu:check_fit', title: '✅ בדיקת התאמה' },
+    { id: 'menu:check_fit', title: 'בדיקת התאמה ✅' },
     { id: 'menu:learn_more', title: 'ℹ️ לשמוע פרטים' },
-    { id: 'menu:book_meeting', title: '📅 קביעת פגישה' },
-    { id: 'menu:testimonials', title: '⭐ המלצות' },
-    { id: 'menu:talk_to_human', title: '👤 דברו איתי' },
+    { id: 'menu:book_meeting', title: 'קביעת פגישה 📅' },
+    { id: 'menu:testimonials', title: 'המלצות ⭐' },
   ],
 } as const;
 
 /** A main-menu choice, resolved from the tapped row (or typed text). */
-export type MainMenuChoice =
-  'check_fit' | 'learn_more' | 'book_meeting' | 'testimonials' | 'talk_to_human';
+export type MainMenuChoice = 'check_fit' | 'learn_more' | 'book_meeting' | 'testimonials';
 
 /**
  * Maps a message to a main-menu choice, or `undefined` if it is not one.
@@ -125,7 +132,6 @@ export function mainMenuChoiceFor(text: string): MainMenuChoice | undefined {
   if (t.includes('לשמוע פרטים')) return 'learn_more';
   if (t.includes('קביעת פגישה')) return 'book_meeting';
   if (t.includes('המלצות')) return 'testimonials';
-  if (t.includes('דברו איתי')) return 'talk_to_human';
   return undefined;
 }
 
@@ -150,19 +156,27 @@ const SCREENING_QUESTIONS: Partial<Record<TurnAction, ScreeningQuestion>> = {
       { id: 'sell_intent:not_selling', title: 'לא מעוניין למכור' },
     ],
   },
-  // Q2 — neighborhood (four options → list).
+  // Q2 — neighborhood. WhatsApp lists cap at 10 rows total, so the eight lettered
+  // neighborhoods are each an independent, tappable option and every named
+  // neighborhood is typed — it is matched against the full list either way (see
+  // domain/neighborhoods.ts).
   ask_neighborhood: {
     kind: 'list',
-    body: 'באיזו שכונה נמצא הנכס?',
+    body: 'באיזו שכונה נמצא הנכס? אם השכונה אינה ברשימה, אפשר פשוט להקליד את שמה.',
     buttonLabel: 'בחירת שכונה',
     rows: [
-      { id: 'neighborhood:neve_zeev', title: 'שכונת נווה זאב' },
-      { id: 'neighborhood:nahal_ashan', title: 'שכונת נחל עשן' },
-      { id: 'neighborhood:ramot', title: 'שכונת רמות' },
+      { id: 'neighborhood:alef', title: 'שכונה א׳' },
+      { id: 'neighborhood:bet', title: 'שכונה ב׳' },
+      { id: 'neighborhood:gimel', title: 'שכונה ג׳' },
+      { id: 'neighborhood:dalet', title: 'שכונה ד׳' },
+      { id: 'neighborhood:hey', title: 'שכונה ה׳' },
+      { id: 'neighborhood:vav', title: 'שכונה ו׳' },
+      { id: 'neighborhood:tet', title: 'שכונה ט׳' },
+      { id: 'neighborhood:yod_alef', title: 'שכונה י״א' },
       {
-        id: 'neighborhood:alef_tet',
-        title: 'שכונות א׳–ט׳',
-        description: 'א׳, ב׳, ג׳, ד׳, ה׳, ו׳, ט׳',
+        id: 'neighborhood:other',
+        title: 'שכונה אחרת',
+        description: 'הקלד/י את שם השכונה',
       },
     ],
   },

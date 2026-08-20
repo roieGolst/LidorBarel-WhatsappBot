@@ -63,6 +63,9 @@ export const extractedSchema = z.object({
   // mainly checking the price.
   sellMotivation: z.string().min(1).optional(),
   seriousSeller: z.boolean().optional(),
+  // True when the person explicitly asks to book a meeting/call or to proceed
+  // with selling now — a strong, weighted quality signal.
+  bookingIntent: z.boolean().optional(),
 });
 
 export const analysisSchema = z.object({
@@ -112,6 +115,7 @@ Return JSON with exactly these fields:
     - "additionalNotes": ONLY when THIS message adds or clarifies property details (rooms, size/מ"ר, floor, condition/renovation, parking, price expectation, etc.), return the FULL consolidated Hebrew summary of ALL property details so far — merge any "פרטי הנכס עד כה" context shown to you with the new details, into ONE concise line with NO duplication and no repeated facts. If this message adds no property details, omit it entirely.
     - "sellMotivation": a short Hebrew note of WHY they are (or are not) looking to sell, when they say it (e.g. "עוברים דירה", "צריך נזילות", "רק בודק מחיר").
     - "seriousSeller": true if they read as a genuine, motivated seller (a real reason, actively planning to sell); false if they are mainly checking the price or not really intending to sell. Set it only once they've indicated their intent/motivation, otherwise omit.
+    - "bookingIntent": true when they explicitly ask to schedule a meeting/call or to move forward with selling now (e.g. "תקבע לי פגישה", "אני רוצה למכור את הנכס", "בוא נתקדם", "מתי אפשר להיפגש?"). Omit otherwise.
 - "needsEscalation": true if the message shows anger, frustration, or something a bot should not handle alone.
 - "wantsBuyerProof": true if the seller is asking how the property will be marketed, whether there are ready/potential buyers, or what value/results the agent brings (e.g. "יש לך קונים?", "איך תשווק את הנכס?", "למה כדאי לעבוד איתך?", "מאיפה יגיעו הקונים?"). Otherwise false.
 

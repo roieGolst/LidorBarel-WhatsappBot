@@ -106,6 +106,15 @@ export function decideTransition(
   const blocked = exclusivityOrDisqualification(facts, escalate);
   if (blocked) return blocked;
 
+  // 2b. Explicit intent to book a meeting / proceed with selling runs the same
+  //     screening flow (a call is booked only after a few quick details), even if
+  //     the message reads like an FAQ. Booking intent also boosts the weighted
+  //     priority (see leadPriorityScore). Not for an already-qualified lead —
+  //     they are handled below.
+  if (confident && facts.bookingIntent && current !== 'qualified') {
+    return nextScreeningStep(current, facts, screenAll, escalate);
+  }
+
   // 3. A confident objection or FAQ gets a bespoke reply, without advancing
   //    screening. An objection reaches for the stronger model to handle it.
   if (confident && analysis.intent === 'OBJECTION') {
@@ -143,10 +152,11 @@ export function decideTransition(
  * Routes a main-menu selection (spec §8) — deterministic, no model call, since
  * the choice is a known button, not free text.
  *
- * `check_fit` starts the screening (after the same disqualification check the
- * normal flow applies); `testimonials` sends social proof; `learn_more` answers
- * about the service; `book_meeting` and `talk_to_human` both hand off to Lidor
- * (booking itself is a later milestone, so high intent goes straight to a human).
+ * `check_fit` and `book_meeting` both run the same screening flow — a meeting is
+ * booked only after a few quick details, and booking intent is a strong signal
+ * that boosts the lead's weighted priority (see `bookingIntent` /
+ * {@link leadPriorityScore}); `testimonials` sends social proof; `learn_more`
+ * answers about the service.
  */
 export function decideMainMenu(
   choice: MainMenuChoice,
@@ -155,7 +165,8 @@ export function decideMainMenu(
   screenAll = false,
 ): Decision {
   switch (choice) {
-    case 'check_fit': {
+    case 'check_fit':
+    case 'book_meeting': {
       const blocked = exclusivityOrDisqualification(known, false);
       if (blocked) return blocked;
       return nextScreeningStep(current, known, screenAll, false);
@@ -168,9 +179,6 @@ export function decideMainMenu(
       };
     case 'learn_more':
       return { nextStage: holdStage(current), action: 'answer_faq', escalate: false };
-    case 'book_meeting':
-    case 'talk_to_human':
-      return { nextStage: 'handed_off', action: 'handoff_to_human', escalate: false };
   }
 }
 
@@ -301,18 +309,24 @@ function disqualifyingReason(facts: KnownFacts): DisqualificationReason | undefi
  * until the timeline is known (a form lead answers Q3 on the form, not the bot).
  */
 export function leadPriorityScore(facts: KnownFacts): number | undefined {
-  switch (facts.timeline) {
-    case 'immediate':
-      return 100;
-    case 'within_month':
-      return 75;
-    case 'still_checking':
-      return 50;
-    case 'no_urgency':
-      return 25;
-    default:
-      return undefined;
+  const base =
+    facts.timeline === 'immediate'
+      ? 100
+      : facts.timeline === 'within_month'
+        ? 75
+        : facts.timeline === 'still_checking'
+          ? 50
+          : facts.timeline === 'no_urgency'
+            ? 25
+            : undefined;
+
+  // Explicit intent to book a meeting / proceed is a strong quality signal: it
+  // lifts the weighted score (+25, capped at 100) and gives a solid floor even
+  // before the timeline is known, so a booking lead ranks ahead of a passive one.
+  if (facts.bookingIntent) {
+    return base === undefined ? 60 : Math.min(100, base + 25);
   }
+  return base;
 }
 
 /**

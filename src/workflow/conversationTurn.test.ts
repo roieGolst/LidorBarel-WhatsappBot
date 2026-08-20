@@ -24,6 +24,7 @@ import { createConversationWorkflow, type ConversationDeps } from './conversatio
 import type { KnownFacts } from './decide.js';
 import { ENGLISH_ONLY_REPLY } from './language.js';
 import {
+  BOOKING_LEADIN_MESSAGE,
   INTRO_VIDEO_PATH,
   OFF_TOPIC_REDIRECT_MESSAGE,
   QUALIFIED_HANDOFF_MESSAGE,
@@ -171,7 +172,6 @@ describe('conversationTurn', () => {
         'menu:learn_more',
         'menu:book_meeting',
         'menu:testimonials',
-        'menu:talk_to_human',
       ]);
     }
 
@@ -204,14 +204,13 @@ describe('conversationTurn', () => {
     expect(channel.sent[0]?.kind).toBe('list');
   });
 
-  it('tapping "talk to me" hands off to a human', async () => {
+  it('tapping "book a meeting" runs screening with a booking lead-in and boosts priority', async () => {
     const llm = new FakeLlmClient([
       '{"intent":"UNCLEAR","confidence":0.2,"extracted":{}}',
-      'מעולה, אני מחבר אותך עכשיו ללידור.',
     ]);
     const channel = new FakeChannel();
     const { conversationId } = await seed({
-      inbound: '👤 דברו איתי',
+      inbound: '📅 קביעת פגישה',
       stage: 'engaged',
       priorReply: WELCOME_MESSAGE,
     });
@@ -221,10 +220,15 @@ describe('conversationTurn', () => {
       config(conversationId),
     );
 
-    expect(result.action).toBe('handoff_to_human');
-    expect(result.stage).toBe('handed_off');
-    expect(channel.sent).toHaveLength(1);
-    expect(channel.sent[0]?.kind).toBe('text');
+    // Same flow as check_fit (form lead → Q2), preceded by the booking lead-in.
+    expect(result.action).toBe('ask_neighborhood');
+    expect(channel.sent[0]).toMatchObject({ kind: 'text', text: BOOKING_LEADIN_MESSAGE });
+    expect(channel.sent.at(-1)?.kind).toBe('list'); // the neighborhood question
+
+    const conversation = await getConversationById(db, conversationId);
+    const extracted = conversation?.extracted as KnownFacts;
+    expect(extracted.bookingIntent).toBe(true);
+    expect(conversation?.priorityScore).toBe(60); // booking intent floor
   });
 
   it('sends a three-option screening question as buttons', async () => {
@@ -596,7 +600,7 @@ describe('conversationTurn', () => {
 
       expect(result.action).toBe('go_back');
       // The neighborhood answer was undone, so the neighborhood list is re-asked.
-      expect(result.text).toBe('באיזו שכונה נמצא הנכס?');
+      expect(result.text).toContain('באיזו שכונה נמצא הנכס?');
       const conversation = await getConversationById(db, conversationId);
       expect((conversation?.extracted as KnownFacts).neighborhood).toBeUndefined();
     });

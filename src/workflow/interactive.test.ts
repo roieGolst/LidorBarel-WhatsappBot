@@ -44,14 +44,13 @@ describe('interactive content', () => {
     expect(screeningQuestionFor('ask_timeline')?.kind).toBe('list');
   });
 
-  it('offers the five spec main-menu options within the list caps', () => {
-    expect(MAIN_MENU.rows).toHaveLength(5);
+  it('offers the four main-menu options within the list caps', () => {
+    expect(MAIN_MENU.rows).toHaveLength(4);
     expect(MAIN_MENU.rows.map((r) => r.id)).toEqual([
       'menu:check_fit',
       'menu:learn_more',
       'menu:book_meeting',
       'menu:testimonials',
-      'menu:talk_to_human',
     ]);
     expect(MAIN_MENU.buttonLabel.length).toBeLessThanOrEqual(20);
     for (const row of MAIN_MENU.rows) {
@@ -60,11 +59,12 @@ describe('interactive content', () => {
   });
 
   it('maps a tapped or typed menu option to its choice', () => {
-    expect(mainMenuChoiceFor('✅ בדיקת התאמה')).toBe('check_fit');
+    expect(mainMenuChoiceFor('בדיקת התאמה ✅')).toBe('check_fit');
     expect(mainMenuChoiceFor('ℹ️ לשמוע פרטים')).toBe('learn_more');
-    expect(mainMenuChoiceFor('📅 קביעת פגישה')).toBe('book_meeting');
-    expect(mainMenuChoiceFor('⭐ המלצות')).toBe('testimonials');
-    expect(mainMenuChoiceFor('👤 דברו איתי')).toBe('talk_to_human');
+    expect(mainMenuChoiceFor('קביעת פגישה 📅')).toBe('book_meeting');
+    expect(mainMenuChoiceFor('המלצות ⭐')).toBe('testimonials');
+    // The talk-to-human option was removed; it is no longer a menu choice.
+    expect(mainMenuChoiceFor('דברו איתי 👤')).toBeUndefined();
     // A normal answer is not a menu choice.
     expect(mainMenuChoiceFor('שכונת רמות')).toBeUndefined();
     expect(mainMenuChoiceFor('יאללה')).toBeUndefined();

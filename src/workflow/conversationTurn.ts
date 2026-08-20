@@ -8,6 +8,7 @@ import {
 } from '../db/repositories/conversations.js';
 import { countInboundMessages, recentMessages } from '../db/repositories/messages.js';
 import { isOptedOut } from '../db/repositories/optOuts.js';
+import { getLogger } from '../logger.js';
 import type { LlmClient, LlmMessage, LlmUsage } from '../llm/client.js';
 import type {
   ListRow,
@@ -35,11 +36,14 @@ import {
   screeningQuestionFor,
   WELCOME_MESSAGE,
 } from './interactive.js';
+import { ENGLISH_ONLY_REPLY, isPredominantlyEnglish } from './language.js';
+import { isOptOutKeyword } from './optOutKeywords.js';
 import {
   persistTurn,
   type OutboundMessageRecord,
   type PersistTurnInput,
 } from './persist.js';
+import { sanitizeExtraction } from './validateAnswer.js';
 
 /**
  * The conversation workflow — one turn, per the plan's §5.1 shape.
@@ -228,6 +232,8 @@ export function createConversationWorkflow(
   deps: ConversationDeps,
   checkpointer: BaseCheckpointSaver,
 ) {
+  const logger = getLogger();
+
   const load = task('ct_loadContext', (conversationId: string) =>
     loadContext(deps.db, conversationId),
   );
@@ -392,11 +398,48 @@ export function createConversationWorkflow(
         return handleGate(gate, ctx, conversationId);
       }
 
+      // Hebrew-only gate (review req #4): a predominantly-English message is
+      // unsupported input — a fixed Hebrew reply, no classification, no fact
+      // change, no flow advance. An explicit opt-out (even in English, e.g.
+      // "unsubscribe") is left to the classifier below rather than refused here.
+      if (isPredominantlyEnglish(ctx.currentText) && !isOptOutKeyword(ctx.currentText)) {
+        const holdStage: ConversationStage = ctx.stage === 'new' ? 'engaged' : ctx.stage;
+        const { providerMessageId } = await send({
+          to: ctx.contactPhone,
+          part: { kind: 'text', text: ENGLISH_ONLY_REPLY },
+        });
+        await persist({
+          conversationId,
+          contactId: ctx.contactId,
+          contactPhone: ctx.contactPhone,
+          fromStage: ctx.stage,
+          toStage: holdStage,
+          action: 'reject_english',
+          extracted: ctx.known,
+          outbound: [{ body: ENGLISH_ONLY_REPLY, providerMessageId }],
+        });
+        return { stage: holdStage, text: ENGLISH_ONLY_REPLY, action: 'reject_english', sent: true };
+      }
+
       const { analysis } = await classify({
         text: ctx.currentText,
         history: ctx.classifyHistory,
         ...(ctx.known.additionalNotes ? { priorNotes: ctx.known.additionalNotes } : {}),
       });
+
+      // Answer validation (review req #1): drop an implausible free-text
+      // neighborhood ("Opus 4.8") before it is trusted, so it is neither stored
+      // nor advances the flow — the screening question is simply re-asked.
+      const { extracted: cleanExtracted, invalidNeighborhood } = sanitizeExtraction(
+        analysis.extracted,
+      );
+      if (invalidNeighborhood !== undefined) {
+        logger.info(
+          { conversationId, invalidNeighborhood },
+          'rejected implausible neighborhood answer',
+        );
+      }
+      const validated = { ...analysis, extracted: cleanExtracted };
 
       // The one place a stage is chosen — pure code, never the model.
       // Opt-out always wins. Otherwise the very first response opens with the
@@ -404,14 +447,14 @@ export function createConversationWorkflow(
       // anything else runs the classify-driven screening flow.
       const menuChoice = mainMenuChoiceFor(ctx.currentText);
       let decision: Decision;
-      if (analysis.intent === 'OPT_OUT') {
-        decision = decideTransition(ctx.stage, analysis, ctx.known, ctx.screenAll);
+      if (validated.intent === 'OPT_OUT') {
+        decision = decideTransition(ctx.stage, validated, ctx.known, ctx.screenAll);
       } else if (ctx.isFirstResponse) {
         decision = { nextStage: 'engaged', action: 'show_main_menu', escalate: false };
       } else if (menuChoice) {
         decision = decideMainMenu(menuChoice, ctx.stage, ctx.known, ctx.screenAll);
       } else {
-        decision = decideTransition(ctx.stage, analysis, ctx.known, ctx.screenAll);
+        decision = decideTransition(ctx.stage, validated, ctx.known, ctx.screenAll);
       }
 
       // Assemble the ordered messages this turn will send.
@@ -508,8 +551,9 @@ export function createConversationWorkflow(
         toStage: decision.nextStage,
         action: decision.action,
         // additionalNotes is the model's consolidated summary, so overwrite (the
-        // prior notes were fed to classify to merge) rather than appending.
-        extracted: { ...ctx.known, ...analysis.extracted },
+        // prior notes were fed to classify to merge) rather than appending. Uses
+        // the validated extraction, so an invalid neighborhood is never stored.
+        extracted: { ...ctx.known, ...validated.extracted },
         ...(decision.qualified !== undefined ? { qualified: decision.qualified } : {}),
         ...(decision.disqualificationReason !== undefined
           ? { disqualificationReason: decision.disqualificationReason }

@@ -21,6 +21,7 @@ import { FakeChannel } from '../whatsapp/fakeChannel.js';
 import { createCheckpointer } from './checkpointer.js';
 import { createConversationWorkflow, type ConversationDeps } from './conversationTurn.js';
 import type { KnownFacts } from './decide.js';
+import { ENGLISH_ONLY_REPLY } from './language.js';
 import {
   INTRO_VIDEO_PATH,
   QUALIFIED_HANDOFF_MESSAGE,
@@ -634,5 +635,50 @@ describe('conversationTurn', () => {
       (m) => m.direction === 'outbound',
     );
     expect(outbound).toHaveLength(1);
+  });
+
+  it('rejects an implausible neighborhood: re-asks and stores nothing (req #1)', async () => {
+    // The classifier reports a nonsensical neighborhood; validation drops it, so
+    // the flow re-asks Q2 rather than accepting "Opus 4.8" and advancing.
+    const llm = new FakeLlmClient([
+      '{"intent":"ANSWER","confidence":0.9,"extracted":{"neighborhood":"Opus 4.8"}}',
+    ]);
+    const channel = new FakeChannel();
+    const { conversationId } = await seed({
+      inbound: 'Opus 4.8',
+      stage: 'screening_neighborhood',
+      priorReply: 'באיזו שכונה נמצא הנכס?',
+    });
+
+    const result = await workflow({ db, llm, channel }).invoke(
+      conversationId,
+      config(conversationId),
+    );
+
+    expect(result.action).toBe('ask_neighborhood');
+    expect(result.stage).toBe('screening_neighborhood');
+    const conversation = await getConversationById(db, conversationId);
+    const extracted = conversation?.extracted as KnownFacts;
+    expect(extracted.neighborhood).toBeUndefined();
+  });
+
+  it('rejects a predominantly-English message without any model call (req #4)', async () => {
+    const llm = new FakeLlmClient([]); // must never be called
+    const channel = new FakeChannel();
+    const { conversationId } = await seed({
+      inbound: 'Hello, I want to sell my apartment',
+      stage: 'screening_neighborhood',
+      priorReply: 'באיזו שכונה נמצא הנכס?',
+    });
+
+    const result = await workflow({ db, llm, channel }).invoke(
+      conversationId,
+      config(conversationId),
+    );
+
+    expect(result.action).toBe('reject_english');
+    expect(llm.requests).toHaveLength(0);
+    const sent = channel.sent.at(-1);
+    expect(sent).toMatchObject({ kind: 'text', text: ENGLISH_ONLY_REPLY });
   });
 });

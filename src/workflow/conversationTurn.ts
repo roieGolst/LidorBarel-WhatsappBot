@@ -371,6 +371,30 @@ export function createConversationWorkflow(
     guardedSend(deps.db, args.to, () => sendOutbound(deps.channel, args.to, args.part)),
   );
 
+  // A supplementary media send (intro/testimonial/proof clip). The failure is
+  // caught INSIDE the task so its promise resolves rather than rejects — a
+  // rejected task aborts the whole LangGraph run, which is exactly how an
+  // unreadable clip (EPERM) once crashed the turn and left the person with no
+  // reply. On failure it returns null; the turn drops the clip and still sends
+  // its text.
+  const sendOptionalMedia = task(
+    'ct_sendOptionalMedia',
+    async (args: { to: string; part: OutboundPart }): Promise<string | null> => {
+      try {
+        const { providerMessageId } = await guardedSend(deps.db, args.to, () =>
+          sendOutbound(deps.channel, args.to, args.part),
+        );
+        return providerMessageId;
+      } catch (error) {
+        logger.warn(
+          { error, kind: args.part.kind },
+          'optional media send failed — skipping the clip, continuing the turn',
+        );
+        return null;
+      }
+    },
+  );
+
   const persist = task('ct_persist', (args: PersistTurnInput) =>
     persistTurn(deps.db, args),
   );
@@ -861,8 +885,22 @@ export function createConversationWorkflow(
       }
 
       // Send each part in order, collecting a persistable record per message.
+      // A VIDEO is supplementary (an intro/testimonial/proof clip): if it cannot be
+      // sent — a bad upload, an unreadable file (the EPERM that once crashed the
+      // whole turn) — it is skipped and the turn still delivers its text reply. A
+      // failed text/interactive send stays fatal: that IS the reply, so the turn
+      // should fail and be retried rather than leave the person with nothing.
       const outbound: OutboundMessageRecord[] = [];
       for (const planned of plan) {
+        if (planned.part.kind === 'video') {
+          const providerMessageId = await sendOptionalMedia({
+            to: ctx.contactPhone,
+            part: planned.part,
+          });
+          if (providerMessageId === null) continue; // clip dropped; carry on
+          outbound.push({ body: planned.storeBody, providerMessageId });
+          continue;
+        }
         const { providerMessageId } = await send({
           to: ctx.contactPhone,
           part: planned.part,

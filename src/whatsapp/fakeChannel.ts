@@ -31,10 +31,16 @@ export class FakeChannel implements WhatsAppChannel {
   readonly typingFor: string[] = [];
   private counter = 0;
   private failures = 0;
+  private videoSendsFail = false;
 
   /** Make the next `n` sends reject before recording anything. */
   failNext(n = 1): void {
     this.failures += n;
+  }
+
+  /** Make every video send reject — models an unreadable/unuploadable clip. */
+  failVideoSends(): void {
+    this.videoSendsFail = true;
   }
 
   markTyping(inboundMessageId: string): Promise<void> {
@@ -47,6 +53,9 @@ export class FakeChannel implements WhatsAppChannel {
   }
 
   sendVideo(to: string, filePath: string, caption?: string): Promise<OutboundResult> {
+    if (this.videoSendsFail) {
+      return Promise.reject(new Error('FakeChannel: video send failed'));
+    }
     return this.record({
       kind: 'video',
       to,

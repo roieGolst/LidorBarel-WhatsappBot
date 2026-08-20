@@ -825,6 +825,45 @@ describe('conversationTurn', () => {
     expect(channel.sent.some((s) => s.kind === 'text')).toBe(true);
   });
 
+  it('still delivers the text reply when the testimonial video fails to send', async () => {
+    // Regression: an unreadable clip (EPERM on the file) crashed the whole turn,
+    // so the person got nothing. A failed video must be skipped, not fatal.
+    await upsertMediaAsset(db, {
+      path: 'recommendations/general.mp4',
+      type: 'testimonial',
+      neighborhoods: [],
+      audience: 'seller',
+    });
+    const llm = new FakeLlmClient([
+      '{"intent":"FAQ","confidence":0.9,"wantsSocialProof":true,"extracted":{}}',
+      'לידור מכר מעל 124 נכסים בבאר שבע, אשמח לספר עוד.',
+    ]);
+    const channel = new FakeChannel();
+    channel.failVideoSends();
+    const { conversationId } = await seed({
+      inbound: 'יש המלצות על לידור?',
+      stage: 'qualified',
+      extracted: { neighborhood: 'רמות', currentlyMarketed: 'no' },
+      priorReply: QUALIFIED_HANDOFF_MESSAGE,
+    });
+
+    const result = await workflow({ db, llm, channel }).invoke(
+      conversationId,
+      config(conversationId),
+    );
+
+    // The turn did NOT throw; the text social proof was delivered.
+    expect(result.action).toBe('send_social_proof');
+    expect(result.sent).toBe(true);
+    expect(channel.sent.some((s) => s.kind === 'video')).toBe(false); // clip dropped
+    expect(channel.sent.some((s) => s.kind === 'text')).toBe(true); // text still sent
+    // The stored transcript has the text reply and no crashed/empty turn.
+    const outbound = (await recentMessages(db, conversationId)).filter(
+      (m) => m.direction === 'outbound',
+    );
+    expect(outbound.some((m) => (m.body ?? '').includes('124'))).toBe(true);
+  });
+
   it('sends the investor-tour video with a contextual caption when a seller asks about buyers', async () => {
     await upsertMediaAsset(db, {
       path: 'recommendations/investor_tour.mp4',

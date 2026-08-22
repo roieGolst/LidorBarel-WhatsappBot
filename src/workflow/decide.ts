@@ -43,7 +43,9 @@ export type TurnAction =
   | 'handoff_to_human' // main-menu "talk to me" / "book a meeting"
   | 'stay_on_topic' // off-topic chatter → keep the conversation on the property
   | 'acknowledge_additional_info' // extra details after the lead already qualified
-  | 'assist_qualified'; // a question/comment after qualifying → a real reply, not an ack
+  | 'assist_qualified' // a question/comment after qualifying → a real reply, not an ack
+  | 'about_lidor' // main-menu "about me" → introduce Lidor, ask nothing
+  | 'confirm_restart'; // already-complete lead re-opened a flow → confirm before redoing it
 
 export interface Decision {
   nextStage: ConversationStage;
@@ -189,14 +191,26 @@ export function decideTransition(
 }
 
 /**
+ * Stages where the lead has already been through the whole flow and their
+ * details are with Lidor. Re-opening a screening flow from here would re-ask
+ * everything, so it is confirmed first (see {@link decideMainMenu}).
+ */
+const COMPLETED_STAGES: readonly ConversationStage[] = ['qualified', 'handed_off'];
+
+/**
  * Routes a main-menu selection (spec §8) — deterministic, no model call, since
  * the choice is a known button, not free text.
  *
  * `check_fit` and `book_meeting` both run the same screening flow — a meeting is
  * booked only after a few quick details, and booking intent is a strong signal
  * that boosts the lead's weighted priority (see `bookingIntent` /
- * {@link leadPriorityScore}); `testimonials` sends social proof; `learn_more`
- * answers about the service.
+ * {@link leadPriorityScore}). For a lead who has ALREADY completed the flow,
+ * neither restarts it outright: the bot says it already has everything and asks
+ * whether they really want to start over (`confirm_restart`), and only an explicit
+ * yes re-runs it.
+ *
+ * `testimonials` and `about_lidor` never touch the screening flow at all — they
+ * answer and stop, asking nothing.
  */
 export function decideMainMenu(
   choice: MainMenuChoice,
@@ -207,6 +221,11 @@ export function decideMainMenu(
   switch (choice) {
     case 'check_fit':
     case 'book_meeting': {
+      // Already done: confirm before redoing anything. The workflow records which
+      // flow was asked for, so an explicit yes resumes exactly this choice.
+      if (COMPLETED_STAGES.includes(current)) {
+        return { nextStage: current, action: 'confirm_restart', escalate: false };
+      }
       const blocked = exclusivityOrDisqualification(known, false);
       if (blocked) return blocked;
       // Booking a meeting is top-urgency intent: mark it and skip Q3 (timeline).
@@ -231,7 +250,9 @@ export function decideMainMenu(
         escalate: false,
       };
     case 'learn_more':
-      return { nextStage: holdStage(current), action: 'answer_faq', escalate: false };
+      // "About me" — introduce Lidor and stop. Never re-runs screening, never asks
+      // a follow-up question, whatever stage the conversation is in.
+      return { nextStage: holdStage(current), action: 'about_lidor', escalate: false };
   }
 }
 

@@ -66,10 +66,28 @@ export const extractedSchema = z.object({
   // True when the person explicitly asks to book a meeting/call or to proceed
   // with selling now — a strong, weighted quality signal.
   bookingIntent: z.boolean().optional(),
-  // How many property photos the lead has sent. Set by the workflow (NOT the
-  // classifier) when an image arrives, so Lidor knows photos are attached.
+  // --- Workflow-owned bookkeeping. Set by application code, NEVER by the model:
+  // the classifier is not told about these, and conversationTurn strips them from
+  // every extraction, so a hallucinated value cannot reach the conversation state.
+  //
+  // How many property photos the lead has sent, so Lidor knows photos are attached.
   photoCount: z.number().int().nonnegative().optional(),
+  // Set while an already-complete lead is being asked whether they really want to
+  // redo a flow, with the menu choice awaiting their explicit yes.
+  awaitingRestartConfirm: z.boolean().optional(),
+  pendingRestartChoice: z.enum(['check_fit', 'book_meeting']).optional(),
+  // Testimonial clips already sent, so a repeat request gets a different one
+  // rather than the same clip twice (or nothing at all).
+  sentTestimonials: z.array(z.string()).optional(),
 });
+
+/** Extraction fields owned by the workflow, never accepted from the model. */
+export const WORKFLOW_OWNED_FIELDS = [
+  'photoCount',
+  'awaitingRestartConfirm',
+  'pendingRestartChoice',
+  'sentTestimonials',
+] as const satisfies readonly (keyof z.infer<typeof extractedSchema>)[];
 
 export const analysisSchema = z.object({
   intent: z.enum(INTENTS),

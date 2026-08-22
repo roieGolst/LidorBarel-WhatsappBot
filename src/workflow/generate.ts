@@ -104,6 +104,8 @@ const DIRECTIVES: Partial<Record<TurnAction, string>> = {
     'They asked for proof/testimonials. Share one or two of the strongest stats and one short success story from the KNOWLEDGE — concise, warm, no pressure. Do NOT ask a follow-up question and do NOT ask for more property details; just deliver the proof and stop.',
   ask_intent:
     'This is the one intent/seriousness check after the four screening questions. READ THE CONVERSATION ABOVE: the seller may have ALREADY given property details (neighborhood, size/מ"ר, garden, floor, condition, price, etc.). Do NOT ask again for anything they already told you. In one short, warm message: briefly acknowledge what you already know (a few words, do not list it all back), then ask — in ONE question — for the single most useful detail still MISSING to help Lidor prepare (typically the exact address, number of rooms, floor, or a rough asking price — pick what is missing). Keep it light and natural; you are also sensing whether they are a serious seller. Never promise a callback time and never quote any fee/price number.',
+  about_lidor:
+    'They tapped "about me" — they want to know who Lidor is. Introduce him warmly and briefly using the KNOWLEDGE: a Beer Sheva real-estate specialist who guides sellers from the valuation through to signing, with focused marketing and an active buyer/investor pool. Two or three short lines. Do NOT ask them anything — no screening question, no follow-up question, no request for property details; this is information only. Never quote a fee/commission/price number.',
   assist_qualified:
     'The lead is already qualified and their details are on the way to Lidor. Respond to their LATEST message like a real, attentive assistant — READ THE CONVERSATION ABOVE and answer what they actually said: if they asked a question or seem confused (e.g. "את מה?"), clarify plainly what you meant; if it is a comment, respond briefly and warmly. Reassure that Lidor has their details and will follow up. Do NOT re-run the screening questions, do NOT repeat the handoff line, do NOT quote a fee/price number, and do NOT promise a callback time. End with ONE light, optional question or offer (e.g. whether there is anything else they would like Lidor to know).',
 };
@@ -127,6 +129,8 @@ export const SAFE_VARIANTS: Partial<Record<TurnAction, string>> = {
     'אשמח לכמה פרטים אחרונים שיעזרו ללידור להתכונן לשיחה — מה הכתובת המדויקת, כמה חדרים ובאיזו קומה?',
   assist_qualified:
     'הפרטים שלך אצל לידור והוא יחזור אליך בהקדם. יש עוד משהו שחשוב שיידע לפני השיחה?',
+  about_lidor:
+    'לידור בראל הוא מתווך נדל"ן שמתמחה בשוק של באר שבע, ומלווה מוכרים מהערכת השווי ועד החתימה. הוא עובד עם שיווק ממוקד, פרסום ממומן ומאגר קונים ומשקיעים פעיל, כדי למכור במחיר הטוב ביותר שהשוק מאפשר ובזמן סביר.',
 };
 
 export interface GenerateInput {

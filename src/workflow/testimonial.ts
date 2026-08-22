@@ -32,6 +32,12 @@ export interface SelectInput {
   /** Canonical neighborhood of the lead's property, if known. */
   neighborhoodCanonical?: string | null;
   assets: CatalogVideo[];
+  /**
+   * Paths already sent in this conversation. They are excluded, so asking for
+   * recommendations a second time brings a DIFFERENT clip rather than a repeat —
+   * and only once the catalog is exhausted is nothing sent.
+   */
+  alreadySent?: readonly string[];
   /** Injectable RNG for deterministic tests. Defaults to `Math.random`. */
   random?: () => number;
 }
@@ -63,9 +69,18 @@ export function selectVideo(input: SelectInput): SelectResult {
     };
   }
 
-  const testimonials = input.assets.filter((a) => a.type === TESTIMONIAL);
+  const sent = new Set(input.alreadySent ?? []);
+  const testimonials = input.assets.filter(
+    (a) => a.type === TESTIMONIAL && !sent.has(a.path),
+  );
   if (testimonials.length === 0) {
-    return { kind: 'none', reason: 'No testimonial video available' };
+    return {
+      kind: 'none',
+      reason:
+        sent.size > 0
+          ? 'Every testimonial video has already been sent'
+          : 'No testimonial video available',
+    };
   }
 
   // Neighborhood-specific takes priority — but only when the neighborhood is

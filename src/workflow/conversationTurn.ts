@@ -21,7 +21,8 @@ import type {
   WhatsAppChannel,
 } from '../whatsapp/channel.js';
 import { guardedSend } from '../whatsapp/guardedSend.js';
-import { classifyAndExtract } from './classify.js';
+import { classifyAndExtract, WORKFLOW_OWNED_FIELDS } from './classify.js';
+import { isAffirmative, isNegative } from './confirmation.js';
 import {
   decideMainMenu,
   decideTransition,
@@ -39,6 +40,7 @@ import {
   MAIN_MENU,
   mainMenuChoiceFor,
   OFF_TOPIC_REDIRECT_MESSAGE,
+  RESTART_DECLINED_MESSAGE,
   screeningAnswerFor,
   screeningQuestionFor,
   UNSUPPORTED_MEDIA_MESSAGE,
@@ -635,6 +637,92 @@ export function createConversationWorkflow(
         };
       }
 
+      // Restart confirmation: an already-complete lead tapped "check fit" or "book
+      // a meeting" again and was asked whether they really want to start over.
+      // ONLY an explicit yes redoes the flow — anything else (a "no", a question, a
+      // change of subject) simply clears the pending state and is handled as a
+      // normal message, so the questionnaire is never re-run by accident.
+      if (ctx.known.awaitingRestartConfirm) {
+        const pendingChoice = ctx.known.pendingRestartChoice ?? 'check_fit';
+        // The question is answered either way — the pending state ends here.
+        delete ctx.known.awaitingRestartConfirm;
+        delete ctx.known.pendingRestartChoice;
+
+        if (isAffirmative(ctx.currentText)) {
+          // Confirmed: drop the collected answers and re-run the chosen flow from
+          // its first question. Booking keeps its top-urgency implications.
+          const restartFacts: KnownFacts =
+            pendingChoice === 'book_meeting'
+              ? { bookingIntent: true, timeline: 'immediate' }
+              : {};
+          const decision = decideMainMenu(
+            pendingChoice,
+            'engaged',
+            restartFacts,
+            ctx.screenAll,
+          );
+          const question = screeningQuestionFor(decision.action);
+          const part: OutboundPart = question
+            ? questionPart(question)
+            : {
+                kind: 'list',
+                body: MAIN_MENU.body,
+                buttonLabel: MAIN_MENU.buttonLabel,
+                rows: [...MAIN_MENU.rows],
+              };
+          const storeBody = question ? question.body : MAIN_MENU.body;
+          logger.info({ conversationId, pendingChoice }, 'restart confirmed by the lead');
+
+          const { providerMessageId } = await send({ to: ctx.contactPhone, part });
+          await persist({
+            conversationId,
+            contactId: ctx.contactId,
+            contactPhone: ctx.contactPhone,
+            fromStage: ctx.stage,
+            toStage: decision.nextStage,
+            action: 'restart_confirmed',
+            extracted: restartFacts,
+            outbound: [{ body: storeBody, providerMessageId }],
+          });
+          return {
+            stage: decision.nextStage,
+            action: 'restart_confirmed',
+            text: storeBody,
+            sent: true,
+          };
+        }
+        // An explicit "no" is answered here, deterministically. It must never reach
+        // the classifier: a bare "לא" answering "are you sure?" has been read as an
+        // OPT_OUT, which marked the lead do-not-contact and silenced the bot for
+        // good — declining one offer is not a request to never be contacted again.
+        if (isNegative(ctx.currentText)) {
+          logger.info({ conversationId }, 'restart declined — nothing changes');
+          const { providerMessageId } = await send({
+            to: ctx.contactPhone,
+            part: { kind: 'text', text: RESTART_DECLINED_MESSAGE },
+          });
+          await persist({
+            conversationId,
+            contactId: ctx.contactId,
+            contactPhone: ctx.contactPhone,
+            fromStage: ctx.stage,
+            toStage: ctx.stage,
+            action: 'restart_declined',
+            extracted: ctx.known,
+            outbound: [{ body: RESTART_DECLINED_MESSAGE, providerMessageId }],
+          });
+          return {
+            stage: ctx.stage,
+            action: 'restart_declined',
+            text: RESTART_DECLINED_MESSAGE,
+            sent: true,
+          };
+        }
+        // Anything else (a question, a change of subject) is handled normally —
+        // including a genuine opt-out, which must still be honoured.
+        logger.info({ conversationId }, 'restart not confirmed — continuing as normal');
+      }
+
       // Hebrew-only gate (review req #4): a predominantly-English message is
       // unsupported input — a fixed Hebrew reply, no classification, no fact
       // change, no flow advance. An explicit opt-out (even in English, e.g.
@@ -732,6 +820,13 @@ export function createConversationWorkflow(
       }
       const validated = { ...analysis, extracted: cleanExtracted };
 
+      // Workflow-owned bookkeeping (photo count, restart confirmation, sent clips)
+      // is application state, not an observation: whatever the model returned for
+      // those fields is discarded so it can never write them.
+      for (const field of WORKFLOW_OWNED_FIELDS) {
+        delete validated.extracted[field];
+      }
+
       // `seriousSeller` / `sellMotivation` are the answer to the intent question,
       // not to a screening button. If the classifier inferred them from a
       // screening answer (e.g. reading "כן, באופן פרטי" as low intent), drop them
@@ -755,15 +850,22 @@ export function createConversationWorkflow(
         Object.assign(validated.extracted, screeningAnswer);
       }
 
-      // The one place a stage is chosen — pure code, never the model.
-      // Opt-out always wins. Otherwise the very first response opens with the
-      // main menu (§2/§8); a later main-menu tap routes deterministically; and
-      // anything else runs the classify-driven screening flow.
-      const menuChoice = mainMenuChoiceFor(ctx.currentText);
+      // A tapped menu row is a deterministic, unambiguous choice, so it OUTRANKS a
+      // classifier `OPT_OUT` read — which has mistaken a plain "בדיקת התאמה" tap for
+      // "stop contacting me" and permanently silenced a live lead. A message that
+      // trips the deterministic opt-out keywords is never treated as a menu choice,
+      // so a genuine request to stop is still honoured (and `decideTransition` puts
+      // opt-out first for everything else).
+      const menuChoice = isOptOutKeyword(ctx.currentText)
+        ? undefined
+        : mainMenuChoiceFor(ctx.currentText);
+
+      // The one place a stage is chosen — pure code, never the model. The very
+      // first response opens with the welcome sequence (§2/§8); a menu tap routes
+      // deterministically; anything else runs the classify-driven flow, which
+      // applies opt-out before every other rule.
       let decision: Decision;
-      if (validated.intent === 'OPT_OUT') {
-        decision = decideTransition(ctx.stage, validated, ctx.known, ctx.screenAll);
-      } else if (ctx.isFirstResponse) {
+      if (ctx.isFirstResponse && validated.intent !== 'OPT_OUT') {
         decision = { nextStage: 'engaged', action: 'show_main_menu', escalate: false };
       } else if (menuChoice) {
         decision = decideMainMenu(menuChoice, ctx.stage, ctx.known, ctx.screenAll);
@@ -777,8 +879,11 @@ export function createConversationWorkflow(
       // lead-in is sent only the first time AND only when this turn actually opens
       // the screening flow — never for an already-qualified lead who just says
       // "כן" (there is nothing left to collect; the acknowledgement is enough).
+      // A `confirm_restart` turn only ASKS whether to start over; it must not write
+      // booking facts onto a lead who has not confirmed anything yet.
       const bookingIntent =
-        menuChoice === 'book_meeting' || validated.extracted.bookingIntent === true;
+        decision.action !== 'confirm_restart' &&
+        (menuChoice === 'book_meeting' || validated.extracted.bookingIntent === true);
       const enteringScreening =
         decision.action === 'ask_sell_intent' ||
         decision.action === 'ask_neighborhood' ||
@@ -812,20 +917,19 @@ export function createConversationWorkflow(
         });
       }
 
-      // Testimonial video (Part B): when the customer asks for social proof,
-      // attach a matching customer video before the model-written text, if one is
-      // catalogued. Neighborhood-specific is preferred; unknown neighborhoods are
-      // never guessed. The channel uploads and caches the file on first send.
-      // Sent at most once per conversation — a repeat social-proof request gets
-      // the text again, but not the same clip over and over.
-      const testimonialAlreadySent = ctx.turns.some(
-        (t) => t.role === 'assistant' && t.content === TESTIMONIAL_PLACEHOLDER,
-      );
-      if (decision.action === 'send_social_proof' && !testimonialAlreadySent) {
+      // Testimonial video (Part B): when the customer asks for social proof — from
+      // the menu or in their own words — attach a matching customer video before the
+      // model-written text. Neighborhood-specific is preferred; unknown
+      // neighborhoods are never guessed. The channel uploads and caches the file on
+      // first send. Clips already sent are excluded, so asking again brings a
+      // DIFFERENT testimonial rather than the same one twice.
+      let sentTestimonial: string | undefined;
+      if (decision.action === 'send_social_proof') {
         const selection = selectVideo({
           track: 'testimonial',
           intent: 'seller',
           neighborhoodCanonical: ctx.known.neighborhood ?? null,
+          alreadySent: ctx.known.sentTestimonials ?? [],
           assets: await listMediaAssets(deps.db),
         });
         logger.info(
@@ -843,6 +947,7 @@ export function createConversationWorkflow(
           'testimonial video selection',
         );
         if (selection.kind === 'send') {
+          sentTestimonial = selection.asset.path;
           plan.push({
             part: {
               kind: 'video',
@@ -989,6 +1094,23 @@ export function createConversationWorkflow(
                 bookingIntent: true,
                 timeline:
                   ctx.known.timeline ?? validated.extracted.timeline ?? 'immediate',
+              }
+            : {}),
+          // Remember which flow is awaiting a yes, so the next message can act on
+          // it (and only redo the flow they actually asked for).
+          ...(decision.action === 'confirm_restart' && menuChoice
+            ? {
+                awaitingRestartConfirm: true,
+                pendingRestartChoice: menuChoice as 'check_fit' | 'book_meeting',
+              }
+            : {}),
+          // Remember the clip that went out, so the next request brings another one.
+          ...(sentTestimonial
+            ? {
+                sentTestimonials: [
+                  ...(ctx.known.sentTestimonials ?? []),
+                  sentTestimonial,
+                ],
               }
             : {}),
         },

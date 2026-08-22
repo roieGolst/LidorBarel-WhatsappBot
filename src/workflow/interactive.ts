@@ -100,6 +100,19 @@ export const INTENT_QUESTION =
   'כדי שלידור יגיע לשיחה מוכן — תוכל/י לשתף כמה פרטים על הנכס? למשל כתובת מדויקת, מספר חדרים, קומה, מצב הנכס, ומחיר משוער שחשבת עליו. 🙂';
 
 /**
+ * Asked when a lead who has ALREADY completed the flow taps "check fit" or
+ * "book a meeting" again. Their details are with Lidor, so re-running the whole
+ * questionnaire would be a step backwards — the bot confirms first and only an
+ * explicit yes restarts it (see `confirmation.ts` / `confirm_restart`).
+ */
+export const RESTART_CONFIRM_MESSAGE =
+  'כבר אספתי את כל הפרטים שצריך והם אצל לידור 🙂 בטוח שתרצה שנתחיל את התהליך מחדש?';
+
+/** Sent when the person declines the restart — nothing changes, no pressure. */
+export const RESTART_DECLINED_MESSAGE =
+  'מעולה, אז משאיר הכול כמו שהוא. הפרטים אצל לידור והוא יחזור אליך בהקדם 🙏';
+
+/**
  * A lead who is mainly price-checking, not seriously selling. We do NOT forward
  * them to Lidor; we leave the door open for when they are ready.
  */
@@ -300,6 +313,8 @@ const CANNED_REPLIES: Partial<Record<TurnAction, string>> = {
   // shared and asks only for what is missing, rather than a blind fixed script.
   low_intent_hold: LOW_INTENT_MESSAGE,
   stay_on_topic: OFF_TOPIC_REDIRECT_MESSAGE,
+  // The restart confirmation must be exact — it gates redoing the whole flow.
+  confirm_restart: RESTART_CONFIRM_MESSAGE,
 };
 
 /** The canned reply for an action, or `undefined` if the action is model-written. */

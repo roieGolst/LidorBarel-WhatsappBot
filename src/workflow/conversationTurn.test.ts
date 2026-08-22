@@ -28,6 +28,7 @@ import {
   INTRO_VIDEO_PATH,
   OFF_TOPIC_REDIRECT_MESSAGE,
   QUALIFIED_HANDOFF_MESSAGE,
+  RESTART_CONFIRM_MESSAGE,
   UNSUPPORTED_MEDIA_MESSAGE,
   WELCOME_MESSAGE,
 } from './interactive.js';
@@ -272,6 +273,159 @@ describe('conversationTurn', () => {
     expect(result2.action).toBe('unsupported_media');
     expect(result2.sent).toBe(false); // deduped
     expect(channel.sent).toHaveLength(1);
+  });
+
+  describe('menu taps after the lead has already completed the flow', () => {
+    /** A completed lead who taps a menu option again. */
+    async function seedCompleted(inbound: string) {
+      return seed({
+        inbound,
+        stage: 'qualified',
+        extracted: {
+          sellIntent: 'ready',
+          neighborhood: 'רמות',
+          timeline: 'immediate',
+          currentlyMarketed: 'no',
+        },
+        priorReply: QUALIFIED_HANDOFF_MESSAGE,
+      });
+    }
+
+    it('asks for confirmation instead of restarting, then restarts only on an explicit yes', async () => {
+      const { conversationId } = await seedCompleted('קביעת פגישה 📅');
+      const channel = new FakeChannel();
+      const llm = new FakeLlmClient([
+        '{"intent":"ANSWER","confidence":0.9,"extracted":{}}',
+      ]);
+
+      // Tap 1: confirmation, NOT a screening question.
+      const ask = await workflow({ db, llm, channel }).invoke(
+        conversationId,
+        config(conversationId),
+      );
+      expect(ask.action).toBe('confirm_restart');
+      expect(ask.stage).toBe('qualified');
+      expect(ask.text).toBe(RESTART_CONFIRM_MESSAGE);
+      let conversation = await getConversationById(db, conversationId);
+      // The collected answers are untouched while we wait.
+      expect((conversation?.extracted as KnownFacts).neighborhood).toBe('רמות');
+      expect((conversation?.extracted as KnownFacts).awaitingRestartConfirm).toBe(true);
+
+      // Now an explicit yes → the flow restarts from its first question, clean.
+      await recordInboundMessage(db, {
+        conversationId,
+        providerMessageId: `yes-${conversationId}`,
+        body: 'כן',
+        createdAt: new Date(Date.now() + 1000),
+      });
+      const restarted = await workflow({ db, llm, channel }).invoke(
+        conversationId,
+        config(conversationId),
+      );
+      expect(restarted.action).toBe('restart_confirmed');
+      conversation = await getConversationById(db, conversationId);
+      const extracted = conversation?.extracted as KnownFacts;
+      expect(extracted.neighborhood).toBeUndefined(); // cleared for a fresh run
+      expect(extracted.awaitingRestartConfirm).toBeUndefined();
+      expect(extracted.bookingIntent).toBe(true); // it was the booking flow
+    });
+
+    it('a plain "לא" declines the restart — and is NOT treated as an opt-out', async () => {
+      // Regression: the classifier read a bare "לא" answering "are you sure?" as an
+      // OPT_OUT, marking the lead do-not-contact and silencing the bot for good.
+      const { conversationId } = await seedCompleted('בדיקת התאמה ✅');
+      const channel = new FakeChannel();
+      const llm = new FakeLlmClient([
+        '{"intent":"ANSWER","confidence":0.9,"extracted":{}}', // the menu tap
+      ]);
+
+      await workflow({ db, llm, channel }).invoke(conversationId, config(conversationId));
+      await recordInboundMessage(db, {
+        conversationId,
+        providerMessageId: `no-${conversationId}`,
+        body: 'לא',
+        createdAt: new Date(Date.now() + 1000),
+      });
+      const declined = await workflow({ db, llm, channel }).invoke(
+        conversationId,
+        config(conversationId),
+      );
+
+      expect(declined.action).toBe('restart_declined');
+      expect(declined.stage).toBe('qualified'); // NOT opted_out
+      // The decline never reaches the model at all.
+      expect(llm.requests).toHaveLength(1);
+      const conversation = await getConversationById(db, conversationId);
+      const extracted = conversation?.extracted as KnownFacts;
+      expect(extracted.neighborhood).toBe('רמות'); // answers survive
+      expect(extracted.awaitingRestartConfirm).toBeUndefined(); // pending state cleared
+      // The contact is still contactable.
+      const contact = await findContactById(db, conversation!.contactId);
+      expect(contact?.doNotContact).not.toBe(true);
+    });
+
+    it('"about me" introduces Lidor without re-opening the flow or asking anything', async () => {
+      const { conversationId } = await seedCompleted('ℹ️ לשמוע פרטים');
+      const channel = new FakeChannel();
+      const llm = new FakeLlmClient([
+        '{"intent":"FAQ","confidence":0.9,"extracted":{}}',
+        'לידור בראל מתמחה בשוק של באר שבע ומלווה מוכרים מהערכת השווי ועד החתימה.',
+      ]);
+
+      const result = await workflow({ db, llm, channel }).invoke(
+        conversationId,
+        config(conversationId),
+      );
+
+      expect(result.action).toBe('about_lidor');
+      expect(result.stage).toBe('qualified'); // flow untouched
+      expect(result.text).not.toContain('?'); // asks nothing
+      const extracted = (await getConversationById(db, conversationId))
+        ?.extracted as KnownFacts;
+      expect(extracted.neighborhood).toBe('רמות');
+    });
+
+    it('"recommendations" sends a testimonial video, and a different one next time', async () => {
+      for (const path of ['recommendations/one.mp4', 'recommendations/two.mp4']) {
+        await upsertMediaAsset(db, {
+          path,
+          type: 'testimonial',
+          neighborhoods: [],
+          audience: 'seller',
+        });
+      }
+      const { conversationId } = await seedCompleted('המלצות ⭐');
+      const channel = new FakeChannel();
+      const llm = new FakeLlmClient([
+        '{"intent":"FAQ","confidence":0.9,"extracted":{}}',
+        'לידור מכר מעל 124 נכסים בבאר שבע.',
+        '{"intent":"FAQ","confidence":0.9,"extracted":{}}',
+        'ועוד סיפור הצלחה אחד.',
+      ]);
+
+      const first = await workflow({ db, llm, channel }).invoke(
+        conversationId,
+        config(conversationId),
+      );
+      expect(first.action).toBe('send_social_proof');
+      expect(first.stage).toBe('qualified'); // flow untouched
+      const firstVideo = channel.sent.find((s) => s.kind === 'video');
+      expect(firstVideo).toBeDefined();
+
+      // Asking again brings a DIFFERENT clip, not a repeat and not nothing.
+      await recordInboundMessage(db, {
+        conversationId,
+        providerMessageId: `rec2-${conversationId}`,
+        body: 'המלצות ⭐',
+        createdAt: new Date(Date.now() + 1000),
+      });
+      await workflow({ db, llm, channel }).invoke(conversationId, config(conversationId));
+      const videos = channel.sent.filter((s) => s.kind === 'video');
+      expect(videos).toHaveLength(2);
+      if (videos[0]?.kind === 'video' && videos[1]?.kind === 'video') {
+        expect(videos[0].filePath).not.toBe(videos[1].filePath);
+      }
+    });
   });
 
   it('shows a typing indicator against the inbound message before the model replies', async () => {

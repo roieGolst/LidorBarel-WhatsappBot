@@ -400,8 +400,35 @@ describe('decideTransition', () => {
       expect(decideMainMenu('testimonials', 'engaged').action).toBe('send_social_proof');
     });
 
-    it('learn_more answers about the service', () => {
-      expect(decideMainMenu('learn_more', 'engaged').action).toBe('answer_faq');
+    it('learn_more ("about me") introduces Lidor', () => {
+      expect(decideMainMenu('learn_more', 'engaged').action).toBe('about_lidor');
+    });
+
+    describe('after the lead has already completed the flow', () => {
+      it('confirms before redoing the flow instead of restarting it', () => {
+        const answered: KnownFacts = {
+          sellIntent: 'ready',
+          neighborhood: 'רמות',
+          currentlyMarketed: 'no',
+        };
+        for (const choice of ['check_fit', 'book_meeting'] as const) {
+          const decision = decideMainMenu(choice, 'qualified', answered);
+          expect(decision.action).toBe('confirm_restart');
+          // Nothing moves until they say yes — no question is re-asked.
+          expect(decision.nextStage).toBe('qualified');
+          expect(decision.qualified).toBeUndefined();
+        }
+      });
+
+      it('still answers "about me" and testimonials without touching the flow', () => {
+        expect(decideMainMenu('learn_more', 'qualified').action).toBe('about_lidor');
+        expect(decideMainMenu('testimonials', 'qualified').action).toBe(
+          'send_social_proof',
+        );
+        // Neither re-opens screening.
+        expect(decideMainMenu('learn_more', 'qualified').nextStage).toBe('qualified');
+        expect(decideMainMenu('testimonials', 'qualified').nextStage).toBe('qualified');
+      });
     });
 
     it('book_meeting runs the screening flow (a call is booked after a few details)', () => {

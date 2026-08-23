@@ -24,9 +24,9 @@ The **inbound conversation engine is mature and well covered by tests**. The
 
 | Phase | Deliverable | Status |
 |---|---|---|
-| 0 | Alignment documents | In progress |
-| 1 | `leadgen` intake (receives leads, sends nothing) | Not started |
-| 2 | Consent gate + send-window enforcement | Not started |
+| 0 | Alignment documents | Done |
+| 1 | `leadgen` intake (receives leads, sends nothing) | Done |
+| 2 | Consent gate + send-window enforcement | Next |
 | 3 | Approved-template first contact | Not started |
 | 4 | Follow-up scheduler (≤ 5 days) | Not started |
 | 5 | Monday.com sync | Not started |
@@ -35,7 +35,8 @@ The **inbound conversation engine is mature and well covered by tests**. The
 
 Already delivered: repo foundations, data layer, inbound WhatsApp channel with
 idempotent ingestion, the LangGraph conversation workflow, opt-out enforcement,
-and the spec's opening sequence with interactive buttons and lists.
+the spec's opening sequence with interactive buttons and lists, and Meta Lead Ads
+intake (leads are captured; nothing is sent yet).
 
 Phases 3 onward depend on external items — Meta Business verification, lead-form
 consent wording, and approved message templates. See

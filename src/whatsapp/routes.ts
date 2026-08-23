@@ -1,6 +1,12 @@
-import type { FastifyInstance, FastifyRequest } from 'fastify';
+import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import type { Config } from '../config.js';
 import type { Database } from '../db/client.js';
+import { ingestLeads, type LeadIngestDeps } from '../leads/ingestLead.js';
+import {
+  extractLeadgenEvents,
+  isPageWebhook,
+  leadgenEnvelopeSchema,
+} from '../leads/leadgenPayload.js';
 import type { TurnProducer } from '../queue/conversationQueue.js';
 import { ingestEvents, type IngestResult } from './ingest.js';
 import { extractEvents, webhookEnvelopeSchema } from './payload.js';
@@ -22,6 +28,12 @@ export interface WebhookRouteOptions {
    * with a fake producer and no live Redis.
    */
   producer?: TurnProducer;
+  /**
+   * Meta Lead Ads intake. Optional: without a Page access token carrying
+   * `leads_retrieval` a lead's answers cannot be fetched, so the leadgen path
+   * fails closed (503) rather than ACKing a paid lead it cannot store.
+   */
+  leadIngest?: LeadIngestDeps;
 }
 
 /**
@@ -53,14 +65,85 @@ async function enqueueTurns(
 }
 
 /**
- * Registers the WhatsApp webhook endpoints.
+ * Handles a Meta **Page** webhook carrying lead-form submissions.
+ *
+ * Shares the callback URL and the app secret with the WhatsApp webhook — the two
+ * are told apart by the envelope's `object` field — but nothing else. Status
+ * codes follow the same reasoning as the WhatsApp path: 2xx only when the lead is
+ * durably stored or can never be stored, non-2xx whenever a redelivery could
+ * still succeed.
+ */
+async function handleLeadgenWebhook(
+  request: FastifyRequest,
+  reply: FastifyReply,
+  db: Database,
+  leadIngest: LeadIngestDeps | undefined,
+): Promise<void> {
+  const parsed = leadgenEnvelopeSchema.safeParse(request.body);
+  if (!parsed.success) {
+    // 200 for the same reason as the WhatsApp path: correctly signed, so it
+    // really is from Meta, and redelivering something we cannot interpret would
+    // repeat forever.
+    request.log.warn({ issues: parsed.error.issues }, 'unparseable page webhook');
+    return reply.code(200).send();
+  }
+
+  const events = extractLeadgenEvents(parsed.data);
+  if (events.length === 0) {
+    // A Page webhook for a field we are not subscribed to act on (`feed`, and
+    // similar). Nothing to do, and nothing wrong.
+    return reply.code(200).send();
+  }
+
+  if (!leadIngest) {
+    // Fail closed. ACKing here would discard a paid lead permanently; a 503 makes
+    // Meta redeliver once the Page token is configured.
+    request.log.error(
+      { leads: events.length },
+      'leadgen webhook received but lead retrieval is not configured',
+    );
+    return reply.code(503).send();
+  }
+
+  const { results, retryableError } = await ingestLeads(db, events, leadIngest);
+
+  const duplicates = results.filter((r) => r.duplicate).length;
+  const skipped = results.filter((r) => r.skipped).length;
+  request.log.info(
+    {
+      leads: events.length,
+      ingested: results.length - duplicates - skipped,
+      duplicates,
+      skipped,
+      // Whether these leads may be proactively contacted at all. Expected to be
+      // zero until the form carries explicit WhatsApp consent wording.
+      consented: results.filter((r) => r.consentStatus === 'whatsapp_opt_in').length,
+    },
+    'processed leadgen webhook',
+  );
+
+  if (retryableError) {
+    // At least one lead failed for a reason another delivery could fix. Meta
+    // retries the batch; the ones already stored are recognised as duplicates.
+    throw retryableError;
+  }
+
+  return reply.code(200).send();
+}
+
+/**
+ * Registers the Meta webhook endpoints.
  *
  * `GET /webhooks/whatsapp`  — Meta's subscription handshake.
- * `POST /webhooks/whatsapp` — inbound messages and delivery statuses.
+ * `POST /webhooks/whatsapp` — WhatsApp messages and delivery statuses, **and**
+ * Page `leadgen` submissions. One URL serves both because Meta signs both with
+ * the same app secret and the envelope's `object` field distinguishes them;
+ * splitting them would mean a second endpoint to configure and verify for no
+ * benefit.
  */
 export function registerWhatsAppRoutes(
   app: FastifyInstance,
-  { db, config, producer }: WebhookRouteOptions,
+  { db, config, producer, leadIngest }: WebhookRouteOptions,
 ): void {
   app.get('/webhooks/whatsapp', (request, reply) => {
     if (!config.metaWebhookVerifyToken) {
@@ -102,6 +185,13 @@ export function registerWhatsAppRoutes(
       // forged request must not be told which part was wrong.
       request.log.warn('rejected webhook with invalid signature');
       return reply.code(403).send();
+    }
+
+    // Meta Lead Ads arrive on this same URL with `object: "page"`. Dispatch
+    // before the WhatsApp envelope parse, which would accept the body and then
+    // find no messages in it.
+    if (isPageWebhook(request.body)) {
+      return handleLeadgenWebhook(request, reply, db, leadIngest);
     }
 
     const parsed = webhookEnvelopeSchema.safeParse(request.body);

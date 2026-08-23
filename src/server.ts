@@ -1,6 +1,7 @@
 import Fastify, { type FastifyInstance } from 'fastify';
 import type { Config } from './config.js';
 import type { Database } from './db/client.js';
+import type { LeadIngestDeps } from './leads/ingestLead.js';
 import type { TurnProducer } from './queue/conversationQueue.js';
 import { buildLoggerOptions } from './logger.js';
 import { registerDebugRoutes } from './admin/debugRoutes.js';
@@ -15,6 +16,11 @@ export interface ServerOptions {
    * are still ingested but no reply is triggered.
    */
   producer?: TurnProducer;
+  /**
+   * Meta Lead Ads intake. Optional so the server boots without a Page access
+   * token; absent, the leadgen webhook fails closed rather than discarding leads.
+   */
+  leadIngest?: LeadIngestDeps;
 }
 
 /**
@@ -23,7 +29,12 @@ export interface ServerOptions {
  * Returned unstarted so tests can drive it through `app.inject()` without
  * binding a port.
  */
-export function buildServer({ db, config, producer }: ServerOptions): FastifyInstance {
+export function buildServer({
+  db,
+  config,
+  producer,
+  leadIngest,
+}: ServerOptions): FastifyInstance {
   const app = Fastify({
     // Options rather than an instance, so Fastify builds its own child logger
     // while keeping the same redaction rules.
@@ -61,7 +72,12 @@ export function buildServer({ db, config, producer }: ServerOptions): FastifyIns
     return { status: 'ok' };
   });
 
-  registerWhatsAppRoutes(app, { db, config, ...(producer ? { producer } : {}) });
+  registerWhatsAppRoutes(app, {
+    db,
+    config,
+    ...(producer ? { producer } : {}),
+    ...(leadIngest ? { leadIngest } : {}),
+  });
 
   // A development-only window into a lead's full state (facts, qualification,
   // transition history). Never registered in production, so a WhatsApp customer

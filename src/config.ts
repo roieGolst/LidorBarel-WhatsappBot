@@ -11,8 +11,8 @@ import { z } from 'zod';
  *     secrets, and a validation error is a very easy way to leak one into a log
  *     aggregator. Errors report the variable name and the reason only.
  *
- * Later milestones add their own sections (Meta Cloud API, Monday.com, Google
- * Calendar, Anthropic) to this same schema.
+ * Later phases add their own sections (Monday.com, Google Calendar) to this
+ * same schema.
  */
 const configSchema = z.object({
   nodeEnv: z.enum(['development', 'test', 'production']).default('development'),
@@ -65,6 +65,32 @@ const configSchema = z.object({
     .regex(/^v\d+\.\d+$/)
     .default('v21.0'),
 
+  // --- Meta Lead Ads (leadgen intake) ---------------------------------------
+  //
+  // Separate from the WhatsApp credentials above: retrieving a lead's answers
+  // needs a **Page** access token carrying `leads_retrieval`, which the WhatsApp
+  // Business Account token does not have. Optional, so the app boots without it;
+  // the leadgen webhook then fails closed rather than ACKing leads it cannot store.
+
+  /** Page access token with `leads_retrieval`, for fetching a lead by `leadgen_id`. */
+  metaPageAccessToken: z.string().min(1).optional(),
+
+  /**
+   * The `field_data` key on the lead form holding the WhatsApp opt-in answer.
+   *
+   * Until this is set, every lead is recorded as `privacy_policy_only` and the
+   * proactive send path refuses it (requirement NN-2). That is the intended
+   * default: a privacy-policy checkbox is not consent to be messaged on WhatsApp.
+   */
+  metaLeadConsentField: z.string().min(1).optional(),
+
+  /**
+   * The exact answer that counts as consent, when the form's checkbox echoes its
+   * label back rather than a boolean. Unset means the usual affirmative values
+   * are accepted.
+   */
+  metaLeadConsentValue: z.string().min(1).optional(),
+
   // --- Anthropic (LLM) ------------------------------------------------------
   //
   // Optional as a group so the app still boots for tests and simulation, which
@@ -97,6 +123,9 @@ function readEnv(env: NodeJS.ProcessEnv): Record<string, unknown> {
     metaAccessToken: env.META_ACCESS_TOKEN,
     metaPhoneNumberId: env.META_PHONE_NUMBER_ID,
     metaGraphApiVersion: env.META_GRAPH_API_VERSION,
+    metaPageAccessToken: env.META_PAGE_ACCESS_TOKEN,
+    metaLeadConsentField: env.META_LEAD_CONSENT_FIELD,
+    metaLeadConsentValue: env.META_LEAD_CONSENT_VALUE,
     anthropicApiKey: env.ANTHROPIC_API_KEY,
   };
 }
@@ -114,6 +143,9 @@ const ENV_VAR_NAMES: Record<keyof Config, string> = {
   metaAccessToken: 'META_ACCESS_TOKEN',
   metaPhoneNumberId: 'META_PHONE_NUMBER_ID',
   metaGraphApiVersion: 'META_GRAPH_API_VERSION',
+  metaPageAccessToken: 'META_PAGE_ACCESS_TOKEN',
+  metaLeadConsentField: 'META_LEAD_CONSENT_FIELD',
+  metaLeadConsentValue: 'META_LEAD_CONSENT_VALUE',
   anthropicApiKey: 'ANTHROPIC_API_KEY',
 };
 

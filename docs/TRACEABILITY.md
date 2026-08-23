@@ -15,10 +15,10 @@ Last updated: 2026-08-23
 
 | Req | Requirement | Implementation | Tests | Status |
 |---|---|---|---|---|
-| 1 | Consent captured with provenance | `db/repositories/contacts.ts` (`mergeConsent`, `consentSource`, `consentText`) | `contacts.test.ts` | ✅ |
-| 2a | `leadgen` webhook received and parsed | *(none)* | *(none)* | ❌ |
-| 2a | Lead retrieved by `leadgen_id` | *(none)* | *(none)* | ❌ |
-| 2a | Referral persisted, replay-safe on `external_lead_id` | schema only — `db/schema.ts` `campaign_referrals` | *(none)* | 📋 |
+| 1 | Consent captured with provenance | `db/repositories/contacts.ts` · `leads/fieldMapping.ts` | `contacts.test.ts` · `fieldMapping.test.ts` · `ingestLead.test.ts` | ✅ |
+| 2a | `leadgen` webhook received and parsed | `leads/leadgenPayload.ts` · `whatsapp/routes.ts` | `leadgenPayload.test.ts` · `leadgenRoutes.test.ts` | ✅ |
+| 2a | Lead retrieved by `leadgen_id` | `leads/graphLeads.ts` | `graphLeads.test.ts` | ✅ |
+| 2a | Referral persisted, replay-safe on `external_lead_id` | `leads/ingestLead.ts` | `ingestLead.test.ts` (redelivery) | ✅ |
 | 2b | Contact created / updated, deduped by phone | `db/repositories/contacts.ts` · `domain/phone.ts` | `contacts.test.ts` · `phone.test.ts` | ✅ |
 | 2c | Approved-template send | *(none — no `sendTemplate`)* | *(none)* | ❌ |
 | 2c | Grace period before first contact | *(none)* | *(none)* | ❌ |
@@ -38,7 +38,7 @@ Last updated: 2026-08-23
 | ID | Rule | Implementation | Tests | Status |
 |---|---|---|---|---|
 | NN-1 | No message after opt-out | `whatsapp/guardedSend.ts` · `db/repositories/optOuts.ts` | `guardedSend.test.ts` · `optOuts.test.ts` | ✅ |
-| NN-2 | **Consent gates every proactive send** | `canReceiveProactiveMessage()` exists but **has no caller** — see **D-1** | `contacts.test.ts` tests the predicate, **not its enforcement** | ⚠️ |
+| NN-2 | **Consent gates every proactive send** | Decision side done and fails closed (`leads/fieldMapping.ts`). **Enforcement side still has no caller** — `canReceiveProactiveMessage()`, see **D-1**. | `fieldMapping.test.ts` · `ingestLead.test.ts` cover the decision; **enforcement is untested because it does not exist** | ⚠️ Phase 2 |
 | NN-3 | Five-day follow-up cap | *(none)* | *(none)* | ❌ |
 | NN-4 | Postgres is the source of truth | `db/schema.ts` · repository layer | integration tests on real Postgres | ✅ |
 | NN-5 | LLM never sets a stage | `workflow/decide.ts` owns stages; `classify.ts` returns JSON only | `decide.test.ts` · `conversationTurn.test.ts` | ✅ |

@@ -1,4 +1,10 @@
-import type { ListRow, OutboundResult, ReplyButton, WhatsAppChannel } from './channel.js';
+import type {
+  ListRow,
+  OutboundResult,
+  OutboundTemplate,
+  ReplyButton,
+  WhatsAppChannel,
+} from './channel.js';
 
 /** A send before it has a provider id, discriminated by kind. */
 export type DraftMessage =
@@ -11,7 +17,8 @@ export type DraftMessage =
       body: string;
       buttonLabel: string;
       rows: readonly ListRow[];
-    };
+    }
+  | { kind: 'template'; to: string; template: OutboundTemplate };
 
 /** One recorded send. Intersecting the union with the id keeps each member. */
 export type SentMessage = DraftMessage & { providerMessageId: string };
@@ -50,6 +57,10 @@ export class FakeChannel implements WhatsAppChannel {
 
   sendText(to: string, text: string): Promise<OutboundResult> {
     return this.record({ kind: 'text', to, text });
+  }
+
+  sendTemplate(to: string, template: OutboundTemplate): Promise<OutboundResult> {
+    return this.record({ kind: 'template', to, template });
   }
 
   sendVideo(to: string, filePath: string, caption?: string): Promise<OutboundResult> {

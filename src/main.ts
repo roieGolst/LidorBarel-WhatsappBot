@@ -5,6 +5,11 @@ import { refreshMediaCatalog } from './whatsapp/mediaCatalog.js';
 import { closeDatabase, getDatabase } from './db/client.js';
 import { getFreshMediaId, saveMediaId } from './db/repositories/mediaUploads.js';
 import { createGraphLeadsClient } from './leads/graphLeads.js';
+import {
+  startOutreachSweeper,
+  type OutreachSweeper,
+} from './outreach/outreachSweeper.js';
+import { INTRO_VIDEO_PATH } from './workflow/interactive.js';
 import type { LeadIngestDeps } from './leads/ingestLead.js';
 import { AnthropicLlmClient } from './llm/client.js';
 import { getLogger } from './logger.js';
@@ -18,6 +23,7 @@ import {
 } from './queue/conversationWorker.js';
 import { buildServer } from './server.js';
 import { createCheckpointer } from './workflow/checkpointer.js';
+import type { WhatsAppChannel } from './whatsapp/channel.js';
 import { createCloudApiChannel } from './whatsapp/cloudApiChannel.js';
 
 /** Loads configuration, reporting problems clearly before the logger exists. */
@@ -40,6 +46,8 @@ interface ConversationPipeline {
   queue: ConversationQueue;
   worker: ConversationWorker;
   checkpointer: PostgresSaver;
+  /** Shared with the outreach sweeper, so both send through one channel. */
+  channel: WhatsAppChannel;
 }
 
 /**
@@ -100,7 +108,7 @@ async function buildConversationPipeline(
       checkpointer,
     );
 
-    return { queue, worker, checkpointer };
+    return { queue, worker, checkpointer, channel };
   } catch (error) {
     // A partial build must not leak connections. Anything constructed before the
     // failure is torn down before we fall back to ingestion-only.
@@ -155,6 +163,42 @@ async function main(): Promise<void> {
       }
     : undefined;
 
+  // Proactive first contact. Off unless explicitly enabled: this is the one
+  // subsystem that messages people who have not messaged us, so it must never
+  // start merely because credentials happen to be present.
+  let outreach: OutreachSweeper | undefined;
+  if (!config.outreachEnabled) {
+    log.info('proactive outreach disabled (OUTREACH_ENABLED is not "true")');
+  } else if (!pipeline) {
+    // The template opens the conversation; without a worker, the lead's reply
+    // would go unanswered. Opening a conversation we cannot continue is worse
+    // than not opening it.
+    log.warn(
+      'proactive outreach requested but the conversation worker is disabled — ' +
+        'not starting it, since replies would go unanswered',
+    );
+  } else {
+    outreach = startOutreachSweeper({
+      db,
+      channel: pipeline.channel,
+      template: {
+        name: config.outreachTemplateName,
+        language: config.outreachTemplateLanguage,
+        headerVideoPath: INTRO_VIDEO_PATH,
+      },
+      gracePeriodMs: config.outreachGracePeriodMinutes * 60 * 1000,
+      intervalMs: config.outreachSweepSeconds * 1000,
+      batchSize: config.outreachBatchSize,
+    });
+    log.info(
+      {
+        template: config.outreachTemplateName,
+        graceMinutes: config.outreachGracePeriodMinutes,
+      },
+      'proactive outreach enabled',
+    );
+  }
+
   const app = buildServer({
     db,
     config,
@@ -183,6 +227,9 @@ async function main(): Promise<void> {
     void (async () => {
       try {
         await app.close();
+        // Stopped before the worker and the database: a sweep in flight would
+        // otherwise try to send through a closing channel.
+        outreach?.stop();
         if (pipeline) {
           await pipeline.worker.close();
           await pipeline.queue.close();
@@ -227,6 +274,7 @@ async function main(): Promise<void> {
       whatsappConfigured: Boolean(config.metaAppSecret && config.metaAccessToken),
       conversationWorker: pipeline ? 'enabled' : 'disabled',
       leadgenIntake: leadIngest ? 'enabled' : 'disabled',
+      proactiveOutreach: outreach ? 'enabled' : 'disabled',
     },
     'server started',
   );

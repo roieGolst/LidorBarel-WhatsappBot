@@ -133,6 +133,41 @@ const configSchema = z.object({
    */
   metaLeadConsentValue: z.string().min(1).optional(),
 
+  // --- Proactive outreach (business-initiated first contact) ------------------
+
+  /**
+   * Master switch for proactive outreach. **Defaults to off.**
+   *
+   * This is the one subsystem that messages people who have not messaged us, so
+   * it does not turn itself on by having credentials present. Enabling it is a
+   * deliberate act, taken once Meta Business verification is complete and the
+   * consent configuration has been checked.
+   */
+  outreachEnabled: z
+    .enum(['true', 'false'])
+    .default('false')
+    .transform((value) => value === 'true'),
+
+  /** The approved template used to open a conversation. */
+  outreachTemplateName: z.string().min(1).default('welcome_message'),
+
+  /** Its approved language code. Must match the approval exactly. */
+  outreachTemplateLanguage: z.string().min(1).default('he'),
+
+  /**
+   * How long to leave a new lead alone before reaching out.
+   *
+   * The grace period exists so the bot does not talk over someone already
+   * opening the chat themselves after submitting the form.
+   */
+  outreachGracePeriodMinutes: z.coerce.number().int().min(0).max(1440).default(20),
+
+  /** How often to look for leads whose grace period has elapsed. */
+  outreachSweepSeconds: z.coerce.number().int().min(10).max(3600).default(60),
+
+  /** Most leads contacted per sweep, so a campaign spike is spread out. */
+  outreachBatchSize: z.coerce.number().int().min(1).max(500).default(25),
+
   // --- Anthropic (LLM) ------------------------------------------------------
   //
   // Optional as a group so the app still boots for tests and simulation, which
@@ -171,6 +206,12 @@ function readEnv(env: NodeJS.ProcessEnv): Record<string, unknown> {
     metaLeadConsentText: env.META_LEAD_CONSENT_TEXT,
     metaLeadConsentField: env.META_LEAD_CONSENT_FIELD,
     metaLeadConsentValue: env.META_LEAD_CONSENT_VALUE,
+    outreachEnabled: env.OUTREACH_ENABLED,
+    outreachTemplateName: env.OUTREACH_TEMPLATE_NAME,
+    outreachTemplateLanguage: env.OUTREACH_TEMPLATE_LANGUAGE,
+    outreachGracePeriodMinutes: env.OUTREACH_GRACE_PERIOD_MINUTES,
+    outreachSweepSeconds: env.OUTREACH_SWEEP_SECONDS,
+    outreachBatchSize: env.OUTREACH_BATCH_SIZE,
     anthropicApiKey: env.ANTHROPIC_API_KEY,
   };
 }
@@ -194,6 +235,12 @@ const ENV_VAR_NAMES: Record<keyof Config, string> = {
   metaLeadConsentText: 'META_LEAD_CONSENT_TEXT',
   metaLeadConsentField: 'META_LEAD_CONSENT_FIELD',
   metaLeadConsentValue: 'META_LEAD_CONSENT_VALUE',
+  outreachEnabled: 'OUTREACH_ENABLED',
+  outreachTemplateName: 'OUTREACH_TEMPLATE_NAME',
+  outreachTemplateLanguage: 'OUTREACH_TEMPLATE_LANGUAGE',
+  outreachGracePeriodMinutes: 'OUTREACH_GRACE_PERIOD_MINUTES',
+  outreachSweepSeconds: 'OUTREACH_SWEEP_SECONDS',
+  outreachBatchSize: 'OUTREACH_BATCH_SIZE',
   anthropicApiKey: 'ANTHROPIC_API_KEY',
 };
 

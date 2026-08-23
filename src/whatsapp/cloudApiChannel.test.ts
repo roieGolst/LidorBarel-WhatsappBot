@@ -252,3 +252,74 @@ describe('CloudApiChannel', () => {
     });
   });
 });
+
+describe('CloudApiChannel.sendTemplate', () => {
+  it('posts the template name and language', async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ messages: [{ id: 'wamid.T' }] }));
+
+    await new CloudApiChannel(CREDENTIALS).sendTemplate('+972521234501', {
+      name: 'welcome_message',
+      language: 'he',
+    });
+
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    const body = JSON.parse(init.body as string) as Record<string, unknown>;
+    expect(body).toMatchObject({
+      messaging_product: 'whatsapp',
+      to: '+972521234501',
+      type: 'template',
+      template: { name: 'welcome_message', language: { code: 'he' } },
+    });
+  });
+
+  it('sends no components when the template has no media header', async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ messages: [{ id: 'wamid.T' }] }));
+
+    await new CloudApiChannel(CREDENTIALS).sendTemplate('+972521234501', {
+      name: 'welcome_message',
+      language: 'he',
+    });
+
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    const body = JSON.parse(init.body as string) as {
+      template: Record<string, unknown>;
+    };
+    expect(body.template.components).toBeUndefined();
+  });
+
+  it('uploads the header video and references it by media id', async () => {
+    // The approved welcome_message template has a VIDEO header, which Meta
+    // requires as a parameter on every send.
+    const path = join(tmpdir(), `tpl-${Date.now()}.mp4`);
+    await writeFile(path, 'fake-video-bytes');
+    fetchMock
+      .mockResolvedValueOnce(jsonResponse({ id: 'media-123' }))
+      .mockResolvedValueOnce(jsonResponse({ messages: [{ id: 'wamid.T' }] }));
+
+    await new CloudApiChannel(CREDENTIALS).sendTemplate('+972521234501', {
+      name: 'welcome_message',
+      language: 'he',
+      headerVideoPath: path,
+    });
+
+    const [, init] = fetchMock.mock.calls[1] as [string, RequestInit];
+    const body = JSON.parse(init.body as string) as {
+      template: { components: { type: string; parameters: unknown[] }[] };
+    };
+    expect(body.template.components[0]).toEqual({
+      type: 'header',
+      parameters: [{ type: 'video', video: { id: 'media-123' } }],
+    });
+  });
+
+  it('returns the provider message id', async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ messages: [{ id: 'wamid.TPL' }] }));
+
+    const result = await new CloudApiChannel(CREDENTIALS).sendTemplate('+972521234501', {
+      name: 'welcome_message',
+      language: 'he',
+    });
+
+    expect(result.providerMessageId).toBe('wamid.TPL');
+  });
+});

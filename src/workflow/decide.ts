@@ -470,5 +470,9 @@ export function leadPriorityScore(facts: KnownFacts): number | undefined {
  * FAQ). A first inbound must not linger in `new`; everything else stays put.
  */
 function holdStage(current: ConversationStage): ConversationStage {
-  return current === 'new' || current === 'awaiting_first_contact' ? 'engaged' : current;
+  return current === 'new' ||
+    current === 'awaiting_first_contact' ||
+    current === 'awaiting_reply'
+    ? 'engaged'
+    : current;
 }

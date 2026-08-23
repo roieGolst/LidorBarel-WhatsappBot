@@ -22,8 +22,10 @@ Last updated: 2026-08-23
 | 2a | Lead retrieved by `leadgen_id` | `leads/graphLeads.ts` | `graphLeads.test.ts` | ✅ |
 | 2a | Referral persisted, replay-safe on `external_lead_id` | `leads/ingestLead.ts` | `ingestLead.test.ts` (redelivery) | ✅ |
 | 2b | Contact created / updated, deduped by phone | `db/repositories/contacts.ts` · `domain/phone.ts` | `contacts.test.ts` · `phone.test.ts` | ✅ |
-| 2c | Approved-template send | *(none — no `sendTemplate`)* | *(none)* | ❌ |
-| 2c | Grace period before first contact | *(none)* | *(none)* | ❌ |
+| 2c | Approved-template send | `whatsapp/channel.ts` · `whatsapp/cloudApiChannel.ts` | `cloudApiChannel.test.ts` (sendTemplate) | ✅ |
+| 2c | Grace period before first contact | `outreach/firstContact.ts` (`findLeadsAwaitingFirstContact`) | `firstContact.test.ts` | ✅ |
+| 2c | First contact sent at most once | `outreach/firstContact.ts` (CAS claim on stage) | `firstContact.test.ts` (concurrent sweeps) | ✅ |
+| 2c | Template does not open a messaging window | `outreach/firstContact.ts` | `firstContact.test.ts` · `e2e/leadLifecycle.test.ts` | ✅ |
 | 3 | Follow-up scheduling, ≤ 5 days | schema only — `conversations.next_followup_at` | *(none)* | 📋 |
 | 4a | Conversation turn, transcript, media | `workflow/conversationTurn.ts` | `conversationTurn.test.ts` | ✅ |
 | 4a | Answer validation and re-asking | `workflow/validateAnswer.ts` | `validateAnswer.test.ts` | ✅ |
@@ -61,26 +63,23 @@ Last updated: 2026-08-23
 
 ---
 
-## Required end-to-end test
+## End-to-end test
 
-**Status: ❌ does not exist.** This is the check that would have caught the
-misalignment this document set exists to prevent.
+**Status: ✅ `src/e2e/leadLifecycle.test.ts`.** The check that would have caught
+the misalignment this document set exists to prevent.
 
-Planned location: `src/e2e/leadLifecycle.test.ts`
+**Golden path** (passing): leadgen webhook → contact + referral + conversation
+with Q1/Q3 seeded → approved template sent, window still closed → lead taps a
+template button → window opens → qualification asks Q2 next.
 
-**Golden path** — must pass:
+**Negative paths** (passing):
 
-1. `leadgen` webhook arrives → contact + `campaign_referrals` rows created
-2. Replaying the same `leadgen_id` creates nothing further
-3. Consented lead → template first contact sent
-4. Lead replies → 24h window opens → qualification proceeds
-5. Qualification completes → Monday projection written → follow-ups cancelled
+| Case | Required outcome | Status |
+|---|---|---|
+| Lead from a form not declared as carrying consent | Captured, attributed, **never messaged** (NN-2) | ✅ |
+| Lead who messages before the grace period elapses | Inbound opening kept, no template | ✅ |
+| Opted-out contact, any send | **Refused** (NN-1) | ✅ `guardedSend.test.ts` |
+| Same lead swept twice / two instances | Sent **once** | ✅ `firstContact.test.ts` |
 
-**Negative paths** — must also pass:
-
-| Case | Required outcome |
-|---|---|
-| `privacy_policy_only` contact, proactive send attempted | **Refused** (NN-2) |
-| Opted-out contact, any send attempted | **Refused** (NN-1) |
-| Follow-up due, contact opted out in the meantime | **Not sent, cancelled** (NN-3) |
-| Follow-up window exceeds five days | **Not sent** (NN-3) |
+**Not yet covered** — the steps that do not exist: Monday projection (Phase 5),
+Calendar booking (Phase 6), and follow-up cancellation (Phase 4).

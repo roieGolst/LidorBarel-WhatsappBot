@@ -196,5 +196,11 @@ export function evaluateGate(input: GateInput): GateResult {
 
 /** A first inbound must not linger in `new` when a guard fires on it. */
 function hold(stage: ConversationStage): ConversationStage {
-  return stage === 'new' || stage === 'awaiting_first_contact' ? 'engaged' : stage;
+  // `awaiting_reply` is a lead we opened with a template who has now answered —
+  // the same "first inbound of a live conversation" situation as the other two.
+  return stage === 'new' ||
+    stage === 'awaiting_first_contact' ||
+    stage === 'awaiting_reply'
+    ? 'engaged'
+    : stage;
 }

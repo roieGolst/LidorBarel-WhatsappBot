@@ -38,6 +38,20 @@ export interface WhatsAppChannel {
   ): Promise<OutboundResult>;
 
   /**
+   * Sends a pre-approved message template.
+   *
+   * The only thing WhatsApp accepts outside the 24-hour customer-service window,
+   * and therefore the only way to open a business-initiated conversation. The
+   * wording is fixed at approval time and cannot be varied at send time — only
+   * the declared parameters change — which is precisely why it is a separate
+   * method rather than another free-form shape.
+   *
+   * A template send does **not** open a messaging window. Only the person's reply
+   * does.
+   */
+  sendTemplate(to: string, template: OutboundTemplate): Promise<OutboundResult>;
+
+  /**
    * Shows the "typing…" indicator to the person while the bot composes a reply,
    * and marks their message read. Keyed by the INBOUND message's id (Meta requires
    * it). The indicator clears when the next message is sent or after ~25s, so it is
@@ -64,6 +78,28 @@ export interface ListRow {
   id: string;
   title: string;
   description?: string;
+}
+
+/**
+ * A template to send, resolved to what the Graph API needs.
+ *
+ * Deliberately narrow: this models the templates this product actually sends —
+ * an optional video header and no body variables — rather than Meta's full
+ * component grammar. The approved `welcome_message` template has a VIDEO header
+ * and no placeholders, and a wording change means re-approval anyway, so the
+ * general case can be added when a template needs it.
+ */
+export interface OutboundTemplate {
+  /** The approved template's name, e.g. `welcome_message`. */
+  name: string;
+  /** Its approved language code, e.g. `he`. Must match exactly. */
+  language: string;
+  /**
+   * Local path to the video for a VIDEO header. The implementation uploads it
+   * for a media id, reusing a cached one where possible. Omit for a template
+   * with no media header.
+   */
+  headerVideoPath?: string;
 }
 
 export interface OutboundResult {

@@ -21,7 +21,7 @@ Requirements are numbered per [PRODUCT-REQUIREMENTS.md](PRODUCT-REQUIREMENTS.md)
 | 1 | Lead form + WhatsApp consent | ✅ | The live seller form carries a **required** consent checkbox naming WhatsApp and the business. Recognised per-form — see §3.1. |
 | 2a | Receive lead via `leadgen` webhook | ✅ | `src/leads/leadgenPayload.ts`, dispatched from the shared webhook route. |
 | 2b | Create / update contact + lead records | ✅ | `src/leads/ingestLead.ts`. Contact + conversation + referral in one transaction. |
-| 2c | Initiate WhatsApp contact via template | ❌ | No `sendTemplate` on the channel. |
+| 2c | Initiate WhatsApp contact via template | ✅ | `src/outreach/`. **Off by default** — `OUTREACH_ENABLED` must be set, and E-1 gates go-live. |
 | 3 | Follow-ups for up to five days | 📋 | `next_followup_at` / `followup_count` columns and index exist. No scheduler. |
 | 4a | Continue conversation, collect information | ✅ | The mature part of the system. |
 | 4b | Evaluate lead quality and readiness | ✅ | `qualified`, `disqualification_reason`, `priority_score`. |
@@ -76,8 +76,8 @@ purpose — precedes the projection and booking layers**. The original ordering
 | **0** | Alignment documents (this set) | — | ✅ Done |
 | **1** | `leadgen` intake: parse, retrieve by `leadgen_id`, persist contact + referral. **Sends nothing.** | 0 | ✅ Done |
 | **2** | Wire the consent gate (**D-1**) and window enforcement (**D-2**) | 1 | ✅ Done |
-| **3** | Approved-template first contact + grace period | 2, E-1 | ⏭ Next (buildable now; go-live waits on E-1) |
-| **4** | Follow-up scheduler with all stop conditions | 3 | Not started |
+| **3** | Approved-template first contact + grace period | 2, E-1 | ✅ Built (go-live waits on E-1) |
+| **4** | Follow-up scheduler with all stop conditions | 3 | ⏭ Next |
 | **5** | Monday sync via transactional outbox | 4 | Not started |
 | **6** | Appointments + Google Calendar | 5 | Not started |
 | **7** | Admin panel, simulation, production readiness | 6 | Not started |
@@ -108,6 +108,37 @@ retired seller forms. Exactly one form is live: `1746567036243410`.
 rest are recorded for attribution with no conversation opened. Replacing the form
 (for updated privacy wording, say) means a new id in both lists — Meta forms are
 immutable, so wording changes always produce a new form.
+
+### What Phase 3 delivers
+
+Business-initiated first contact — the product's primary purpose — end to end:
+`sendTemplate` on the channel, and a sweeper that opens the approved
+`welcome_message` template to consented leads once their grace period elapses.
+
+**Off unless `OUTREACH_ENABLED=true`.** This is the only subsystem that messages
+people who have not messaged us, so it never starts merely because credentials
+are present. It also refuses to start without the conversation worker: opening a
+conversation whose replies nobody answers is worse than not opening it.
+
+Two properties worth knowing:
+
+- **At most once.** Each send is claimed by a compare-and-swap on the
+  conversation's stage (`awaiting_first_contact` → `awaiting_reply`). Only the
+  caller whose UPDATE returned a row sends, so a second sweep, a second instance,
+  or a redelivered job finds nothing to claim. A failed send releases the claim,
+  so the lead is retried rather than silently abandoned.
+- **A template does not open a window.** `windowExpiresAt` is untouched; only the
+  lead's reply opens one. Until then the bot may send templates and nothing else,
+  which `guardedSend` enforces.
+
+Postgres is the schedule, not Redis: a lead awaiting contact is a row, so the
+work survives a flush, a redeploy, and a crash.
+
+The approved template's four quick-reply buttons match the bot's own menu titles
+exactly, and a template button arrives as ordinary message text — so a lead
+tapping one lands in the existing menu handling with no special casing. The
+stored transcript records the real welcome wording rather than a placeholder, so
+the model reads a faithful history when the lead replies.
 
 ### What Phase 2 delivers
 
@@ -172,14 +203,21 @@ onward, so start them early.
 
 ## 6. Test coverage reality
 
-494 tests across 33 files, colocated, with integration tests running against a
-real PostgreSQL. Phase 2 added the NN-2 enforcement suite: every non-consenting
-status is refused, opt-out outranks a template, and a contact/recipient mismatch
-is rejected.
+527 tests across 36 files, colocated, with integration tests running against a
+real PostgreSQL. Phase 3 added the first-contact suite — at-most-once delivery
+under concurrent sweeps, claim release on failure, and the grace period — plus
+the end-to-end lifecycle test.
 Coverage of the inbound engine is genuinely strong.
 
-**Remaining gap:** there is still **no single test spanning the whole flow**
-end to end. Phase 1 covers lead intake, and the inbound engine is covered, but
-nothing yet joins form submission → template → reply → qualification → sync,
-because the middle of that chain does not exist. See
-[TRACEABILITY.md](TRACEABILITY.md) for the planned test.
+**The end-to-end test now exists**: `src/e2e/leadLifecycle.test.ts` carries a lead
+from form submission through the template, the reply, and into the qualification
+conversation, asserting that Q1/Q3 come from the form and Q2 is asked next. It
+also covers the two refusals that matter — a non-consenting lead is captured and
+never messaged, and a lead who messages first keeps the inbound opening.
+
+This is the test that would have caught the misalignment this document set exists
+to prevent: before it, the entire proactive product could have been deleted and
+the suite would have stayed green.
+
+Still uncovered end to end: Monday projection and Calendar booking, which do not
+exist yet (Phases 5 and 6).

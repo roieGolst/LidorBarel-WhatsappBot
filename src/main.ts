@@ -125,22 +125,33 @@ async function main(): Promise<void> {
   const leadsClient = createGraphLeadsClient();
   if (!leadsClient) {
     log.warn('leadgen intake disabled: needs META_PAGE_ACCESS_TOKEN');
-  } else if (!config.metaLeadConsentField) {
-    // Not an error: leads are still captured. But none of them can be contacted
-    // proactively until the form's consent field is known, so say so loudly
-    // rather than leaving it to be discovered as "the bot never messages anyone".
-    log.warn(
-      'leadgen intake enabled, but META_LEAD_CONSENT_FIELD is unset — every lead ' +
-        'will be recorded as privacy_policy_only and cannot be proactively messaged',
-    );
+  } else {
+    // Neither is an error: leads are still captured either way. But both are
+    // silent failure modes — "the bot never messages anyone" and "the bot ignores
+    // my leads" are hard to diagnose after the fact and trivial to say now.
+    if (config.metaLeadConsentForms.length === 0 && !config.metaLeadConsentField) {
+      log.warn(
+        'leadgen intake enabled, but no consent source is configured — every lead ' +
+          'will be recorded as privacy_policy_only and cannot be proactively messaged',
+      );
+    }
+    if (config.metaLeadSellerForms.length === 0) {
+      log.warn(
+        'leadgen intake enabled, but META_LEAD_SELLER_FORMS is empty — leads will ' +
+          'be recorded for attribution and no conversation will be opened',
+      );
+    }
   }
   const leadIngest: LeadIngestDeps | undefined = leadsClient
     ? {
         leads: leadsClient,
-        consentField: {
+        consent: {
           fieldName: config.metaLeadConsentField,
           expectedValue: config.metaLeadConsentValue,
+          consentForms: config.metaLeadConsentForms,
+          formConsentText: config.metaLeadConsentText,
         },
+        sellerForms: config.metaLeadSellerForms,
       }
     : undefined;
 

@@ -5,7 +5,7 @@ import { findContactByPhone } from '../db/repositories/contacts.js';
 import { recordOptOut } from '../db/repositories/optOuts.js';
 import { campaignReferrals, conversations } from '../db/schema.js';
 import { setupTestDatabase, truncateAll } from '../db/testing.js';
-import type { ConsentFieldConfig } from './fieldMapping.js';
+import type { ConsentConfig } from './fieldMapping.js';
 import type { GraphLeadsClient, RetrievedLead } from './graphLeads.js';
 import { LeadRetrievalError } from './graphLeads.js';
 import { ingestLead, ingestLeads, type LeadIngestDeps } from './ingestLead.js';
@@ -50,11 +50,14 @@ function stubLeads(lead: RetrievedLead | Error): GraphLeadsClient {
   } as unknown as GraphLeadsClient;
 }
 
+const SELLER_FORM = '555';
+
 function deps(
   lead: RetrievedLead | Error = retrievedLead(),
-  consentField: ConsentFieldConfig = {},
+  consent: Omit<ConsentConfig, 'formId'> = {},
+  sellerForms: readonly string[] = [SELLER_FORM],
 ): LeadIngestDeps {
-  return { leads: stubLeads(lead), consentField };
+  return { leads: stubLeads(lead), consent, sellerForms };
 }
 
 const EVENT: LeadgenEvent = { leadgenId: 'L1', formId: '555', adId: '666' };
@@ -168,6 +171,20 @@ describe('ingestLead', () => {
       expect(contact?.consentRecordedAt).toEqual(new Date('2026-08-20T10:00:00Z'));
     });
 
+    it('grants opt-in from a consent-gated form with no per-lead field', async () => {
+      // The live seller form's required checkbox never appears in field_data.
+      const result = await ingestLead(
+        db,
+        EVENT,
+        deps(retrievedLead(), { consentForms: ['555'], formConsentText: 'הסכמה' }),
+      );
+
+      expect(result.consentStatus).toBe('whatsapp_opt_in');
+      const contact = await findContactByPhone(db, PHONE);
+      expect(contact?.consentText).toBe('הסכמה');
+      expect(contact?.consentSource).toBe('555');
+    });
+
     it('never restores consent for someone who opted out', async () => {
       // The single worst failure this system can have. A later form submission
       // must not undo an opt-out.
@@ -184,6 +201,98 @@ describe('ingestLead', () => {
       expect(result.consentStatus).toBe('opted_out');
       const contact = await findContactByPhone(db, PHONE);
       expect(contact?.doNotContact).toBe(true);
+    });
+  });
+
+  describe('form gating', () => {
+    // The Page runs investor and recruitment campaigns too. Their leads are real
+    // and worth recording, but must never enter the seller flow.
+
+    it('records a non-seller lead without opening a conversation', async () => {
+      const result = await ingestLead(
+        db,
+        { leadgenId: 'L1', formId: 'investor-form' },
+        deps(retrievedLead({ formId: 'investor-form' })),
+      );
+
+      expect(result.engaged).toBe(false);
+      expect(result.conversationId).toBeUndefined();
+      expect(await db.select().from(campaignReferrals)).toHaveLength(1);
+      expect(await db.select().from(conversations)).toHaveLength(0);
+    });
+
+    it('still records the contact for a non-seller lead', async () => {
+      await ingestLead(
+        db,
+        { leadgenId: 'L1', formId: 'investor-form' },
+        deps(retrievedLead({ formId: 'investor-form' })),
+      );
+
+      expect(await findContactByPhone(db, PHONE)).toBeDefined();
+    });
+
+    it('engages a lead from a seller form', async () => {
+      const result = await ingestLead(db, EVENT, deps());
+
+      expect(result.engaged).toBe(true);
+      expect(result.conversationId).toBeDefined();
+    });
+
+    it('engages nothing when no seller form is configured', async () => {
+      const result = await ingestLead(db, EVENT, deps(retrievedLead(), {}, []));
+
+      expect(result.engaged).toBe(false);
+    });
+  });
+
+  describe('screening answers from the form', () => {
+    // A meta_lead_form lead is screened on Q2 and Q4 only, on the premise that Q1
+    // and Q3 were answered on the form. If they are not seeded here, they are
+    // neither asked nor known and the lead qualifies on incomplete information.
+
+    const Q1 = 'הנכס_שלך_כבר_מוכן_לשיווק,_או_שאתה_עדיין_בשלב_בדיקה/התלבטות?';
+    const Q3 = 'תוך_כמה_זמן_אתה_מתכנן_למכור?';
+
+    function sellerLead() {
+      return retrievedLead({
+        fieldData: [
+          { name: 'phone_number', values: [PHONE] },
+          { name: Q1, values: ['מוכן_לשיווק'] },
+          { name: Q3, values: ['מיידי'] },
+        ],
+      });
+    }
+
+    it('seeds Q1 and Q3 onto the new conversation', async () => {
+      const result = await ingestLead(db, EVENT, deps(sellerLead()));
+
+      const [conversation] = await db
+        .select()
+        .from(conversations)
+        .where(eq(conversations.id, result.conversationId!));
+      expect(conversation?.extracted).toEqual({
+        sellIntent: 'ready',
+        timeline: 'immediate',
+      });
+    });
+
+    it('does not overwrite answers an existing conversation already holds', async () => {
+      await ingestLead(db, { leadgenId: 'L1', formId: '555' }, deps(sellerLead()));
+      await db
+        .update(conversations)
+        .set({ extracted: { sellIntent: 'not_sure', neighborhood: 'רמות' } });
+
+      await ingestLead(
+        db,
+        { leadgenId: 'L2', formId: '555' },
+        deps(retrievedLead({ id: 'L2' })),
+      );
+
+      const [conversation] = await db.select().from(conversations);
+      expect(conversation?.extracted).toEqual({
+        sellIntent: 'not_sure',
+        neighborhood: 'רמות',
+      });
     });
   });
 

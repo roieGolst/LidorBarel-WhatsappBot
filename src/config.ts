@@ -14,6 +14,22 @@ import { z } from 'zod';
  * Later phases add their own sections (Monday.com, Google Calendar) to this
  * same schema.
  */
+/**
+ * A comma-separated environment list, parsed into trimmed non-empty entries.
+ *
+ * Absent and empty both yield `[]`, so a variable that is present-but-blank
+ * behaves identically to one that is unset — the safe reading for an allowlist.
+ */
+const commaSeparated = z
+  .string()
+  .optional()
+  .transform((value) =>
+    (value ?? '')
+      .split(',')
+      .map((entry) => entry.trim())
+      .filter((entry) => entry.length > 0),
+  );
+
 const configSchema = z.object({
   nodeEnv: z.enum(['development', 'test', 'production']).default('development'),
 
@@ -76,11 +92,37 @@ const configSchema = z.object({
   metaPageAccessToken: z.string().min(1).optional(),
 
   /**
-   * The `field_data` key on the lead form holding the WhatsApp opt-in answer.
+   * Lead form ids whose leads enter the **seller** qualification flow.
    *
-   * Until this is set, every lead is recorded as `privacy_policy_only` and the
-   * proactive send path refuses it (requirement NN-2). That is the intended
-   * default: a privacy-policy checkbox is not consent to be messaged on WhatsApp.
+   * The Page runs investor and recruitment campaigns alongside the seller ones.
+   * Leads from those are recorded for attribution but never engaged — a flow that
+   * asks which neighbourhood your property is in makes no sense for someone who
+   * answered a question about their investment budget. Empty engages nothing.
+   */
+  metaLeadSellerForms: commaSeparated,
+
+  /**
+   * Lead form ids whose submission constitutes WhatsApp opt-in, because the form
+   * carries a **required** consent checkbox naming WhatsApp and the business.
+   *
+   * Needed because Meta does not return privacy-step disclaimer checkboxes in a
+   * lead's `field_data`, even when required — so per-lead detection alone would
+   * mean no lead is ever contactable. Sound because the checkbox cannot be
+   * skipped and is not pre-checked, and because Meta forms are immutable: a form
+   * id permanently identifies the exact wording agreed to.
+   *
+   * **Only list a form you have verified carries such a checkbox.** Unlisted
+   * forms stay `privacy_policy_only` and cannot be proactively messaged (NN-2).
+   */
+  metaLeadConsentForms: commaSeparated,
+
+  /** The consent wording to record as evidence for form-level consent. */
+  metaLeadConsentText: z.string().min(1).optional(),
+
+  /**
+   * The `field_data` key holding a per-lead WhatsApp opt-in answer, for a form
+   * that asks consent as an ordinary question rather than a disclaimer checkbox.
+   * Stronger evidence than the form-level rule, and takes precedence over it.
    */
   metaLeadConsentField: z.string().min(1).optional(),
 
@@ -124,6 +166,9 @@ function readEnv(env: NodeJS.ProcessEnv): Record<string, unknown> {
     metaPhoneNumberId: env.META_PHONE_NUMBER_ID,
     metaGraphApiVersion: env.META_GRAPH_API_VERSION,
     metaPageAccessToken: env.META_PAGE_ACCESS_TOKEN,
+    metaLeadSellerForms: env.META_LEAD_SELLER_FORMS,
+    metaLeadConsentForms: env.META_LEAD_CONSENT_FORMS,
+    metaLeadConsentText: env.META_LEAD_CONSENT_TEXT,
     metaLeadConsentField: env.META_LEAD_CONSENT_FIELD,
     metaLeadConsentValue: env.META_LEAD_CONSENT_VALUE,
     anthropicApiKey: env.ANTHROPIC_API_KEY,
@@ -144,6 +189,9 @@ const ENV_VAR_NAMES: Record<keyof Config, string> = {
   metaPhoneNumberId: 'META_PHONE_NUMBER_ID',
   metaGraphApiVersion: 'META_GRAPH_API_VERSION',
   metaPageAccessToken: 'META_PAGE_ACCESS_TOKEN',
+  metaLeadSellerForms: 'META_LEAD_SELLER_FORMS',
+  metaLeadConsentForms: 'META_LEAD_CONSENT_FORMS',
+  metaLeadConsentText: 'META_LEAD_CONSENT_TEXT',
   metaLeadConsentField: 'META_LEAD_CONSENT_FIELD',
   metaLeadConsentValue: 'META_LEAD_CONSENT_VALUE',
   anthropicApiKey: 'ANTHROPIC_API_KEY',

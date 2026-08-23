@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { decideConsent, mapLeadFields, toAnswerMap } from './fieldMapping.js';
+import {
+  decideConsent,
+  mapLeadFields,
+  mapScreeningAnswers,
+  toAnswerMap,
+} from './fieldMapping.js';
 import type { LeadFieldDatum } from './graphLeads.js';
 
 function fields(entries: Record<string, string | string[]>): LeadFieldDatum[] {
@@ -60,6 +65,18 @@ describe('mapLeadFields', () => {
     ).toBeUndefined();
   });
 
+  it('maps the Hebrew contact keys some forms use', () => {
+    // Form 2080005129480041 asks for these as custom questions, so the keys are
+    // Hebrew. Without these aliases its leads are dropped as having no phone.
+    const mapped = mapLeadFields(
+      fields({ שם_מלא: 'ישראל', מספר_טלפון: '0501234567', 'דוא"ל': 'a@b.c' }),
+    );
+
+    expect(mapped.name).toBe('ישראל');
+    expect(mapped.phone).toBe('0501234567');
+    expect(mapped.email).toBe('a@b.c');
+  });
+
   it('survives a field with no name or values', () => {
     expect(() => mapLeadFields([{ values: ['x'] }, { name: 'email' }])).not.toThrow();
   });
@@ -72,82 +89,189 @@ describe('toAnswerMap', () => {
 });
 
 /**
- * These are the compliance tests for requirement NN-2. A regression here means
- * messaging someone who never agreed to be messaged — up to ₪1,000 per message
- * under Israeli Amendment 40, plus Meta policy exposure. The default in every
- * ambiguous case must be the status that *cannot* be proactively contacted.
+ * Compliance tests for requirement NN-2. A regression here means messaging
+ * someone who never agreed to be messaged — up to ₪1,000 per message under
+ * Amendment 40, plus Meta policy exposure. Every ambiguous case must land on the
+ * status that *cannot* be proactively contacted.
  */
 describe('decideConsent', () => {
   const answers = (entries: Record<string, string | string[]>) =>
     toAnswerMap(fields(entries));
 
-  it('refuses consent when the form has no configured consent field', () => {
-    // Submitting a lead form is not, by itself, agreement to receive WhatsApp
-    // messages from this business.
-    const decision = decideConsent(answers({ phone_number: '05' }), {});
-
-    expect(decision.status).toBe('privacy_policy_only');
+  it('refuses when nothing is configured', () => {
+    expect(decideConsent(answers({ phone_number: '05' }), {}).status).toBe(
+      'privacy_policy_only',
+    );
   });
 
-  it('grants opt-in for an affirmative answer', () => {
-    const decision = decideConsent(answers({ whatsapp_consent: 'true' }), {
-      fieldName: 'whatsapp_consent',
+  describe('per-lead field', () => {
+    it('grants opt-in for an affirmative answer', () => {
+      const decision = decideConsent(answers({ wa: 'true' }), { fieldName: 'wa' });
+
+      expect(decision).toMatchObject({
+        status: 'whatsapp_opt_in',
+        evidence: 'true',
+        basis: 'field',
+      });
     });
 
-    expect(decision.status).toBe('whatsapp_opt_in');
-    expect(decision.evidence).toBe('true');
+    it.each(['true', 'yes', '1', 'on', 'checked', 'כן', 'מאשר', 'מאשרת'])(
+      'accepts %s as affirmative',
+      (value) => {
+        expect(decideConsent(answers({ wa: value }), { fieldName: 'wa' }).status).toBe(
+          'whatsapp_opt_in',
+        );
+      },
+    );
+
+    it('refuses an explicit negative', () => {
+      const decision = decideConsent(answers({ wa: 'false' }), { fieldName: 'wa' });
+
+      expect(decision.status).toBe('privacy_policy_only');
+      expect(decision.evidence).toBe('false');
+    });
+
+    it('matches an exact expected value when configured', () => {
+      const label = 'אני מאשר/ת לקבל הודעות וואטסאפ מלידור בראל';
+
+      expect(
+        decideConsent(answers({ wa: label }), { fieldName: 'wa', expectedValue: label })
+          .status,
+      ).toBe('whatsapp_opt_in');
+    });
+
+    it('refuses anything other than the exact expected value', () => {
+      expect(
+        decideConsent(answers({ wa: 'true' }), {
+          fieldName: 'wa',
+          expectedValue: 'הסכמה מפורשת',
+        }).status,
+      ).toBe('privacy_policy_only');
+    });
   });
 
-  it.each(['true', 'yes', '1', 'on', 'checked', 'כן', 'מאשר', 'מאשרת'])(
-    'accepts %s as affirmative',
-    (value) => {
-      expect(decideConsent(answers({ c: value }), { fieldName: 'c' }).status).toBe(
-        'whatsapp_opt_in',
+  describe('per-form', () => {
+    // Meta does not return privacy-step disclaimer checkboxes in field_data, even
+    // when required, so the live seller form has no per-lead consent answer.
+
+    it('grants opt-in for a form declared as gating on consent', () => {
+      const decision = decideConsent(answers({ phone_number: '05' }), {
+        formId: 'F1',
+        consentForms: ['F1'],
+      });
+
+      expect(decision).toMatchObject({ status: 'whatsapp_opt_in', basis: 'form' });
+    });
+
+    it('records the configured wording as evidence', () => {
+      const text = 'אני מאשר/ת את מדיניות הפרטיות ומסכים/ה לקבלת הודעת אישור בוואטסאפ';
+
+      const decision = decideConsent(answers({}), {
+        formId: 'F1',
+        consentForms: ['F1'],
+        formConsentText: text,
+      });
+
+      expect(decision.evidence).toBe(text);
+    });
+
+    it('falls back to the form id when no wording is configured', () => {
+      expect(
+        decideConsent(answers({}), { formId: 'F1', consentForms: ['F1'] }).evidence,
+      ).toBe('form:F1');
+    });
+
+    it('refuses a form that is not declared', () => {
+      expect(
+        decideConsent(answers({}), { formId: 'OTHER', consentForms: ['F1'] }).status,
+      ).toBe('privacy_policy_only');
+    });
+
+    it('refuses when the lead carries no form id', () => {
+      expect(decideConsent(answers({}), { consentForms: ['F1'] }).status).toBe(
+        'privacy_policy_only',
       );
-    },
-  );
-
-  it('refuses an explicit negative', () => {
-    const decision = decideConsent(answers({ c: 'false' }), { fieldName: 'c' });
-
-    expect(decision.status).toBe('privacy_policy_only');
-    expect(decision.evidence).toBe('false');
+    });
   });
 
-  it('flags a configured consent field that the form no longer sends', () => {
-    // Usually means the form was edited. The lead is still captured; it just
-    // cannot be messaged.
-    const decision = decideConsent(answers({ phone_number: '05' }), { fieldName: 'c' });
+  describe('precedence', () => {
+    it('lets an explicit refusal override a consent-gated form', () => {
+      // The person answered "no". The form-level rule must never overrule them.
+      const decision = decideConsent(answers({ wa: 'false' }), {
+        fieldName: 'wa',
+        formId: 'F1',
+        consentForms: ['F1'],
+      });
 
-    expect(decision.status).toBe('privacy_policy_only');
-    expect(decision.missingConsentField).toBe(true);
+      expect(decision.status).toBe('privacy_policy_only');
+      expect(decision.basis).toBe('field');
+    });
+
+    it('falls back to the form when the field is absent', () => {
+      // Test-tool leads omit disclaimer checkboxes; real ones may include them.
+      const decision = decideConsent(answers({ phone_number: '05' }), {
+        fieldName: 'wa',
+        formId: 'F1',
+        consentForms: ['F1'],
+      });
+
+      expect(decision).toMatchObject({ status: 'whatsapp_opt_in', basis: 'form' });
+    });
+
+    it('prefers the field when both would grant', () => {
+      const decision = decideConsent(answers({ wa: 'true' }), {
+        fieldName: 'wa',
+        formId: 'F1',
+        consentForms: ['F1'],
+      });
+
+      expect(decision.basis).toBe('field');
+    });
+  });
+});
+
+/**
+ * Values are the form's option *keys*, verified against a real lead from the live
+ * seller form. A form cannot be edited after creation, so these cannot drift —
+ * only a new form id can bring new options.
+ */
+describe('mapScreeningAnswers', () => {
+  const Q1 = 'הנכס_שלך_כבר_מוכן_לשיווק,_או_שאתה_עדיין_בשלב_בדיקה/התלבטות?';
+  const Q3 = 'תוך_כמה_זמן_אתה_מתכנן_למכור?';
+
+  it('maps a real submission onto the screening facts', () => {
+    const facts = mapScreeningAnswers(
+      toAnswerMap(fields({ [Q1]: 'מוכן_לשיווק', [Q3]: 'מיידי' })),
+    );
+
+    expect(facts).toEqual({ sellIntent: 'ready', timeline: 'immediate' });
   });
 
-  it('matches an exact expected value when one is configured', () => {
-    const label = 'אני מאשר/ת לקבל הודעות וואטסאפ מלידור בראל תיווך נדל״ן';
-    const config = { fieldName: 'c', expectedValue: label };
-
-    expect(decideConsent(answers({ c: label }), config).status).toBe('whatsapp_opt_in');
-  });
-
-  it('refuses anything other than the exact expected value', () => {
-    // A checkbox echoing a *different* label is not the consent we asked for.
-    const config = { fieldName: 'c', expectedValue: 'הסכמה מפורשת' };
-
-    expect(decideConsent(answers({ c: 'true' }), config).status).toBe(
-      'privacy_policy_only',
+  it.each([
+    ['מוכן_לשיווק', 'ready'],
+    ['עדיין_בודק_/_לא_סגור', 'not_sure'],
+  ])('maps sell intent %s', (option, expected) => {
+    expect(mapScreeningAnswers(toAnswerMap(fields({ [Q1]: option }))).sellIntent).toBe(
+      expected,
     );
   });
 
-  it('ignores blank values and keeps looking', () => {
-    const decision = decideConsent(answers({ c: ['', 'כן'] }), { fieldName: 'c' });
-
-    expect(decision.status).toBe('whatsapp_opt_in');
+  it.each([
+    ['מיידי', 'immediate'],
+    ['בתוך_חודש', 'within_month'],
+    ['עדיין_בודק_מחירים', 'still_checking'],
+  ])('maps timeline %s', (option, expected) => {
+    expect(mapScreeningAnswers(toAnswerMap(fields({ [Q3]: option }))).timeline).toBe(
+      expected,
+    );
   });
 
-  it('refuses when the consent field is present but empty', () => {
-    expect(decideConsent(answers({ c: [''] }), { fieldName: 'c' }).status).toBe(
-      'privacy_policy_only',
-    );
+  it('leaves an unrecognised option unset so the bot asks instead', () => {
+    // Recording an answer the person never gave is worse than asking again.
+    expect(mapScreeningAnswers(toAnswerMap(fields({ [Q1]: 'משהו_חדש' })))).toEqual({});
+  });
+
+  it('returns nothing for a form without the screening questions', () => {
+    expect(mapScreeningAnswers(toAnswerMap(fields({ full_name: 'x' })))).toEqual({});
   });
 });

@@ -41,7 +41,8 @@ const leadIngest: LeadIngestDeps = {
         ? Promise.reject(leadResponse)
         : Promise.resolve(leadResponse),
   } as unknown as GraphLeadsClient,
-  consentField: {},
+  consent: {},
+  sellerForms: ['555'],
 };
 
 beforeAll(async () => {

@@ -15,7 +15,9 @@ Last updated: 2026-08-23
 
 | Req | Requirement | Implementation | Tests | Status |
 |---|---|---|---|---|
-| 1 | Consent captured with provenance | `db/repositories/contacts.ts` · `leads/fieldMapping.ts` | `contacts.test.ts` · `fieldMapping.test.ts` · `ingestLead.test.ts` | ✅ |
+| 1 | Consent captured with provenance | `db/repositories/contacts.ts` · `leads/fieldMapping.ts` (`decideConsent`, field- and form-level) | `contacts.test.ts` · `fieldMapping.test.ts` · `ingestLead.test.ts` | ✅ |
+| 2b | Form gating: only seller forms engage | `leads/ingestLead.ts` · `META_LEAD_SELLER_FORMS` | `ingestLead.test.ts` (form gating) | ✅ |
+| 4b | Q1/Q3 seeded from the form | `leads/fieldMapping.ts` (`mapScreeningAnswers`) | `fieldMapping.test.ts` · `ingestLead.test.ts` | ✅ |
 | 2a | `leadgen` webhook received and parsed | `leads/leadgenPayload.ts` · `whatsapp/routes.ts` | `leadgenPayload.test.ts` · `leadgenRoutes.test.ts` | ✅ |
 | 2a | Lead retrieved by `leadgen_id` | `leads/graphLeads.ts` | `graphLeads.test.ts` | ✅ |
 | 2a | Referral persisted, replay-safe on `external_lead_id` | `leads/ingestLead.ts` | `ingestLead.test.ts` (redelivery) | ✅ |

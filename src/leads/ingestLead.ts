@@ -6,7 +6,12 @@ import { findOrCreateConversation } from '../db/repositories/conversations.js';
 import { campaignReferrals, conversations } from '../db/schema.js';
 import { tryNormalizePhone } from '../domain/phone.js';
 import { getLogger } from '../logger.js';
-import { decideConsent, mapLeadFields, type ConsentFieldConfig } from './fieldMapping.js';
+import {
+  decideConsent,
+  mapLeadFields,
+  mapScreeningAnswers,
+  type ConsentConfig,
+} from './fieldMapping.js';
 import type { GraphLeadsClient } from './graphLeads.js';
 import type { LeadgenEvent } from './leadgenPayload.js';
 
@@ -14,9 +19,9 @@ import type { LeadgenEvent } from './leadgenPayload.js';
  * Turning a `leadgen` webhook into durable state, exactly once.
  *
  * Like WhatsApp ingestion (`../whatsapp/ingest.ts`), this deliberately stops at
- * persistence. **Nothing is sent here.** Deciding whether this lead may be
- * contacted, and with what, belongs to the proactive send path — which is gated
- * on the consent status this module records.
+ * persistence. **Nothing is sent here.** Whether this lead may be contacted, and
+ * with what, belongs to the proactive send path — gated on the consent status
+ * this module records.
  */
 
 export interface LeadIngestResult {
@@ -25,8 +30,13 @@ export interface LeadIngestResult {
   conversationId?: string;
   /** True when this lead had already been ingested. */
   duplicate: boolean;
-  /** Consent recorded for the contact, when one was created or updated. */
+  /** Consent recorded for the contact. */
   consentStatus?: ConsentStatus;
+  /**
+   * Whether a conversation was opened for outreach. False for a lead from a form
+   * outside the seller campaign — it is recorded for attribution, not engaged.
+   */
+  engaged: boolean;
   /** Set when the lead was deliberately not stored, with the reason. */
   skipped?: string;
 }
@@ -34,7 +44,17 @@ export interface LeadIngestResult {
 /** What {@link ingestLead} needs, injected so it is testable without live Meta. */
 export interface LeadIngestDeps {
   leads: GraphLeadsClient;
-  consentField: ConsentFieldConfig;
+  /** Consent recognition. `formId` is filled per lead. */
+  consent: Omit<ConsentConfig, 'formId'>;
+  /**
+   * Forms whose leads enter the seller qualification flow.
+   *
+   * The Page runs several campaigns — investor and recruitment forms alongside
+   * the seller ones. Their leads are real and worth recording for attribution,
+   * but dropping an investor into a flow that asks which neighbourhood their
+   * property is in would be nonsense. Empty means engage nothing.
+   */
+  sellerForms: readonly string[];
 }
 
 /**
@@ -47,9 +67,7 @@ export interface LeadIngestDeps {
  * whenever the process died between the two. The call is bounded by a timeout,
  * and redelivery is safe because `external_lead_id` is unique.
  *
- * The contact, conversation, and referral commit as one transaction. A partial
- * write would produce a contact with no referral (unattributable) or a referral
- * with no conversation (nothing to contact them through).
+ * The contact, conversation, and referral commit as one transaction.
  */
 export async function ingestLead(
   db: DbClient,
@@ -59,30 +77,37 @@ export async function ingestLead(
   const logger = getLogger();
   const lead = await deps.leads.fetchLead(event.leadgenId);
 
+  const formId = event.formId ?? lead.formId;
   const fields = mapLeadFields(lead.fieldData);
-  const consent = decideConsent(fields.answers, deps.consentField);
+  const consent = decideConsent(fields.answers, {
+    ...deps.consent,
+    ...(formId ? { formId } : {}),
+  });
 
-  if (consent.missingConsentField) {
-    // The form was expected to carry a consent field and did not. The lead is
-    // still captured — it simply cannot be messaged proactively. Worth an alert:
-    // it usually means the form was edited.
-    logger.warn(
-      { leadgenId: event.leadgenId, formId: event.formId },
-      'lead form is missing its configured WhatsApp consent field',
-    );
-  }
-
-  // Meta validates phone format only loosely, and a lead we cannot dial is a lead
-  // we can never contact. Recording it against a contact is impossible anyway:
-  // the phone is the contact's identity. Skipped rather than failed, because
-  // redelivery would produce exactly the same unusable number.
+  // Meta validates phone format only loosely, and a lead we cannot dial can never
+  // be contacted. Recording it is impossible anyway: the phone is the contact's
+  // identity. Skipped rather than failed, because redelivery would produce the
+  // same unusable number.
   const phone = fields.phone ? tryNormalizePhone(fields.phone) : undefined;
   if (!phone) {
     logger.warn(
-      { leadgenId: event.leadgenId, hasPhoneField: Boolean(fields.phone) },
+      { leadgenId: event.leadgenId, formId, hasPhoneField: Boolean(fields.phone) },
       'lead skipped: no usable phone number',
     );
-    return { leadgenId: event.leadgenId, duplicate: false, skipped: 'unusable_phone' };
+    return {
+      leadgenId: event.leadgenId,
+      duplicate: false,
+      engaged: false,
+      skipped: 'unusable_phone',
+    };
+  }
+
+  const isSellerForm = formId !== undefined && deps.sellerForms.includes(formId);
+  if (!isSellerForm) {
+    logger.info(
+      { leadgenId: event.leadgenId, formId },
+      'lead recorded without engagement: form is not in the seller campaign',
+    );
   }
 
   return db.transaction(async (tx) => {
@@ -92,52 +117,63 @@ export async function ingestLead(
       ...(fields.email ? { email: fields.email } : {}),
       entryPoint: 'meta_lead_form',
       consentStatus: consent.status,
-      // Provenance for the audit trail: which form, what exact wording was
-      // agreed to, and when. Required to demonstrate consent under Amendment 40.
-      consentSource: event.formId ?? lead.formId ?? null,
+      // Provenance for the audit trail: which form, the exact wording agreed to,
+      // and when. Required to demonstrate consent under Amendment 40.
+      consentSource: formId ?? null,
       consentText: consent.evidence ?? null,
       consentRecordedAt: lead.createdTime ?? event.createdTime ?? new Date(),
     });
 
-    const { conversation, created } = await findOrCreateConversation(tx, contact.id);
+    let conversationId: string | undefined;
+    if (isSellerForm) {
+      const { conversation, created } = await findOrCreateConversation(tx, contact.id);
+      conversationId = conversation.id;
 
-    // A brand-new conversation from a form submission starts in
-    // `awaiting_first_contact`: the lead exists and the bot has not spoken yet.
-    // An existing conversation is left exactly as it is — this person may already
-    // be mid-chat, and a form resubmission must not rewind them.
-    if (created) {
-      await tx
-        .update(conversations)
-        .set({ stage: 'awaiting_first_contact', updatedAt: new Date() })
-        .where(eq(conversations.id, conversation.id));
+      // A brand-new conversation from a form submission starts in
+      // `awaiting_first_contact`: the lead exists and the bot has not spoken yet.
+      // The form's own answers to Q1 and Q3 are seeded here — a form lead is
+      // screened on Q2 and Q4 only, so without them those answers would be
+      // neither asked nor known.
+      //
+      // An existing conversation is left untouched. This person may already be
+      // mid-chat, and a resubmission must not rewind their stage or overwrite
+      // answers they have since given the bot directly.
+      if (created) {
+        await tx
+          .update(conversations)
+          .set({
+            stage: 'awaiting_first_contact',
+            extracted: mapScreeningAnswers(fields.answers),
+            updatedAt: new Date(),
+          })
+          .where(eq(conversations.id, conversation.id));
+      }
     }
 
     // The unique index on `external_lead_id` is what makes redelivery safe. An
     // insert that conflicts returns no row, which is how a duplicate is detected
-    // — a read-then-write would race against a concurrent redelivery.
+    // — a read-then-write would race a concurrent redelivery.
     const inserted = await tx
       .insert(campaignReferrals)
       .values({
         contactId: contact.id,
         externalLeadId: event.leadgenId,
-        formId: event.formId ?? lead.formId ?? null,
+        formId: formId ?? null,
         adId: event.adId ?? lead.adId ?? null,
-        // Every answer exactly as Meta delivered it. The form's custom question
-        // keys differ per form, so they are preserved verbatim rather than
-        // guessed at; the qualification flow reads them once they are confirmed.
+        // Every answer exactly as Meta delivered it, so a form whose keys are not
+        // yet mapped still has its answers captured.
         rawPayload: lead.raw,
       })
       .onConflictDoNothing({ target: campaignReferrals.externalLeadId })
       .returning({ id: campaignReferrals.id });
 
-    const duplicate = inserted.length === 0;
-
     return {
       leadgenId: event.leadgenId,
       contactId: contact.id,
-      conversationId: conversation.id,
-      duplicate,
+      ...(conversationId ? { conversationId } : {}),
+      duplicate: inserted.length === 0,
       consentStatus: contact.consentStatus,
+      engaged: isSellerForm,
     };
   });
 }
@@ -146,7 +182,7 @@ export async function ingestLead(
  * Ingests every lead in a webhook batch.
  *
  * Each is handled independently so one failure cannot strand the others. A
- * retryable failure is rethrown after the rest are processed, so the webhook
+ * retryable failure is reported after the rest are processed, so the webhook
  * returns non-2xx and Meta redelivers the batch — the leads already stored are
  * then recognised as duplicates.
  */
@@ -178,6 +214,7 @@ export async function ingestLeads(
         results.push({
           leadgenId: event.leadgenId,
           duplicate: false,
+          engaged: false,
           skipped: 'permanent_failure',
         });
       }

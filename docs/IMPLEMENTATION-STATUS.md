@@ -18,7 +18,7 @@ Requirements are numbered per [PRODUCT-REQUIREMENTS.md](PRODUCT-REQUIREMENTS.md)
 
 | Req | Capability | Status | Notes |
 |---|---|---|---|
-| 1 | Lead form + WhatsApp consent | 🟡 | Consent *model* is complete and tested. The live form is believed to collect only a privacy-policy checkbox. |
+| 1 | Lead form + WhatsApp consent | ✅ | The live seller form carries a **required** consent checkbox naming WhatsApp and the business. Recognised per-form — see §3.1. |
 | 2a | Receive lead via `leadgen` webhook | ✅ | `src/leads/leadgenPayload.ts`, dispatched from the shared webhook route. |
 | 2b | Create / update contact + lead records | ✅ | `src/leads/ingestLead.ts`. Contact + conversation + referral in one transaction. |
 | 2c | Initiate WhatsApp contact via template | ❌ | No `sendTemplate` on the channel. |
@@ -85,6 +85,27 @@ purpose — precedes the projection and booking layers**. The original ordering
 Phase 1 required **no migration** — `campaign_referrals.form_id` and
 `.external_lead_id` already existed with a unique index.
 
+### Meta behaviour worth knowing
+
+**Privacy-step disclaimer checkboxes are not returned in a lead's `field_data`,
+even when required.** Verified against a real lead from form `1746567036243410`:
+the form's `legal_content.custom_disclaimer.checkboxes[0]` is `is_required: true`
+and `is_checked_by_default: false`, yet the lead carries only the two screening
+answers, name, phone, and email.
+
+Per-lead consent detection alone would therefore refuse every lead forever. So
+consent is recognised two ways, strongest first: a per-lead field when the form
+asks consent as an ordinary question, otherwise a **per-form declaration**
+(`META_LEAD_CONSENT_FORMS`). The per-form rule is sound because the checkbox
+cannot be skipped, is not pre-checked, and **Meta forms are immutable** — a form
+id permanently identifies the exact wording agreed to. An explicit per-lead
+refusal always overrides the form rule, and unlisted forms stay
+`privacy_policy_only`.
+
+The Page also runs investor and recruitment campaigns. `META_LEAD_SELLER_FORMS`
+gates which forms enter the seller flow; leads from the rest are recorded for
+attribution with no conversation opened.
+
 ### What Phase 1 delivers
 
 A lead-form submission now creates a contact (`entry_point = meta_lead_form`), a
@@ -92,10 +113,15 @@ conversation in `awaiting_first_contact`, and a `campaign_referrals` row holding
 every answer verbatim. Redelivery is idempotent on `external_lead_id`. **No
 message is sent** — that is Phase 3, gated on Phase 2's consent enforcement.
 
-Consent is decided by `src/leads/fieldMapping.ts` and **fails closed**: without
-`META_LEAD_CONSENT_FIELD` configured, every lead is recorded as
-`privacy_policy_only`. Enabling the `leadgen` webhook field is therefore now safe
-— leads are captured and none can be messaged.
+Consent is decided by `src/leads/fieldMapping.ts` and **fails closed**: with no
+consent source configured, every lead is recorded as `privacy_policy_only`.
+Enabling the `leadgen` webhook field is therefore safe — leads are captured and
+none can be messaged until a form is explicitly declared.
+
+The form's Q1 and Q3 answers are mapped onto `sellIntent` and `timeline` and
+seeded on the new conversation. This is required, not an optimisation: a
+`meta_lead_form` lead is screened on Q2 and Q4 only, so without the seed those
+answers would be neither asked nor known.
 
 ---
 
@@ -107,11 +133,12 @@ onward, so start them early.
 | # | Item | Gates |
 |---|---|---|
 | E-1 | Meta Business verification | Template sending |
-| E-2 | Lead form consent wording naming WhatsApp **and** the business | Phase 3 go-live |
+| E-2 | ✅ Done — the seller form has a required consent checkbox | — |
+| E-9 | **Consent wording scope.** The checkbox says *הודעת אישור* (a confirmation message); the bot runs a qualification conversation plus five days of follow-ups. Under Amendment 40 those are commercial messages. Worth a privacy review, and worth broadening on the next form. | Volume send |
 | E-3 | Decision on leads already collected under the old form (re-consent or treat as inbound-only) | Phase 3 |
-| E-4 | Approved Hebrew first-contact template (validated against the banned-word list) | Phase 3 |
+| E-4 | ✅ Done — template approved by Meta | — |
 | E-5 | `leads_retrieval` permission + Page access token (`META_PAGE_ACCESS_TOKEN`) + Page subscribed to `leadgen` | Phase 1 go-live |
-| E-6 | **Confirm Monday's native Lead Ads integration is disabled** (NN-7) | Phase 1 / 5 |
+| E-6 | ✅ Done — Monday native Lead Ads integration disabled | — |
 | E-7 | Monday API token + the five additive column IDs | Phase 5 |
 | E-8 | Google Cloud project, calendar credentials and sharing | Phase 6 |
 
@@ -119,9 +146,9 @@ onward, so start them early.
 
 ## 6. Test coverage reality
 
-458 tests across 33 files, colocated, with integration tests running against a
-real PostgreSQL. Phase 1 added 81, including the consent fail-closed cases and
-the webhook's retry-classification behaviour.
+479 tests across 33 files, colocated, with integration tests running against a
+real PostgreSQL. Phase 1 added 102, including the consent fail-closed cases, the
+form-gating rules, and the webhook's retry-classification behaviour.
 Coverage of the inbound engine is genuinely strong.
 
 **Remaining gap:** there is still **no single test spanning the whole flow**

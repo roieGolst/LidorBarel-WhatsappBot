@@ -21,6 +21,7 @@ import type {
   WhatsAppChannel,
 } from '../whatsapp/channel.js';
 import { guardedSend } from '../whatsapp/guardedSend.js';
+import type { Conversation } from '../db/repositories/conversations.js';
 import { classifyAndExtract, WORKFLOW_OWNED_FIELDS } from './classify.js';
 import { isAffirmative, isNegative } from './confirmation.js';
 import {
@@ -97,11 +98,21 @@ export type OutboundPart =
   | { kind: 'buttons'; body: string; buttons: ReplyButton[] }
   | { kind: 'list'; body: string; buttonLabel: string; rows: ListRow[] };
 
+/** The window-bearing part of a conversation, as `guardedSend` needs it. */
+type WindowState = Pick<Conversation, 'windowExpiresAt'>;
+
 export interface TurnContext {
   stage: ConversationStage;
   known: KnownFacts;
   contactId: string;
   contactPhone: string;
+  /**
+   * When the conversation's 24-hour messaging window closes. Carried on the
+   * context so every send can be authorised against it without re-reading the
+   * conversation — free-form text outside the window is refused by
+   * `guardedSend` and needs an approved template instead.
+   */
+  windowExpiresAt: Date | null;
   /**
    * True when the lead did not come through the Meta form, so all four screening
    * questions must be asked (spec §3). A form lead has Q1/Q3 pre-answered.
@@ -223,6 +234,7 @@ export async function loadContext(
     known: conversation.extracted ?? {},
     contactId: contact.id,
     contactPhone: contact.phone,
+    windowExpiresAt: conversation.windowExpiresAt,
     screenAll: screensAllQuestions(contact.entryPoint),
     // No prior outbound message means the bot has not spoken yet.
     isFirstResponse: !turns.some((turn) => turn.role === 'assistant'),
@@ -364,11 +376,22 @@ export function createConversationWorkflow(
       generateValidatedReply(deps.llm, args),
   );
 
-  // Every outbound message goes through guardedSend, so opt-out enforcement
-  // cannot be bypassed by any send path (§6). One task per message keeps each
-  // send individually checkpointed, so a resumed turn does not re-send.
-  const send = task('ct_send', (args: { to: string; part: OutboundPart }) =>
-    guardedSend(deps.db, args.to, () => sendOutbound(deps.channel, args.to, args.part)),
+  // Every outbound message goes through guardedSend, so opt-out, consent, and
+  // messaging-window enforcement cannot be bypassed by any send path (§6). One
+  // task per message keeps each send individually checkpointed, so a resumed turn
+  // does not re-send.
+  //
+  // These are replies, so consent is not at issue — the person messaged first.
+  // The window still is: a turn retried after a long outage could otherwise try
+  // to answer outside it, which Meta rejects.
+  const send = task(
+    'ct_send',
+    (args: { to: string; part: OutboundPart; conversation: WindowState }) =>
+      guardedSend(
+        deps.db,
+        { kind: 'reply', to: args.to, conversation: args.conversation },
+        () => sendOutbound(deps.channel, args.to, args.part),
+      ),
   );
 
   // A supplementary media send (intro/testimonial/proof clip). The failure is
@@ -379,10 +402,16 @@ export function createConversationWorkflow(
   // its text.
   const sendOptionalMedia = task(
     'ct_sendOptionalMedia',
-    async (args: { to: string; part: OutboundPart }): Promise<string | null> => {
+    async (args: {
+      to: string;
+      part: OutboundPart;
+      conversation: WindowState;
+    }): Promise<string | null> => {
       try {
-        const { providerMessageId } = await guardedSend(deps.db, args.to, () =>
-          sendOutbound(deps.channel, args.to, args.part),
+        const { providerMessageId } = await guardedSend(
+          deps.db,
+          { kind: 'reply', to: args.to, conversation: args.conversation },
+          () => sendOutbound(deps.channel, args.to, args.part),
         );
         return providerMessageId;
       } catch (error) {
@@ -456,6 +485,7 @@ export function createConversationWorkflow(
     if (gate.kind === 'send') {
       const { providerMessageId } = await send({
         to: ctx.contactPhone,
+        conversation: ctx,
         part: { kind: 'text', text: gate.text },
       });
       await persist({
@@ -485,7 +515,11 @@ export function createConversationWorkflow(
           }
         : { ...backPart(ctx, gate.extracted), extracted: gate.extracted };
     const action = gate.kind === 'restart' ? 'restart' : 'go_back';
-    const { providerMessageId } = await send({ to: ctx.contactPhone, part: reset.part });
+    const { providerMessageId } = await send({
+      to: ctx.contactPhone,
+      conversation: ctx,
+      part: reset.part,
+    });
     await persist({
       ...base,
       toStage: reset.toStage,
@@ -519,7 +553,16 @@ export function createConversationWorkflow(
         ctx.currentText.trim() === DEV_RESET_TRIGGER
       ) {
         await wipeClientForDev(deps.db, conversationId);
-        await deps.channel.sendText(ctx.contactPhone, DEV_RESET_CONFIRMATION);
+        // Routed through the choke point like every other send, even though
+        // this is dev-only: a bypass here is still a bypass, and the opt-out
+        // rule holds regardless of who is testing. The window state is taken
+        // from the context captured before the wipe — the developer just sent
+        // the trigger, so it is open.
+        await guardedSend(
+          deps.db,
+          { kind: 'reply', to: ctx.contactPhone, conversation: ctx },
+          () => deps.channel.sendText(ctx.contactPhone, DEV_RESET_CONFIRMATION),
+        );
         logger.warn({ conversationId }, 'dev reset: client data wiped');
         return {
           stage: 'new',
@@ -577,6 +620,7 @@ export function createConversationWorkflow(
         if (!alreadyAcked) {
           const { providerMessageId } = await send({
             to: ctx.contactPhone,
+            conversation: ctx,
             part: { kind: 'text', text: PHOTO_ACK_MESSAGE },
           });
           outbound.push({ body: PHOTO_ACK_MESSAGE, providerMessageId });
@@ -615,6 +659,7 @@ export function createConversationWorkflow(
         if (!alreadyTold) {
           const { providerMessageId } = await send({
             to: ctx.contactPhone,
+            conversation: ctx,
             part: { kind: 'text', text: UNSUPPORTED_MEDIA_MESSAGE },
           });
           outbound.push({ body: UNSUPPORTED_MEDIA_MESSAGE, providerMessageId });
@@ -673,7 +718,11 @@ export function createConversationWorkflow(
           const storeBody = question ? question.body : MAIN_MENU.body;
           logger.info({ conversationId, pendingChoice }, 'restart confirmed by the lead');
 
-          const { providerMessageId } = await send({ to: ctx.contactPhone, part });
+          const { providerMessageId } = await send({
+            to: ctx.contactPhone,
+            conversation: ctx,
+            part,
+          });
           await persist({
             conversationId,
             contactId: ctx.contactId,
@@ -699,6 +748,7 @@ export function createConversationWorkflow(
           logger.info({ conversationId }, 'restart declined — nothing changes');
           const { providerMessageId } = await send({
             to: ctx.contactPhone,
+            conversation: ctx,
             part: { kind: 'text', text: RESTART_DECLINED_MESSAGE },
           });
           await persist({
@@ -731,6 +781,7 @@ export function createConversationWorkflow(
         const holdStage: ConversationStage = ctx.stage === 'new' ? 'engaged' : ctx.stage;
         const { providerMessageId } = await send({
           to: ctx.contactPhone,
+          conversation: ctx,
           part: { kind: 'text', text: ENGLISH_ONLY_REPLY },
         });
         await persist({
@@ -768,6 +819,7 @@ export function createConversationWorkflow(
         const holdStage: ConversationStage = ctx.stage === 'new' ? 'engaged' : ctx.stage;
         const { providerMessageId } = await send({
           to: ctx.contactPhone,
+          conversation: ctx,
           part: { kind: 'text', text: OFF_TOPIC_REDIRECT_MESSAGE },
         });
         await persist({
@@ -1054,6 +1106,7 @@ export function createConversationWorkflow(
         if (planned.part.kind === 'video') {
           const providerMessageId = await sendOptionalMedia({
             to: ctx.contactPhone,
+            conversation: ctx,
             part: planned.part,
           });
           if (providerMessageId === null) {
@@ -1064,6 +1117,7 @@ export function createConversationWorkflow(
             if (planned.part.caption) {
               const { providerMessageId: textId } = await send({
                 to: ctx.contactPhone,
+                conversation: ctx,
                 part: { kind: 'text', text: planned.part.caption },
               });
               outbound.push({ body: planned.storeBody, providerMessageId: textId });
@@ -1075,6 +1129,7 @@ export function createConversationWorkflow(
         }
         const { providerMessageId } = await send({
           to: ctx.contactPhone,
+          conversation: ctx,
           part: planned.part,
         });
         outbound.push({

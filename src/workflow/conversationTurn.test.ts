@@ -8,6 +8,7 @@ import {
 } from '../db/repositories/contacts.js';
 import {
   findOrCreateConversation,
+  recordInboundActivity,
   getConversationById,
   type ConversationStage,
 } from '../db/repositories/conversations.js';
@@ -133,6 +134,13 @@ async function seed(
     body: options.inbound,
     createdAt: new Date(),
   });
+
+  // Mirror production: ingestion records inbound activity, which opens the
+  // 24-hour messaging window. Without it the conversation looks like one that
+  // never received anything, and `guardedSend` correctly refuses to reply
+  // free-form — so a fixture that skips this is testing a state the webhook can
+  // never produce.
+  await recordInboundActivity(db, conversation.id, new Date());
 
   return { conversationId: conversation.id, phone };
 }

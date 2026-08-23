@@ -4,6 +4,7 @@ import type { Database } from '../db/client.js';
 import { upsertContactByPhone } from '../db/repositories/contacts.js';
 import {
   findOrCreateConversation,
+  recordInboundActivity,
   getConversationById,
 } from '../db/repositories/conversations.js';
 import { recentMessages, recordInboundMessage } from '../db/repositories/messages.js';
@@ -59,6 +60,10 @@ async function seed(inbound: string): Promise<{ conversationId: string; phone: s
     body: inbound,
     createdAt: new Date(),
   });
+
+  // Mirror production: ingestion opens the 24-hour messaging window. Without it
+  // `guardedSend` correctly refuses a free-form reply.
+  await recordInboundActivity(db, conversation.id, new Date());
 
   return { conversationId: conversation.id, phone };
 }

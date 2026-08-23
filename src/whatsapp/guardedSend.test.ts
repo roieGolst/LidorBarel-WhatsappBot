@@ -20,10 +20,12 @@ beforeEach(async () => {
 });
 
 describe('guardedSend', () => {
-  it('sends to a contact who has not opted out', async () => {
+  it('runs the send for a contact who has not opted out', async () => {
     const channel = new FakeChannel();
 
-    const result = await guardedSend(db, channel, '+972521234501', 'שלום');
+    const result = await guardedSend(db, '+972521234501', () =>
+      channel.sendText('+972521234501', 'שלום'),
+    );
 
     expect(result.providerMessageId).toBeTruthy();
     expect(channel.sent).toHaveLength(1);
@@ -34,8 +36,9 @@ describe('guardedSend', () => {
     await recordOptOut(db, '+972521234502', 'classifier');
 
     await expect(
-      guardedSend(db, channel, '+972521234502', 'שלום'),
+      guardedSend(db, '+972521234502', () => channel.sendText('+972521234502', 'שלום')),
     ).rejects.toBeInstanceOf(OptedOutError);
+    // The send thunk never ran.
     expect(channel.sent).toHaveLength(0);
   });
 
@@ -44,9 +47,9 @@ describe('guardedSend', () => {
     await recordOptOut(db, '+972521234503', 'keyword');
 
     // Same number, national format — normalization must still match the opt-out.
-    await expect(guardedSend(db, channel, '0521234503', 'שלום')).rejects.toBeInstanceOf(
-      OptedOutError,
-    );
+    await expect(
+      guardedSend(db, '0521234503', () => channel.sendText('0521234503', 'שלום')),
+    ).rejects.toBeInstanceOf(OptedOutError);
     expect(channel.sent).toHaveLength(0);
   });
 });

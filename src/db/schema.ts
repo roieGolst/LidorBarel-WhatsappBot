@@ -1,3 +1,4 @@
+import { sql } from 'drizzle-orm';
 import {
   boolean,
   index,
@@ -6,6 +7,7 @@ import {
   numeric,
   pgEnum,
   pgTable,
+  pgView,
   text,
   timestamp,
   uniqueIndex,
@@ -75,6 +77,10 @@ export const conversationStage = pgEnum('conversation_stage', [
   'screening_neighborhood',
   'screening_timeline',
   'screening_currently_marketed',
+  /** Q4 = with another agent: capturing exclusivity end + follow-up wish. */
+  'screening_exclusivity',
+  /** Brief intent/seriousness check after the four questions, before handoff. */
+  'assessing_intent',
   'qualified',
   'disqualified',
   'appointment_proposed',
@@ -84,6 +90,8 @@ export const conversationStage = pgEnum('conversation_stage', [
   'awaiting_reply',
   'closed_no_response',
   'opted_out',
+  /** Banned for abuse (malicious/injection messages after a warning). Terminal. */
+  'blocked',
   'error',
 ]);
 
@@ -275,9 +283,9 @@ export const conversations = pgTable(
     disqualificationReason: disqualificationReason('disqualification_reason'),
 
     /**
-     * Reserved for prioritizing Lidor's queue. Deliberately unpopulated in V1 —
-     * no scoring formula ships without Lidor's explicit approval, and it must
-     * never gate qualification.
+     * Orders Lidor's queue. Populated from the timeline (spec Q3) — higher is
+     * more urgent — so "no urgency" lowers priority instead of disqualifying. It
+     * must NEVER gate qualification (see workflow/decide.ts `leadPriorityScore`).
      */
     priorityScore: integer('priority_score'),
 
@@ -524,3 +532,99 @@ export const events = pgTable(
     ),
   ],
 );
+
+/**
+ * Durable cache of media uploaded to Meta's WhatsApp Cloud API.
+ *
+ * Uploading a file (the ~7 MB intro clip) returns a reusable media id; sending by
+ * id skips re-uploading the bytes. The id survives ~30 days on Meta's side, so we
+ * persist it here keyed by a stable asset key (the file path plus its modified
+ * time — a new file changes the key and forces one fresh upload) and reuse it
+ * across process restarts and deploys.
+ */
+export const mediaUploads = pgTable('media_uploads', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  /** Stable key for the local asset: `<path>:<mtimeMs>`. */
+  assetKey: text('asset_key').notNull().unique(),
+  /** The Meta media id to send by. */
+  mediaId: text('media_id').notNull(),
+  uploadedAt: timestamp('uploaded_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
+/**
+ * Catalog of testimonial / promo videos under `assets/recommendations/`.
+ *
+ * This holds only the *metadata* used to pick which video to send (its type,
+ * the neighborhoods it targets, its audience) plus the file path. The bytes are
+ * uploaded to Meta lazily by the channel on first send (cached in
+ * {@link mediaUploads}), so no media id is stored here. Populated on startup by
+ * scanning each video's `<name>.json` sidecar; unknown neighborhoods are kept as
+ * written. Source of truth is the files — this is a rebuildable projection.
+ */
+export const mediaAssets = pgTable(
+  'media_assets',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    /** Path relative to the assets root, e.g. `recommendations/story.mp4`. */
+    path: text('path').notNull(),
+    /** `testimonial` | `promo_investment`. */
+    type: text('type').notNull(),
+    /** Canonical neighborhoods this video targets. Empty = general. */
+    neighborhoods: jsonb('neighborhoods').notNull().default([]),
+    /** `seller` | `buyer` | `investor` | null. */
+    audience: text('audience'),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [uniqueIndex('media_assets_path_unique').on(table.path)],
+);
+
+/**
+ * A readable, human-facing view of each lead — one row per conversation, with the
+ * contact's phone/name and the screening answers flattened out of the `extracted`
+ * JSONB. It exists purely for eyeballing leads in a DB tool (`SELECT * FROM leads`)
+ * until the Monday.com projection is built; nothing writes through it.
+ */
+export const leads = pgView('leads', {
+  conversationId: uuid('conversation_id'),
+  phone: text('phone'),
+  name: text('name'),
+  entryPoint: entryPoint('entry_point'),
+  stage: conversationStage('stage'),
+  qualified: boolean('qualified'),
+  priorityScore: integer('priority_score'),
+  disqualificationReason: disqualificationReason('disqualification_reason'),
+  sellIntent: text('sell_intent'),
+  neighborhood: text('neighborhood'),
+  timeline: text('timeline'),
+  currentlyMarketed: text('currently_marketed'),
+  seriousSeller: text('serious_seller'),
+  sellMotivation: text('sell_motivation'),
+  additionalNotes: text('additional_notes'),
+  exclusivityEndsAt: text('exclusivity_ends_at'),
+  wantsExclusivityFollowup: text('wants_exclusivity_followup'),
+  createdAt: timestamp('created_at', { withTimezone: true }),
+  updatedAt: timestamp('updated_at', { withTimezone: true }),
+}).as(sql`
+  SELECT
+    conv.id                                        AS conversation_id,
+    c.phone,
+    c.name,
+    c.entry_point,
+    conv.stage,
+    conv.qualified,
+    conv.priority_score,
+    conv.disqualification_reason,
+    conv.extracted ->> 'sellIntent'                AS sell_intent,
+    conv.extracted ->> 'neighborhood'              AS neighborhood,
+    conv.extracted ->> 'timeline'                  AS timeline,
+    conv.extracted ->> 'currentlyMarketed'         AS currently_marketed,
+    conv.extracted ->> 'seriousSeller'             AS serious_seller,
+    conv.extracted ->> 'sellMotivation'            AS sell_motivation,
+    conv.extracted ->> 'additionalNotes'           AS additional_notes,
+    conv.extracted ->> 'exclusivityEndsAt'         AS exclusivity_ends_at,
+    conv.extracted ->> 'wantsExclusivityFollowup'  AS wants_exclusivity_followup,
+    conv.created_at,
+    conv.updated_at
+  FROM conversations conv
+  JOIN contacts c ON c.id = conv.contact_id
+`);

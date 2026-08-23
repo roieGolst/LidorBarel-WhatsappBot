@@ -22,6 +22,41 @@
       "when": 1787051053880,
       "tag": "0002_wealthy_squadron_supreme",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1787063970597,
+      "tag": "0003_cool_lockheed",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1787064724185,
+      "tag": "0004_hot_bullseye",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1787170234113,
+      "tag": "0005_boring_exiles",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1787171211817,
+      "tag": "0006_bright_iron_monger",
+      "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1787226998980,
+      "tag": "0007_lovely_rictor",
+      "breakpoints": true
     }
   ]
 }

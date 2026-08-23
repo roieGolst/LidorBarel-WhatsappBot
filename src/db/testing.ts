@@ -90,6 +90,7 @@ export async function truncateAll(db: Database): Promise<void> {
       conversations,
       listings,
       properties,
+      media_assets,
       contacts
     RESTART IDENTITY CASCADE
   `);

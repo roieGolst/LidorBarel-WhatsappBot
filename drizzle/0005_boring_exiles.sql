@@ -1,0 +1,1 @@
+ALTER TYPE "public"."conversation_stage" ADD VALUE 'assessing_intent' BEFORE 'qualified';

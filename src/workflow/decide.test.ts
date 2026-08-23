@@ -2,7 +2,9 @@ import { describe, expect, it } from 'vitest';
 import type { Analysis } from './classify.js';
 import {
   CONFIDENCE_THRESHOLD,
+  decideMainMenu,
   decideTransition,
+  leadPriorityScore,
   screensAllQuestions,
   type KnownFacts,
 } from './decide.js';
@@ -14,6 +16,9 @@ function analysis(overrides: Partial<Analysis> = {}): Analysis {
     confidence: 0.9,
     extracted: {},
     needsEscalation: false,
+    wantsBuyerProof: false,
+    wantsSocialProof: false,
+    asksQuestion: false,
     ...overrides,
   };
 }
@@ -39,48 +44,256 @@ describe('decideTransition', () => {
     expect(decision.nextStage).toBe('opted_out');
   });
 
-  it('clarifies rather than guessing when confidence is below the threshold', () => {
+  it('keeps the flow moving instead of guessing when confidence is below the threshold', () => {
+    // A shaky read contributes no facts, so the pending question is re-asked
+    // rather than the person being told to rephrase. (Form lead → Q2 first.)
     const decision = decideTransition(
-      'engaged',
+      'screening_neighborhood',
       analysis({ confidence: CONFIDENCE_THRESHOLD - 0.01 }),
     );
-    expect(decision.action).toBe('clarify');
-    expect(decision.escalate).toBe(true);
-    expect(decision.nextStage).toBe('engaged');
+    expect(decision.action).toBe('ask_neighborhood');
+    expect(decision.nextStage).toBe('screening_neighborhood');
   });
 
-  it('clarifies on an UNCLEAR intent even at high confidence', () => {
+  it('asks the pending question on an UNCLEAR intent, never stalling', () => {
+    // A greeting or filler ("יאללה") reads as UNCLEAR; a direct-message lead
+    // should still be moved to Q1 rather than asked to rephrase.
     const decision = decideTransition(
       'new',
       analysis({ intent: 'UNCLEAR', confidence: 1 }),
+      {},
+      true,
     );
-    expect(decision.action).toBe('clarify');
-    // A first inbound must not linger in `new`.
-    expect(decision.nextStage).toBe('engaged');
+    expect(decision.action).toBe('ask_sell_intent');
+    expect(decision.nextStage).toBe('screening_sell_intent');
   });
 
-  it.each([
-    ['not_selling', { sellIntent: 'not_selling' }, 'not_selling'],
-    ['no_urgency', { timeline: 'no_urgency' }, 'no_urgency'],
-    ['with_agent', { currentlyMarketed: 'with_agent' }, 'exclusive_with_other_agent'],
-  ] as const)(
-    'disqualifies on %s with the mapped reason',
-    (_label, extracted, reason) => {
+  it('disqualifies on not_selling with the mapped reason', () => {
+    const decision = decideTransition(
+      'screening_currently_marketed',
+      analysis({ extracted: { sellIntent: 'not_selling' } }),
+    );
+    expect(decision.nextStage).toBe('disqualified');
+    expect(decision.action).toBe('send_disqualification');
+    expect(decision.qualified).toBe(false);
+    expect(decision.disqualificationReason).toBe('not_selling');
+  });
+
+  it('does NOT disqualify on no urgency — it continues the flow', () => {
+    const decision = decideTransition(
+      'screening_currently_marketed',
+      analysis({ extracted: { timeline: 'no_urgency', currentlyMarketed: 'no' } }),
+      { sellIntent: 'ready', neighborhood: 'רמות' },
+    );
+    // Continues to the intent check rather than disqualifying.
+    expect(decision.action).not.toBe('send_disqualification');
+    expect(decision.action).toBe('ask_intent');
+  });
+
+  describe('intent check before handoff', () => {
+    const answered: KnownFacts = {
+      sellIntent: 'ready',
+      neighborhood: 'רמות',
+      timeline: 'within_month',
+      currentlyMarketed: 'no',
+    };
+
+    it('asks the intent question once all four are answered', () => {
       const decision = decideTransition(
         'screening_currently_marketed',
-        analysis({ extracted }),
+        analysis(),
+        answered,
+        true,
       );
-      expect(decision.nextStage).toBe('disqualified');
-      expect(decision.action).toBe('send_disqualification');
-      expect(decision.qualified).toBe(false);
-      expect(decision.disqualificationReason).toBe(reason);
-    },
-  );
+      expect(decision.action).toBe('ask_intent');
+      expect(decision.nextStage).toBe('assessing_intent');
+    });
+
+    it('qualifies a serious seller', () => {
+      const decision = decideTransition(
+        'assessing_intent',
+        analysis({ extracted: { seriousSeller: true } }),
+        answered,
+        true,
+      );
+      expect(decision.nextStage).toBe('qualified');
+      expect(decision.qualified).toBe(true);
+    });
+
+    it('qualifies when the intent answer adds real property detail', () => {
+      const decision = decideTransition(
+        'assessing_intent',
+        analysis({ extracted: { additionalNotes: 'רחוב רגר 5, קומה 2, 4 חדרים' } }),
+        answered,
+        true,
+      );
+      expect(decision.nextStage).toBe('qualified');
+      expect(decision.qualified).toBe(true);
+    });
+
+    it('does not forward a price-checker — holds them instead', () => {
+      const decision = decideTransition(
+        'assessing_intent',
+        analysis({ extracted: { seriousSeller: false } }),
+        answered,
+        true,
+      );
+      expect(decision.action).toBe('low_intent_hold');
+      expect(decision.qualified).toBeUndefined();
+    });
+
+    it('does NOT forward an empty intent answer — re-asks for the specifics', () => {
+      // A contentless reply at the intent check (a bare "כן"/filler) carries no
+      // property detail or intent signal. It must not be forwarded as "got your
+      // details"; the bot asks once more for the specifics instead.
+      const decision = decideTransition('assessing_intent', analysis(), answered, true);
+      expect(decision.action).toBe('ask_intent');
+      expect(decision.nextStage).toBe('assessing_intent');
+      expect(decision.qualified).toBeUndefined();
+    });
+
+    it('still asks the intent question when seriousSeller was set before it was asked', () => {
+      // Regression: a Q4 answer ("כן, באופן פרטי") the classifier mis-tagged as
+      // seriousSeller:false must not short-circuit to low_intent_hold before the
+      // intent question is even asked.
+      const decision = decideTransition(
+        'screening_currently_marketed',
+        analysis({ extracted: { currentlyMarketed: 'privately', seriousSeller: false } }),
+        { sellIntent: 'ready', neighborhood: 'רמות', timeline: 'within_month' },
+        true,
+      );
+      expect(decision.action).toBe('ask_intent');
+      expect(decision.action).not.toBe('low_intent_hold');
+    });
+  });
+
+  describe('a booking lead can still ask things (regression)', () => {
+    // Tapping "קביעת פגישה" stored bookingIntent, and the booking rule then read
+    // it off the merged facts on EVERY later turn — funnelling every message into
+    // screening, so questions, objections and testimonial requests were ignored
+    // for the rest of the conversation.
+    const booked: KnownFacts = { bookingIntent: true, timeline: 'immediate' };
+
+    it('answers a testimonial request instead of marching on with screening', () => {
+      const decision = decideTransition(
+        'assessing_intent',
+        analysis({ intent: 'FAQ', wantsSocialProof: true }),
+        {
+          ...booked,
+          sellIntent: 'ready',
+          neighborhood: 'נווה זאב',
+          currentlyMarketed: 'no',
+        },
+        true,
+      );
+      expect(decision.action).toBe('send_social_proof');
+    });
+
+    it('answers an FAQ instead of marching on with screening', () => {
+      const decision = decideTransition(
+        'screening_currently_marketed',
+        analysis({ intent: 'FAQ' }),
+        { ...booked, sellIntent: 'ready', neighborhood: 'נווה זאב' },
+        true,
+      );
+      expect(decision.action).toBe('answer_faq');
+    });
+
+    it('still advances the flow on an actual screening answer', () => {
+      const decision = decideTransition(
+        'screening_currently_marketed',
+        analysis({ extracted: { currentlyMarketed: 'no' } }),
+        { ...booked, sellIntent: 'ready', neighborhood: 'נווה זאב' },
+        true,
+      );
+      expect(decision.action).toBe('ask_intent');
+    });
+  });
+
+  describe('answering a question asked alongside a screening answer', () => {
+    it('attaches a reply to the question, then continues the flow', () => {
+      // "בשכונת נווה זאב, לידור יודע למכור שם?" — both an answer and a question.
+      const decision = decideTransition(
+        'screening_neighborhood',
+        analysis({ extracted: { neighborhood: 'נווה זאב' }, asksQuestion: true }),
+        { sellIntent: 'ready' },
+        true,
+      );
+      expect(decision.action).toBe('ask_timeline'); // the flow still moves
+      expect(decision.addressFirst).toBe('answer_aside'); // and they get an answer
+    });
+
+    it('gives a raised concern the full objection handler, not a brief aside', () => {
+      // A concern deserves real engagement, so it takes the dedicated handler and
+      // the flow waits a turn. The answer it carried is still merged into the facts.
+      const decision = decideTransition(
+        'screening_neighborhood',
+        analysis({
+          intent: 'OBJECTION',
+          extracted: { neighborhood: 'נווה זאב' },
+          asksQuestion: true,
+        }),
+        { sellIntent: 'ready' },
+        true,
+      );
+      expect(decision.action).toBe('handle_objection');
+    });
+
+    it('adds nothing when the message only answers', () => {
+      const decision = decideTransition(
+        'screening_neighborhood',
+        analysis({ extracted: { neighborhood: 'נווה זאב' } }),
+        { sellIntent: 'ready' },
+        true,
+      );
+      expect(decision.addressFirst).toBeUndefined();
+    });
+  });
+
+  describe('leadPriorityScore', () => {
+    it('ranks urgency (higher = sooner), undefined until the timeline is known', () => {
+      expect(leadPriorityScore({ timeline: 'immediate' })).toBe(100);
+      expect(leadPriorityScore({ timeline: 'within_month' })).toBe(75);
+      expect(leadPriorityScore({ timeline: 'still_checking' })).toBe(50);
+      expect(leadPriorityScore({ timeline: 'no_urgency' })).toBe(25);
+      expect(leadPriorityScore({})).toBeUndefined();
+    });
+  });
 
   it('disqualifies on a fact learned in an earlier turn', () => {
-    const known: KnownFacts = { currentlyMarketed: 'with_agent' };
-    const decision = decideTransition('screening_currently_marketed', analysis(), known);
-    expect(decision.disqualificationReason).toBe('exclusive_with_other_agent');
+    const known: KnownFacts = { sellIntent: 'not_selling' };
+    const decision = decideTransition('screening_sell_intent', analysis(), known);
+    expect(decision.disqualificationReason).toBe('not_selling');
+  });
+
+  describe('marketed through another agent (exclusivity follow-up)', () => {
+    it('asks about the exclusivity end + follow-up before disqualifying', () => {
+      const decision = decideTransition(
+        'screening_currently_marketed',
+        analysis({ extracted: { currentlyMarketed: 'with_agent' } }),
+      );
+      expect(decision.action).toBe('ask_exclusivity');
+      expect(decision.nextStage).toBe('screening_exclusivity');
+    });
+
+    it('disqualifies once the exclusivity details are captured', () => {
+      const decision = decideTransition(
+        'screening_exclusivity',
+        analysis({ extracted: { exclusivityEndsAt: 'עוד חודשיים' } }),
+        { currentlyMarketed: 'with_agent' },
+      );
+      expect(decision.nextStage).toBe('disqualified');
+      expect(decision.disqualificationReason).toBe('exclusive_with_other_agent');
+    });
+
+    it('proceeds to disqualify once the follow-up wish is known even without a date', () => {
+      const decision = decideTransition(
+        'screening_exclusivity',
+        analysis({ extracted: { wantsExclusivityFollowup: true } }),
+        { currentlyMarketed: 'with_agent' },
+      );
+      expect(decision.nextStage).toBe('disqualified');
+    });
   });
 
   it('handles an objection without advancing screening, on the stronger model', () => {
@@ -96,6 +309,32 @@ describe('decideTransition', () => {
   it('answers an FAQ in place', () => {
     const decision = decideTransition('engaged', analysis({ intent: 'FAQ' }));
     expect(decision).toMatchObject({ action: 'answer_faq', nextStage: 'engaged' });
+  });
+
+  it('routes a free-text testimonials request to social proof, not a text FAQ', () => {
+    // "יש ממליצים?" classifies as FAQ but carries wantsSocialProof — it should
+    // send the testimonial video, not a text-only FAQ answer that re-asks details.
+    const decision = decideTransition(
+      'assessing_intent',
+      analysis({ intent: 'FAQ', wantsSocialProof: true }),
+      { neighborhood: 'רמות', currentlyMarketed: 'no' },
+    );
+    expect(decision.action).toBe('send_social_proof');
+    expect(decision.action).not.toBe('answer_faq');
+  });
+
+  it('redirects a confident off-topic message instead of engaging with it', () => {
+    const decision = decideTransition('engaged', analysis({ intent: 'OFF_TOPIC' }));
+    expect(decision.action).toBe('stay_on_topic');
+  });
+
+  it('redirects off-topic chatter from a qualified lead (not an "info for Lidor" ack)', () => {
+    // The reported bug: a recipe/shopping-list request after qualifying was
+    // acknowledged as new details for Lidor.
+    const decision = decideTransition('qualified', analysis({ intent: 'OFF_TOPIC' }));
+    expect(decision.action).toBe('stay_on_topic');
+    expect(decision.action).not.toBe('acknowledge_additional_info');
+    expect(decision.nextStage).toBe('qualified');
   });
 
   it('asks for the neighborhood first when nothing is known (form lead: Q2+Q4 only)', () => {
@@ -114,15 +353,38 @@ describe('decideTransition', () => {
     expect(decision.action).toBe('ask_currently_marketed');
   });
 
-  it('qualifies once both screening answers are in and none disqualifies', () => {
+  it('qualifies once both answers are in, none disqualifies, and intent is confirmed', () => {
     const decision = decideTransition(
-      'screening_currently_marketed',
-      analysis({ extracted: { currentlyMarketed: 'no' } }),
+      'assessing_intent',
+      analysis({ extracted: { currentlyMarketed: 'no', seriousSeller: true } }),
       { neighborhood: 'נווה זאב' },
     );
     expect(decision.nextStage).toBe('qualified');
     expect(decision.action).toBe('proceed_qualified');
     expect(decision.qualified).toBe(true);
+  });
+
+  it('keeps a qualified conversation open, collecting more details', () => {
+    const decision = decideTransition(
+      'qualified',
+      analysis({ extracted: { additionalNotes: '4 חדרים, קומה 3' } }),
+      { sellIntent: 'ready', neighborhood: 'רמות', currentlyMarketed: 'no' },
+    );
+    expect(decision.action).toBe('acknowledge_additional_info');
+    expect(decision.nextStage).toBe('qualified');
+  });
+
+  it('answers a question from a qualified lead instead of brushing it off', () => {
+    // Roie asked a clarifying "את מה?" after qualifying and got the canned ack.
+    // A message with no new property details must get a real model reply.
+    const decision = decideTransition(
+      'qualified',
+      analysis({ intent: 'UNCLEAR', confidence: 0.3 }),
+      { sellIntent: 'ready', neighborhood: 'רמות', currentlyMarketed: 'no' },
+    );
+    expect(decision.action).toBe('assist_qualified');
+    expect(decision.action).not.toBe('acknowledge_additional_info');
+    expect(decision.nextStage).toBe('qualified');
   });
 
   it('escalates the reply when the classifier flags frustration', () => {
@@ -170,15 +432,14 @@ describe('decideTransition', () => {
       expect(decision.action).toBe('ask_currently_marketed');
     });
 
-    it('qualifies once all four are answered and none disqualifies', () => {
+    it('asks the intent check once all four are answered', () => {
       const decision = decideTransition(
         'screening_currently_marketed',
         analysis({ extracted: { currentlyMarketed: 'no' } }),
         { sellIntent: 'ready', neighborhood: 'רמות', timeline: 'within_month' },
         true,
       );
-      expect(decision.nextStage).toBe('qualified');
-      expect(decision.qualified).toBe(true);
+      expect(decision.action).toBe('ask_intent');
     });
 
     it('disqualifies a direct lead who is not selling (Q1)', () => {
@@ -190,6 +451,105 @@ describe('decideTransition', () => {
       );
       expect(decision.nextStage).toBe('disqualified');
       expect(decision.disqualificationReason).toBe('not_selling');
+    });
+  });
+
+  describe('decideMainMenu (§8 opening options)', () => {
+    it('check_fit starts screening at the first pending question (form lead → Q2)', () => {
+      const decision = decideMainMenu('check_fit', 'engaged');
+      expect(decision.action).toBe('ask_neighborhood');
+    });
+
+    it('check_fit for a direct lead starts at Q1', () => {
+      const decision = decideMainMenu('check_fit', 'engaged', {}, true);
+      expect(decision.action).toBe('ask_sell_intent');
+    });
+
+    it('check_fit still disqualifies on a fact already known', () => {
+      const decision = decideMainMenu('check_fit', 'engaged', {
+        sellIntent: 'not_selling',
+      });
+      expect(decision.nextStage).toBe('disqualified');
+      expect(decision.disqualificationReason).toBe('not_selling');
+    });
+
+    it('check_fit routes an already-known exclusive lead to the exclusivity ask', () => {
+      const decision = decideMainMenu('check_fit', 'engaged', {
+        currentlyMarketed: 'with_agent',
+      });
+      expect(decision.action).toBe('ask_exclusivity');
+    });
+
+    it('testimonials sends social proof', () => {
+      expect(decideMainMenu('testimonials', 'engaged').action).toBe('send_social_proof');
+    });
+
+    it('learn_more ("about me") introduces Lidor', () => {
+      expect(decideMainMenu('learn_more', 'engaged').action).toBe('about_lidor');
+    });
+
+    describe('after the lead has already completed the flow', () => {
+      it('confirms before redoing the flow instead of restarting it', () => {
+        const answered: KnownFacts = {
+          sellIntent: 'ready',
+          neighborhood: 'רמות',
+          currentlyMarketed: 'no',
+        };
+        for (const choice of ['check_fit', 'book_meeting'] as const) {
+          const decision = decideMainMenu(choice, 'qualified', answered);
+          expect(decision.action).toBe('confirm_restart');
+          // Nothing moves until they say yes — no question is re-asked.
+          expect(decision.nextStage).toBe('qualified');
+          expect(decision.qualified).toBeUndefined();
+        }
+      });
+
+      it('still answers "about me" and testimonials without touching the flow', () => {
+        expect(decideMainMenu('learn_more', 'qualified').action).toBe('about_lidor');
+        expect(decideMainMenu('testimonials', 'qualified').action).toBe(
+          'send_social_proof',
+        );
+        // Neither re-opens screening.
+        expect(decideMainMenu('learn_more', 'qualified').nextStage).toBe('qualified');
+        expect(decideMainMenu('testimonials', 'qualified').nextStage).toBe('qualified');
+      });
+    });
+
+    it('book_meeting runs the screening flow (a call is booked after a few details)', () => {
+      const decision = decideMainMenu('book_meeting', 'engaged');
+      expect(decision.action).toBe('ask_neighborhood');
+      const direct = decideMainMenu('book_meeting', 'engaged', {}, true);
+      expect(direct.action).toBe('ask_sell_intent');
+    });
+  });
+
+  describe('booking intent', () => {
+    it('boosts the weighted priority score', () => {
+      expect(leadPriorityScore({ bookingIntent: true })).toBe(60);
+      expect(leadPriorityScore({ timeline: 'no_urgency', bookingIntent: true })).toBe(50);
+      expect(leadPriorityScore({ timeline: 'immediate', bookingIntent: true })).toBe(100);
+      // Without booking intent the timeline-only score is unchanged.
+      expect(leadPriorityScore({ timeline: 'no_urgency' })).toBe(25);
+    });
+
+    it('runs the screening flow even when the message reads like an FAQ', () => {
+      const decision = decideTransition(
+        'engaged',
+        analysis({ intent: 'FAQ', extracted: { bookingIntent: true } }),
+      );
+      expect(decision.action).toBe('ask_neighborhood');
+    });
+
+    it('skips Q3 (timeline) for a booking lead — treated as immediate', () => {
+      // Direct lead (screenAll) with Q1+Q2 answered: normally Q3 is next, but a
+      // booking lead jumps straight to Q4.
+      const decision = decideMainMenu(
+        'book_meeting',
+        'engaged',
+        { sellIntent: 'ready', neighborhood: 'רמות' },
+        true,
+      );
+      expect(decision.action).toBe('ask_currently_marketed');
     });
   });
 

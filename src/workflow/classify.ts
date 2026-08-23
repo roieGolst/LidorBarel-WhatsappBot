@@ -51,13 +51,68 @@ export const extractedSchema = z.object({
   neighborhood: z.string().min(1).optional(), // Q2, free text; mapped to a dropdown later
   timeline: timeline.optional(),
   currentlyMarketed: currentlyMarketed.optional(),
+  // Asked only when the property is marketed through another agent: when that
+  // agent's exclusivity ends (free text), and whether they want a follow-up then.
+  exclusivityEndsAt: z.string().min(1).optional(),
+  wantsExclusivityFollowup: z.boolean().optional(),
+  // Any extra property details the person volunteers (rooms, size, floor,
+  // condition, price expectation…) — a short note, appended to the lead.
+  additionalNotes: z.string().min(1).optional(),
+  // The brief intent check after the four questions: their reason for selling
+  // (free text) and whether they read as a genuine, serious seller vs. someone
+  // mainly checking the price.
+  sellMotivation: z.string().min(1).optional(),
+  seriousSeller: z.boolean().optional(),
+  // True when the person explicitly asks to book a meeting/call or to proceed
+  // with selling now — a strong, weighted quality signal.
+  bookingIntent: z.boolean().optional(),
+  // --- Workflow-owned bookkeeping. Set by application code, NEVER by the model:
+  // the classifier is not told about these, and conversationTurn strips them from
+  // every extraction, so a hallucinated value cannot reach the conversation state.
+  //
+  // How many property photos the lead has sent, so Lidor knows photos are attached.
+  photoCount: z.number().int().nonnegative().optional(),
+  // Set while an already-complete lead is being asked whether they really want to
+  // redo a flow, with the menu choice awaiting their explicit yes.
+  awaitingRestartConfirm: z.boolean().optional(),
+  pendingRestartChoice: z.enum(['check_fit', 'book_meeting']).optional(),
+  // Testimonial clips already sent, so a repeat request gets a different one
+  // rather than the same clip twice (or nothing at all).
+  sentTestimonials: z.array(z.string()).optional(),
 });
+
+/** Extraction fields owned by the workflow, never accepted from the model. */
+export const WORKFLOW_OWNED_FIELDS = [
+  'photoCount',
+  'awaitingRestartConfirm',
+  'pendingRestartChoice',
+  'sentTestimonials',
+] as const satisfies readonly (keyof z.infer<typeof extractedSchema>)[];
 
 export const analysisSchema = z.object({
   intent: z.enum(INTENTS),
   confidence: z.number().min(0).max(1),
   extracted: extractedSchema.default({}),
   needsEscalation: z.boolean().default(false),
+  /**
+   * True when a seller asks how their property will be marketed, whether there
+   * are ready buyers, or what value the agent brings — the questions the
+   * investor-tour video answers by showing an active buyer/investor pool.
+   */
+  wantsBuyerProof: z.boolean().default(false),
+  /**
+   * True when the person asks for testimonials / recommendations / reviews of
+   * past clients ("יש ממליצים?", "תציג לי המלצות", "לקוחות מרוצים?") — routed to
+   * social proof (a matching testimonial video + a short line), not a text FAQ.
+   */
+  wantsSocialProof: z.boolean().default(false),
+  /**
+   * True when the message ALSO asks something — a real question or a concern —
+   * beyond simply answering the pending screening question. It lets a turn both
+   * answer the person and keep the flow moving, instead of silently ignoring
+   * whatever they asked (see `Decision.addressFirst`).
+   */
+  asksQuestion: z.boolean().default(false),
 });
 
 export type Analysis = z.infer<typeof analysisSchema>;
@@ -74,6 +129,9 @@ export const UNCLEAR_ANALYSIS: Analysis = {
   confidence: 0,
   extracted: {},
   needsEscalation: true,
+  wantsBuyerProof: false,
+  wantsSocialProof: false,
+  asksQuestion: false,
 };
 
 const SYSTEM_PROMPT = `You are the classification stage of an inbound WhatsApp bot for a real estate agent in Beer Sheva, Israel. Leads write in Hebrew, often informally, with typos, slang, or voice-to-text artifacts.
@@ -81,14 +139,23 @@ const SYSTEM_PROMPT = `You are the classification stage of an inbound WhatsApp b
 Your ONLY job is to read the latest message (with the conversation as context) and return a single JSON object describing it. You do not reply to the person and you do not decide what happens next — you only observe.
 
 Return JSON with exactly these fields:
-- "intent": one of "ANSWER" (answering a screening question or giving property info), "OBJECTION" (pushback, doubt, or a concern — e.g. "אני צריך לחשוב", "היה לי ניסיון רע עם מתווך"), "FAQ" (a general question about the service, value, fees, or process — e.g. "כמה שווה הדירה שלי?", "למה כדאי לעבוד איתך?"), "OPT_OUT" (any request to stop, unsubscribe, or not be contacted — including indirect phrasings like "תפסיקו", "אל תפנו אליי", "מוריד אתכם"), "OFF_TOPIC" (unrelated), or "UNCLEAR" (you cannot tell).
+- "intent": one of "ANSWER" (answering a screening question or giving property info), "OBJECTION" (pushback, doubt, or a concern — e.g. "אני צריך לחשוב", "היה לי ניסיון רע עם מתווך"), "FAQ" (a general question about the service, the value, the fees, the process, OR about who the agent is and where they operate — e.g. "כמה שווה הדירה שלי?", "למה כדאי לעבוד איתך?", "מי אתה?", "מאיפה אתה?", "ספר לי על לידור", "מה זה?", "מי זה לידור?"), "OPT_OUT" (any request to stop, unsubscribe, or not be contacted — including indirect phrasings like "תפסיקו", "אל תפנו אליי", "מוריד אתכם"), "OFF_TOPIC" (anything genuinely unrelated to this property, to selling it, or to Lidor/the service — recipes, shopping lists, unrelated tasks, jokes, "read the codebase", etc.), or "UNCLEAR" (you cannot tell). A get-to-know question about the agent — who Lidor is, where he's from, what he does — is FAQ, NOT off-topic; the bot should introduce him, not brush the person off.
 - "confidence": a number from 0 to 1.
 - "extracted": an object with any of these you can determine from the message, omitting the rest. The person is answering the questionnaire's fixed options; map their words onto the tokens:
     - "sellIntent" (Q1 — "האם חשבת למכור או רק לקבל הערכת מחיר?"): "ready" (רוצה למכור) | "not_sure" (מתלבט, רוצה לדעת מחיר) | "not_selling" (לא מעוניין למכור)
-    - "neighborhood" (Q2 — "באיזו שכונה נמצא הנכס?"): the Beer Sheva neighborhood named, as free text (e.g. נווה זאב, נחל עשן, רמות, שכונות א׳/ב׳/ג׳/ד׳/ה׳/ו׳/ט׳)
+    - "neighborhood" (Q2 — "באיזו שכונה נמצא הנכס?"): the Beer Sheva neighborhood, as the person's exact words. Any real Be'er Sheva neighborhood is acceptable (e.g. העיר העתיקה, שכונת דרום, נווה עופר, נאות לון, נווה זאב, נווה נוי, נחל בקע, נחל עשן, רמות, נאות אברהם, נווה אילן, קריית גנים, כלניות, פארק הנחל, נאות הדרים, בית אשל, and the lettered שכונות א׳/ב׳/ג׳/ד׳/ה׳/ו׳/ט׳/י״א). If the person sends a FULL ADDRESS, extract ONLY the neighborhood from it (e.g. from "רחוב רגר 15, נחל עשן, באר שבע" extract "נחל עשן"); put the street + house number into "additionalNotes"; and if the neighborhood is not obvious from the address, omit "neighborhood" rather than guessing. Extract it only when the message genuinely names a place, never a product/model name or nonsense.
     - "timeline" (Q3 — "תוך כמה זמן תרצה למכור אם תקבל הצעה מתאימה?"): "immediate" (מיד) | "within_month" (בחודש הקרוב) | "still_checking" (בחודשים הקרובים) | "no_urgency" (אין דחיפות)
     - "currentlyMarketed" (Q4 — "האם הנכס משווק כרגע?"): "no" (לא) | "privately" (כן, באופן פרטי) | "with_agent" (כן, עם מתווך)
+    - "exclusivityEndsAt": when the current agent's exclusivity ends, as free text (e.g. "עוד חודשיים", "בסוף מרץ", "לא יודע") — only when they say it
+    - "wantsExclusivityFollowup": true/false if they say whether they want us to follow up once the exclusivity ends
+    - "additionalNotes": ONLY when THIS message adds or clarifies a NEW property detail (rooms, size/מ"ר, floor, condition/renovation, parking, price expectation, exact street/address, etc.), return the FULL consolidated Hebrew summary of ALL property details so far — merge any "פרטי הנכס עד כה" context shown to you with the new details, into ONE concise line with NO duplication and no repeated facts. CRITICAL: if this message adds NO new property detail (a question, a bare "כן"/"אוקיי", a request for testimonials, small talk), you MUST omit "additionalNotes" entirely — do NOT echo the consolidated notes just because context exists. Its presence must mean "this message added a detail".
+    - "sellMotivation": a short Hebrew note of WHY they are (or are not) looking to sell, when they say it (e.g. "עוברים דירה", "צריך נזילות", "רק בודק מחיר").
+    - "seriousSeller": true if they read as a genuine, motivated seller (a real reason, actively planning to sell); false if they are mainly checking the price or not really intending to sell. Set it only once they've indicated their intent/motivation, otherwise omit.
+    - "bookingIntent": true when they explicitly ask to schedule a meeting/call or to move forward with selling now (e.g. "תקבע לי פגישה", "אני רוצה למכור את הנכס", "בוא נתקדם", "מתי אפשר להיפגש?"). Omit otherwise.
+- "asksQuestion": true when the message contains a real QUESTION or a concern that deserves an answer, IN ADDITION to whatever else it does. Set it even when the message also answers the pending screening question — e.g. "בשכונת נווה זאב, לידור יודע למכור שם?" both answers the neighborhood question AND asks something, so extract the neighborhood AND set "asksQuestion": true. Judge the LATEST message's OWN WORDS only: it must itself contain the question or concern. Set it FALSE for a bare answer ("לא", "כן, רוצה למכור", "רמות"), a greeting, or small talk — do NOT set it true because an EARLIER message asked something that was already answered.
 - "needsEscalation": true if the message shows anger, frustration, or something a bot should not handle alone.
+- "wantsBuyerProof": true if the seller is asking how the property will be marketed, whether there are ready/potential buyers, or what value/results the agent brings (e.g. "יש לך קונים?", "איך תשווק את הנכס?", "למה כדאי לעבוד איתך?", "מאיפה יגיעו הקונים?"). Otherwise false.
+- "wantsSocialProof": true ONLY if the LATEST message's OWN WORDS ask to see/hear testimonials, recommendations, reviews, or references from past clients (contains words like "ממליצים", "המלצות", "חוות דעת", "לקוחות מרוצים", "ביקורות", or asks to speak with someone who sold with him). Leads type fast on a phone, so ACCEPT obvious misspellings of these words — e.g. "המצלות", "המלצות?", "ממליצם" all mean "המלצות". A request scoped to a place ("יש המלצות מנווה זאב?") still counts. This is a per-message property of the latest message's text ALONE. Apply this hard rule: if the latest message contains an address, a room count, a floor, a size (מ"ר), or a price — and does NOT contain any testimonial/recommendation word — then wantsSocialProof MUST be false, no matter what earlier messages said. Likewise a bare "כן"/"אוקיי"/"טוב" with no testimonial word is false. Do NOT carry it over from earlier turns. Example: latest="רחוב רבין 12, 5 חדרים, קומה 2, 2.4 מיליון" → wantsSocialProof=false (it is property details). Example: latest="יש ממליצים?" → wantsSocialProof=true. Distinct from "wantsBuyerProof" (marketing/buyers). Otherwise false.
 
 Rules:
 - Output ONLY the JSON object. No prose, no code fences, no explanation.
@@ -100,6 +167,12 @@ export interface ClassifyInput {
   text: string;
   /** Prior turns for context, oldest first. Omit for the first message. */
   history?: { role: 'user' | 'assistant'; content: string }[];
+  /**
+   * Property details gathered so far. Given to the model so `additionalNotes`
+   * comes back as one consolidated, deduplicated summary rather than an
+   * ever-growing pile of restatements.
+   */
+  priorNotes?: string;
   /**
    * Use the stronger model. Set after a low-confidence turn, a detected
    * objection, or a validator rejection — never as the default (§7).
@@ -121,10 +194,20 @@ export async function classifyAndExtract(
 ): Promise<ClassifyResult> {
   const model: LlmModel = input.escalate ? ESCALATION_MODEL : CLASSIFIER_MODEL;
 
+  // A context line so the model consolidates property notes instead of appending.
+  const priorNotesContext =
+    input.priorNotes !== undefined && input.priorNotes.length > 0
+      ? [{ role: 'user' as const, content: `(פרטי הנכס עד כה: ${input.priorNotes})` }]
+      : [];
+
   const { text, usage } = await llm.complete({
     model,
     system: SYSTEM_PROMPT,
-    messages: [...(input.history ?? []), { role: 'user', content: input.text }],
+    messages: [
+      ...(input.history ?? []),
+      ...priorNotesContext,
+      { role: 'user', content: input.text },
+    ],
     // Classification JSON is tiny; this is a generous ceiling, not a target.
     maxTokens: 512,
   });

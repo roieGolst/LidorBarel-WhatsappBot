@@ -19,6 +19,9 @@ describe('parseAnalysis', () => {
       confidence: 0.9,
       extracted: { neighborhood: 'רמות', timeline: 'immediate' },
       needsEscalation: false,
+      wantsBuyerProof: false,
+      wantsSocialProof: false,
+      asksQuestion: false,
     });
   });
 
@@ -29,6 +32,9 @@ describe('parseAnalysis', () => {
       confidence: 0.6,
       extracted: {},
       needsEscalation: false,
+      wantsBuyerProof: false,
+      wantsSocialProof: false,
+      asksQuestion: false,
     });
   });
 

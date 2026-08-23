@@ -37,3 +37,10 @@ Thumbs.db
 
 # Local database volumes
 .docker-data/
+
+# Testimonial/promo video binaries — uploaded to Meta, not committed. The
+# directory README and sidecar JSON metadata are kept.
+assets/recommendations/*.mp4
+assets/recommendations/*.webm
+assets/recommendations/*.mov
+assets/recommendations/*.3gp

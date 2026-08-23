@@ -1,16 +1,18 @@
 import { describe, expect, it } from 'vitest';
 import { CLASSIFIER_MODEL, ESCALATION_MODEL } from '../llm/client.js';
 import { FakeLlmClient } from '../llm/fake.js';
-import type { TurnAction } from './decide.js';
 import { generateReply, generateValidatedReply, SAFE_VARIANTS } from './generate.js';
 import { validateReply } from './validate.js';
 
-const ALL_ACTIONS = Object.keys(SAFE_VARIANTS) as TurnAction[];
+const SAFE_ENTRIES = Object.entries(SAFE_VARIANTS);
 
 describe('SAFE_VARIANTS', () => {
-  it.each(ALL_ACTIONS)('the safe variant for %s passes validation', (action) => {
-    expect(validateReply(SAFE_VARIANTS[action]).ok).toBe(true);
-  });
+  it.each(SAFE_ENTRIES)(
+    'the safe variant for %s passes validation',
+    (_action, variant) => {
+      expect(validateReply(variant).ok).toBe(true);
+    },
+  );
 });
 
 describe('generateReply', () => {
@@ -18,7 +20,7 @@ describe('generateReply', () => {
     const llm = new FakeLlmClient(['באיזו שכונה נמצא הנכס?']);
 
     await generateReply(llm, {
-      action: 'ask_neighborhood',
+      action: 'answer_faq',
       escalate: false,
       history: [{ role: 'user', content: 'שלום' }],
     });
@@ -41,7 +43,7 @@ describe('generateValidatedReply', () => {
     const llm = new FakeLlmClient(['תודה, קיבלתי את הפרטים.']);
 
     const result = await generateValidatedReply(llm, {
-      action: 'proceed_qualified',
+      action: 'send_disqualification',
       escalate: false,
     });
 
@@ -59,7 +61,7 @@ describe('generateValidatedReply', () => {
     ]);
 
     const result = await generateValidatedReply(llm, {
-      action: 'ask_neighborhood',
+      action: 'answer_faq',
       escalate: false,
     });
 
@@ -78,12 +80,12 @@ describe('generateValidatedReply', () => {
     const llm = new FakeLlmClient(['מבצע דחוף!', 'בטוח שזה זול!']);
 
     const result = await generateValidatedReply(llm, {
-      action: 'ask_currently_marketed',
+      action: 'send_disqualification',
       escalate: false,
     });
 
     expect(result.fellBack).toBe(true);
-    expect(result.text).toBe(SAFE_VARIANTS.ask_currently_marketed);
+    expect(result.text).toBe(SAFE_VARIANTS.send_disqualification);
     expect(validateReply(result.text).ok).toBe(true);
     expect(result.usage).toHaveLength(2);
   });

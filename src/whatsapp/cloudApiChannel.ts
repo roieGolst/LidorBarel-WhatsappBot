@@ -1,7 +1,15 @@
+import { readFile, stat } from 'node:fs/promises';
+import { basename } from 'node:path';
 import { z } from 'zod';
 import { getConfig } from '../config.js';
 import { getLogger } from '../logger.js';
-import type { OutboundResult, WhatsAppChannel } from './channel.js';
+import type {
+  ListRow,
+  MediaCache,
+  OutboundResult,
+  ReplyButton,
+  WhatsAppChannel,
+} from './channel.js';
 
 /**
  * The credentials a {@link CloudApiChannel} needs to reach Meta.
@@ -31,15 +39,17 @@ const sendResponseSchema = z.object({
   messages: z.array(z.object({ id: z.string().min(1) })).min(1),
 });
 
+/** Meta's `POST /media` upload response: the reusable media id. */
+const uploadResponseSchema = z.object({ id: z.string().min(1) });
+
 /**
- * A real {@link WhatsAppChannel} that sends a free-form text message through the
- * Meta WhatsApp Cloud API.
+ * A real {@link WhatsAppChannel} over the Meta WhatsApp Cloud API: free-form
+ * text, video, and the two interactive shapes (reply buttons and a list).
  *
- * Free-form text only, deliberately: this is the M4 reply transport, which is
- * valid only inside the 24-hour customer-service window (see {@link
- * ../db/repositories/conversations.js}). Business-initiated messages outside the
- * window require an approved template, which is blocked on Meta Business
- * verification and is not built here.
+ * All of these are session messages, valid only inside the 24-hour
+ * customer-service window (see {@link ../db/repositories/conversations.js}).
+ * Business-initiated messages outside the window require an approved template,
+ * which is blocked on Meta Business verification and is not built here.
  *
  * The channel never enforces opt-out itself — every send still goes through
  * {@link ./guardedSend.js}, the single choke point, so the rule cannot be
@@ -48,9 +58,158 @@ const sendResponseSchema = z.object({
 export class CloudApiChannel implements WhatsAppChannel {
   private readonly logger = getLogger();
 
-  constructor(private readonly credentials: CloudApiCredentials) {}
+  /**
+   * In-memory uploaded-media ids, keyed by an asset key (`<path>:<mtimeMs>`).
+   * WhatsApp needs a media id rather than a raw file, and an id from `POST /media`
+   * is reusable, so the intro clip is uploaded once and reused. The optional
+   * {@link MediaCache} extends this across process restarts.
+   */
+  private readonly mediaIds = new Map<string, string>();
 
-  async sendText(to: string, text: string): Promise<OutboundResult> {
+  constructor(
+    private readonly credentials: CloudApiCredentials,
+    private readonly cache?: MediaCache,
+  ) {}
+
+  sendText(to: string, text: string): Promise<OutboundResult> {
+    return this.postMessage({ to, type: 'text', text: { body: text } });
+  }
+
+  async sendVideo(
+    to: string,
+    filePath: string,
+    caption?: string,
+  ): Promise<OutboundResult> {
+    const id = await this.uploadMediaCached(filePath, 'video/mp4');
+    return this.postMessage({
+      to,
+      type: 'video',
+      video: { id, ...(caption ? { caption } : {}) },
+    });
+  }
+
+  sendButtons(
+    to: string,
+    body: string,
+    buttons: readonly ReplyButton[],
+  ): Promise<OutboundResult> {
+    return this.postMessage({
+      to,
+      type: 'interactive',
+      interactive: {
+        type: 'button',
+        body: { text: body },
+        action: {
+          buttons: buttons.map((b) => ({
+            type: 'reply',
+            reply: { id: b.id, title: b.title },
+          })),
+        },
+      },
+    });
+  }
+
+  sendList(
+    to: string,
+    body: string,
+    buttonLabel: string,
+    rows: readonly ListRow[],
+  ): Promise<OutboundResult> {
+    return this.postMessage({
+      to,
+      type: 'interactive',
+      interactive: {
+        type: 'list',
+        body: { text: body },
+        action: {
+          button: buttonLabel,
+          sections: [
+            {
+              rows: rows.map((r) => ({
+                id: r.id,
+                title: r.title,
+                ...(r.description ? { description: r.description } : {}),
+              })),
+            },
+          ],
+        },
+      },
+    });
+  }
+
+  /**
+   * Marks the inbound message read and shows a typing indicator. Uses the same
+   * `/messages` endpoint but a different payload shape (a status update, not a
+   * message), so it does not go through {@link postMessage} — there is no outbound
+   * message id to return.
+   */
+  async markTyping(inboundMessageId: string): Promise<void> {
+    const { accessToken, phoneNumberId, graphApiVersion } = this.credentials;
+    const url = `https://graph.facebook.com/${graphApiVersion}/${phoneNumberId}/messages`;
+
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        messaging_product: 'whatsapp',
+        status: 'read',
+        message_id: inboundMessageId,
+        typing_indicator: { type: 'text' },
+      }),
+    });
+    await this.assertOk(response, 'typing indicator');
+  }
+
+  /**
+   * Uploads a file for a media id, memoized in-process and (if configured) in the
+   * durable {@link MediaCache}. Keyed by path + modified-time, so replacing the
+   * file forces exactly one fresh upload.
+   */
+  private async uploadMediaCached(filePath: string, mimeType: string): Promise<string> {
+    const { mtimeMs } = await stat(filePath);
+    const key = `${filePath}:${mtimeMs}`;
+
+    const inMemory = this.mediaIds.get(key);
+    if (inMemory) return inMemory;
+
+    const persisted = await this.cache?.get(key);
+    if (persisted) {
+      this.mediaIds.set(key, persisted);
+      return persisted;
+    }
+
+    const { accessToken, phoneNumberId, graphApiVersion } = this.credentials;
+    const url = `https://graph.facebook.com/${graphApiVersion}/${phoneNumberId}/media`;
+
+    const bytes = await readFile(filePath);
+    const form = new FormData();
+    form.append('messaging_product', 'whatsapp');
+    form.append('type', mimeType);
+    form.append('file', new Blob([bytes], { type: mimeType }), basename(filePath));
+
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${accessToken}` },
+      body: form,
+    });
+    await this.assertOk(response, 'media upload');
+
+    const parsed = uploadResponseSchema.safeParse(await response.json());
+    if (!parsed.success) {
+      throw new Error(
+        `WhatsApp Cloud API media upload returned no id: ${parsed.error.message}`,
+      );
+    }
+    this.mediaIds.set(key, parsed.data.id);
+    await this.cache?.set(key, parsed.data.id);
+    return parsed.data.id;
+  }
+
+  /** POSTs a message payload to the Graph API and returns its provider id. */
+  private async postMessage(payload: Record<string, unknown>): Promise<OutboundResult> {
     const { accessToken, phoneNumberId, graphApiVersion } = this.credentials;
     const url = `https://graph.facebook.com/${graphApiVersion}/${phoneNumberId}/messages`;
 
@@ -58,47 +217,39 @@ export class CloudApiChannel implements WhatsAppChannel {
       method: 'POST',
       headers: {
         // The access token is a bearer secret. It lives only in this header and
-        // must never reach a log line or an error message — hence the care taken
-        // below to report Meta's response body but never the request.
+        // must never reach a log line or an error message.
         Authorization: `Bearer ${accessToken}`,
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({
-        messaging_product: 'whatsapp',
-        to,
-        type: 'text',
-        text: { body: text },
-      }),
+      body: JSON.stringify({ messaging_product: 'whatsapp', ...payload }),
     });
+    await this.assertOk(response, 'send');
 
-    if (!response.ok) {
-      // Meta returns a JSON `{ error: { message, code, ... } }` on failure, but a
-      // gateway in front of it may return HTML or nothing. Read the body as text
-      // so a non-JSON error still gives an actionable message rather than a
-      // parse error masking the real one. The request — and therefore the token —
-      // is never included.
-      const detail = await response.text().catch(() => '<unreadable response body>');
-      this.logger.warn(
-        { status: response.status, phoneNumberId },
-        'WhatsApp Cloud API send failed',
-      );
-      throw new Error(
-        `WhatsApp Cloud API send failed: ${response.status} ${response.statusText} — ${detail}`,
-      );
-    }
-
-    const body: unknown = await response.json();
-    const parsed = sendResponseSchema.safeParse(body);
+    const parsed = sendResponseSchema.safeParse(await response.json());
     if (!parsed.success) {
       throw new Error(
         'WhatsApp Cloud API returned a 2xx response without a message id; ' +
           `the response shape was unexpected: ${parsed.error.message}`,
       );
     }
-
     // messages[0] is guaranteed present: the schema requires a non-empty array.
-    const providerMessageId = parsed.data.messages[0]!.id;
-    return { providerMessageId };
+    return { providerMessageId: parsed.data.messages[0]!.id };
+  }
+
+  /** Throws a token-free, actionable error on a non-2xx Meta response. */
+  private async assertOk(response: Response, op: string): Promise<void> {
+    if (response.ok) return;
+    // Meta returns JSON `{ error: {...} }` on failure, but a gateway may return
+    // HTML or nothing. Read as text so a non-JSON error still gives an actionable
+    // message. The request — and therefore the token — is never included.
+    const detail = await response.text().catch(() => '<unreadable response body>');
+    this.logger.warn(
+      { status: response.status, phoneNumberId: this.credentials.phoneNumberId, op },
+      'WhatsApp Cloud API request failed',
+    );
+    throw new Error(
+      `WhatsApp Cloud API ${op} failed: ${response.status} ${response.statusText} — ${detail}`,
+    );
   }
 }
 
@@ -113,7 +264,7 @@ export class CloudApiChannel implements WhatsAppChannel {
  * @throws {Error} if any required Meta credential is missing, naming the
  *   variables (never their values).
  */
-export function createCloudApiChannel(): CloudApiChannel {
+export function createCloudApiChannel(cache?: MediaCache): CloudApiChannel {
   const config = getConfig();
 
   const missing: string[] = [];
@@ -126,11 +277,14 @@ export function createCloudApiChannel(): CloudApiChannel {
     );
   }
 
-  return new CloudApiChannel({
-    // Non-null asserted: the guard above proves both are present, but the
-    // optional-by-group typing cannot narrow across the array check.
-    accessToken: config.metaAccessToken!,
-    phoneNumberId: config.metaPhoneNumberId!,
-    graphApiVersion: config.metaGraphApiVersion,
-  });
+  return new CloudApiChannel(
+    {
+      // Non-null asserted: the guard above proves both are present, but the
+      // optional-by-group typing cannot narrow across the array check.
+      accessToken: config.metaAccessToken!,
+      phoneNumberId: config.metaPhoneNumberId!,
+      graphApiVersion: config.metaGraphApiVersion,
+    },
+    cache,
+  );
 }

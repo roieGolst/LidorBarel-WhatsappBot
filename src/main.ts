@@ -4,6 +4,8 @@ import { ConfigError, getConfig, type Config } from './config.js';
 import { refreshMediaCatalog } from './whatsapp/mediaCatalog.js';
 import { closeDatabase, getDatabase } from './db/client.js';
 import { getFreshMediaId, saveMediaId } from './db/repositories/mediaUploads.js';
+import { createGraphLeadsClient } from './leads/graphLeads.js';
+import type { LeadIngestDeps } from './leads/ingestLead.js';
 import { AnthropicLlmClient } from './llm/client.js';
 import { getLogger } from './logger.js';
 import {
@@ -116,10 +118,48 @@ async function main(): Promise<void> {
   const db = getDatabase();
 
   const pipeline = await buildConversationPipeline(config, db, log);
+
+  // Meta Lead Ads intake. Needs a Page access token with `leads_retrieval`,
+  // which is a different credential from the WhatsApp one — so it is built
+  // independently of the conversation pipeline and either can be absent.
+  const leadsClient = createGraphLeadsClient();
+  if (!leadsClient) {
+    log.warn('leadgen intake disabled: needs META_PAGE_ACCESS_TOKEN');
+  } else {
+    // Neither is an error: leads are still captured either way. But both are
+    // silent failure modes — "the bot never messages anyone" and "the bot ignores
+    // my leads" are hard to diagnose after the fact and trivial to say now.
+    if (config.metaLeadConsentForms.length === 0 && !config.metaLeadConsentField) {
+      log.warn(
+        'leadgen intake enabled, but no consent source is configured — every lead ' +
+          'will be recorded as privacy_policy_only and cannot be proactively messaged',
+      );
+    }
+    if (config.metaLeadSellerForms.length === 0) {
+      log.warn(
+        'leadgen intake enabled, but META_LEAD_SELLER_FORMS is empty — leads will ' +
+          'be recorded for attribution and no conversation will be opened',
+      );
+    }
+  }
+  const leadIngest: LeadIngestDeps | undefined = leadsClient
+    ? {
+        leads: leadsClient,
+        consent: {
+          fieldName: config.metaLeadConsentField,
+          expectedValue: config.metaLeadConsentValue,
+          consentForms: config.metaLeadConsentForms,
+          formConsentText: config.metaLeadConsentText,
+        },
+        sellerForms: config.metaLeadSellerForms,
+      }
+    : undefined;
+
   const app = buildServer({
     db,
     config,
     ...(pipeline ? { producer: pipeline.queue } : {}),
+    ...(leadIngest ? { leadIngest } : {}),
   });
 
   /**
@@ -186,6 +226,7 @@ async function main(): Promise<void> {
       timezone: config.timezone,
       whatsappConfigured: Boolean(config.metaAppSecret && config.metaAccessToken),
       conversationWorker: pipeline ? 'enabled' : 'disabled',
+      leadgenIntake: leadIngest ? 'enabled' : 'disabled',
     },
     'server started',
   );

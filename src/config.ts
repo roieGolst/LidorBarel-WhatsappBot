@@ -11,9 +11,25 @@ import { z } from 'zod';
  *     secrets, and a validation error is a very easy way to leak one into a log
  *     aggregator. Errors report the variable name and the reason only.
  *
- * Later milestones add their own sections (Meta Cloud API, Monday.com, Google
- * Calendar, Anthropic) to this same schema.
+ * Later phases add their own sections (Monday.com, Google Calendar) to this
+ * same schema.
  */
+/**
+ * A comma-separated environment list, parsed into trimmed non-empty entries.
+ *
+ * Absent and empty both yield `[]`, so a variable that is present-but-blank
+ * behaves identically to one that is unset — the safe reading for an allowlist.
+ */
+const commaSeparated = z
+  .string()
+  .optional()
+  .transform((value) =>
+    (value ?? '')
+      .split(',')
+      .map((entry) => entry.trim())
+      .filter((entry) => entry.length > 0),
+  );
+
 const configSchema = z.object({
   nodeEnv: z.enum(['development', 'test', 'production']).default('development'),
 
@@ -65,6 +81,58 @@ const configSchema = z.object({
     .regex(/^v\d+\.\d+$/)
     .default('v21.0'),
 
+  // --- Meta Lead Ads (leadgen intake) ---------------------------------------
+  //
+  // Separate from the WhatsApp credentials above: retrieving a lead's answers
+  // needs a **Page** access token carrying `leads_retrieval`, which the WhatsApp
+  // Business Account token does not have. Optional, so the app boots without it;
+  // the leadgen webhook then fails closed rather than ACKing leads it cannot store.
+
+  /** Page access token with `leads_retrieval`, for fetching a lead by `leadgen_id`. */
+  metaPageAccessToken: z.string().min(1).optional(),
+
+  /**
+   * Lead form ids whose leads enter the **seller** qualification flow.
+   *
+   * The Page runs investor and recruitment campaigns alongside the seller ones.
+   * Leads from those are recorded for attribution but never engaged — a flow that
+   * asks which neighbourhood your property is in makes no sense for someone who
+   * answered a question about their investment budget. Empty engages nothing.
+   */
+  metaLeadSellerForms: commaSeparated,
+
+  /**
+   * Lead form ids whose submission constitutes WhatsApp opt-in, because the form
+   * carries a **required** consent checkbox naming WhatsApp and the business.
+   *
+   * Needed because Meta does not return privacy-step disclaimer checkboxes in a
+   * lead's `field_data`, even when required — so per-lead detection alone would
+   * mean no lead is ever contactable. Sound because the checkbox cannot be
+   * skipped and is not pre-checked, and because Meta forms are immutable: a form
+   * id permanently identifies the exact wording agreed to.
+   *
+   * **Only list a form you have verified carries such a checkbox.** Unlisted
+   * forms stay `privacy_policy_only` and cannot be proactively messaged (NN-2).
+   */
+  metaLeadConsentForms: commaSeparated,
+
+  /** The consent wording to record as evidence for form-level consent. */
+  metaLeadConsentText: z.string().min(1).optional(),
+
+  /**
+   * The `field_data` key holding a per-lead WhatsApp opt-in answer, for a form
+   * that asks consent as an ordinary question rather than a disclaimer checkbox.
+   * Stronger evidence than the form-level rule, and takes precedence over it.
+   */
+  metaLeadConsentField: z.string().min(1).optional(),
+
+  /**
+   * The exact answer that counts as consent, when the form's checkbox echoes its
+   * label back rather than a boolean. Unset means the usual affirmative values
+   * are accepted.
+   */
+  metaLeadConsentValue: z.string().min(1).optional(),
+
   // --- Anthropic (LLM) ------------------------------------------------------
   //
   // Optional as a group so the app still boots for tests and simulation, which
@@ -97,6 +165,12 @@ function readEnv(env: NodeJS.ProcessEnv): Record<string, unknown> {
     metaAccessToken: env.META_ACCESS_TOKEN,
     metaPhoneNumberId: env.META_PHONE_NUMBER_ID,
     metaGraphApiVersion: env.META_GRAPH_API_VERSION,
+    metaPageAccessToken: env.META_PAGE_ACCESS_TOKEN,
+    metaLeadSellerForms: env.META_LEAD_SELLER_FORMS,
+    metaLeadConsentForms: env.META_LEAD_CONSENT_FORMS,
+    metaLeadConsentText: env.META_LEAD_CONSENT_TEXT,
+    metaLeadConsentField: env.META_LEAD_CONSENT_FIELD,
+    metaLeadConsentValue: env.META_LEAD_CONSENT_VALUE,
     anthropicApiKey: env.ANTHROPIC_API_KEY,
   };
 }
@@ -114,6 +188,12 @@ const ENV_VAR_NAMES: Record<keyof Config, string> = {
   metaAccessToken: 'META_ACCESS_TOKEN',
   metaPhoneNumberId: 'META_PHONE_NUMBER_ID',
   metaGraphApiVersion: 'META_GRAPH_API_VERSION',
+  metaPageAccessToken: 'META_PAGE_ACCESS_TOKEN',
+  metaLeadSellerForms: 'META_LEAD_SELLER_FORMS',
+  metaLeadConsentForms: 'META_LEAD_CONSENT_FORMS',
+  metaLeadConsentText: 'META_LEAD_CONSENT_TEXT',
+  metaLeadConsentField: 'META_LEAD_CONSENT_FIELD',
+  metaLeadConsentValue: 'META_LEAD_CONSENT_VALUE',
   anthropicApiKey: 'ANTHROPIC_API_KEY',
 };
 

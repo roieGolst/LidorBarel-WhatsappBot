@@ -39,5 +39,21 @@ export default tseslint.config(
     files: ['*.config.js', '*.config.ts'],
     ...tseslint.configs.disableTypeChecked,
   },
+  {
+    // Developer CLI tools: plain ESM, outside the TS project graph, and printing
+    // to the terminal is their entire purpose — the pino logger would defeat it.
+    files: ['scripts/**/*.mjs'],
+    ...tseslint.configs.disableTypeChecked,
+    languageOptions: {
+      // Opt out of the typed project service: these files are not in tsconfig,
+      // and type-aware linting has nothing to offer a standalone CLI script.
+      parserOptions: { projectService: false, project: false },
+      globals: { console: 'readonly', process: 'readonly', fetch: 'readonly' },
+    },
+    rules: {
+      ...tseslint.configs.disableTypeChecked.rules,
+      'no-console': 'off',
+    },
+  },
   prettier,
 );

@@ -83,9 +83,32 @@ for (const row of rows) {
 }
 console.log('─'.repeat(72));
 console.log(`\n${rows.length} referral(s).`);
-console.log(
-  '\nconsent_status is privacy_policy_only until META_LEAD_CONSENT_FIELD names\n' +
-    'the consent key above. That is intended — see docs/PRODUCT-REQUIREMENTS.md NN-2.',
-);
+
+// Report against what is actually stored rather than asserting a fixed state:
+// an unconditional note goes stale the moment consent starts working, and a
+// wrong claim about consent is worse than no claim at all.
+const blocked = rows.filter((r) => r.consent_status !== 'whatsapp_opt_in');
+const contactable = rows.length - blocked.length;
+
+if (blocked.length > 0) {
+  console.log(
+    `\n${blocked.length} of ${rows.length} cannot be proactively messaged ` +
+      `(consent_status is not whatsapp_opt_in).`,
+  );
+  console.log(
+    'If that is unexpected, check META_LEAD_CONSENT_FORMS lists the form id above.\n' +
+      'Leads that opted out stay blocked permanently and correctly.',
+  );
+}
+if (contactable > 0) {
+  console.log(`\n${contactable} carry whatsapp_opt_in and may be contacted (NN-2).`);
+  const byFormId = rows.some((r) => (r.consent_text ?? '').startsWith('form:'));
+  if (byFormId) {
+    console.log(
+      'Consent evidence is a bare form id. Set META_LEAD_CONSENT_TEXT to the\n' +
+        "checkbox's exact wording so the audit trail records what was agreed to.",
+    );
+  }
+}
 
 await sql.end();

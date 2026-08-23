@@ -106,6 +106,13 @@ export const analysisSchema = z.object({
    * social proof (a matching testimonial video + a short line), not a text FAQ.
    */
   wantsSocialProof: z.boolean().default(false),
+  /**
+   * True when the message ALSO asks something — a real question or a concern —
+   * beyond simply answering the pending screening question. It lets a turn both
+   * answer the person and keep the flow moving, instead of silently ignoring
+   * whatever they asked (see `Decision.addressFirst`).
+   */
+  asksQuestion: z.boolean().default(false),
 });
 
 export type Analysis = z.infer<typeof analysisSchema>;
@@ -124,6 +131,7 @@ export const UNCLEAR_ANALYSIS: Analysis = {
   needsEscalation: true,
   wantsBuyerProof: false,
   wantsSocialProof: false,
+  asksQuestion: false,
 };
 
 const SYSTEM_PROMPT = `You are the classification stage of an inbound WhatsApp bot for a real estate agent in Beer Sheva, Israel. Leads write in Hebrew, often informally, with typos, slang, or voice-to-text artifacts.
@@ -144,9 +152,10 @@ Return JSON with exactly these fields:
     - "sellMotivation": a short Hebrew note of WHY they are (or are not) looking to sell, when they say it (e.g. "עוברים דירה", "צריך נזילות", "רק בודק מחיר").
     - "seriousSeller": true if they read as a genuine, motivated seller (a real reason, actively planning to sell); false if they are mainly checking the price or not really intending to sell. Set it only once they've indicated their intent/motivation, otherwise omit.
     - "bookingIntent": true when they explicitly ask to schedule a meeting/call or to move forward with selling now (e.g. "תקבע לי פגישה", "אני רוצה למכור את הנכס", "בוא נתקדם", "מתי אפשר להיפגש?"). Omit otherwise.
+- "asksQuestion": true when the message contains a real QUESTION or a concern that deserves an answer, IN ADDITION to whatever else it does. Set it even when the message also answers the pending screening question — e.g. "בשכונת נווה זאב, לידור יודע למכור שם?" both answers the neighborhood question AND asks something, so extract the neighborhood AND set "asksQuestion": true. Judge the LATEST message's OWN WORDS only: it must itself contain the question or concern. Set it FALSE for a bare answer ("לא", "כן, רוצה למכור", "רמות"), a greeting, or small talk — do NOT set it true because an EARLIER message asked something that was already answered.
 - "needsEscalation": true if the message shows anger, frustration, or something a bot should not handle alone.
 - "wantsBuyerProof": true if the seller is asking how the property will be marketed, whether there are ready/potential buyers, or what value/results the agent brings (e.g. "יש לך קונים?", "איך תשווק את הנכס?", "למה כדאי לעבוד איתך?", "מאיפה יגיעו הקונים?"). Otherwise false.
-- "wantsSocialProof": true ONLY if the LATEST message's OWN WORDS ask to see/hear testimonials, recommendations, reviews, or references from past clients (contains words like "ממליצים", "המלצות", "חוות דעת", "לקוחות מרוצים", "ביקורות", or asks to speak with someone who sold with him). This is a per-message property of the latest message's text ALONE. Apply this hard rule: if the latest message contains an address, a room count, a floor, a size (מ"ר), or a price — and does NOT contain any testimonial/recommendation word — then wantsSocialProof MUST be false, no matter what earlier messages said. Likewise a bare "כן"/"אוקיי"/"טוב" with no testimonial word is false. Do NOT carry it over from earlier turns. Example: latest="רחוב רבין 12, 5 חדרים, קומה 2, 2.4 מיליון" → wantsSocialProof=false (it is property details). Example: latest="יש ממליצים?" → wantsSocialProof=true. Distinct from "wantsBuyerProof" (marketing/buyers). Otherwise false.
+- "wantsSocialProof": true ONLY if the LATEST message's OWN WORDS ask to see/hear testimonials, recommendations, reviews, or references from past clients (contains words like "ממליצים", "המלצות", "חוות דעת", "לקוחות מרוצים", "ביקורות", or asks to speak with someone who sold with him). Leads type fast on a phone, so ACCEPT obvious misspellings of these words — e.g. "המצלות", "המלצות?", "ממליצם" all mean "המלצות". A request scoped to a place ("יש המלצות מנווה זאב?") still counts. This is a per-message property of the latest message's text ALONE. Apply this hard rule: if the latest message contains an address, a room count, a floor, a size (מ"ר), or a price — and does NOT contain any testimonial/recommendation word — then wantsSocialProof MUST be false, no matter what earlier messages said. Likewise a bare "כן"/"אוקיי"/"טוב" with no testimonial word is false. Do NOT carry it over from earlier turns. Example: latest="רחוב רבין 12, 5 חדרים, קומה 2, 2.4 מיליון" → wantsSocialProof=false (it is property details). Example: latest="יש ממליצים?" → wantsSocialProof=true. Distinct from "wantsBuyerProof" (marketing/buyers). Otherwise false.
 
 Rules:
 - Output ONLY the JSON object. No prose, no code fences, no explanation.

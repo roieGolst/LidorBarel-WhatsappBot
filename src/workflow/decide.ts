@@ -45,6 +45,7 @@ export type TurnAction =
   | 'acknowledge_additional_info' // extra details after the lead already qualified
   | 'assist_qualified' // a question/comment after qualifying → a real reply, not an ack
   | 'about_lidor' // main-menu "about me" → introduce Lidor, ask nothing
+  | 'answer_aside' // answer a question asked alongside an answer, before continuing
   | 'confirm_restart'; // already-complete lead re-opened a flow → confirm before redoing it
 
 export interface Decision {
@@ -55,6 +56,13 @@ export interface Decision {
   /** Set only at the qualified/disqualified fork. */
   qualified?: boolean;
   disqualificationReason?: DisqualificationReason;
+  /**
+   * A reply to send BEFORE the action's own message, when the person asked
+   * something while also answering the pending question. Without it the bot reads
+   * as a form that ignores whatever it was not expecting: it takes the answer and
+   * moves on. With it the turn answers them first, then continues the flow.
+   */
+  addressFirst?: 'answer_aside' | 'handle_objection';
 }
 
 /**
@@ -127,10 +135,19 @@ export function decideTransition(
   // 2b. Explicit intent to book a meeting / proceed with selling runs the same
   //     screening flow (a call is booked only after a few quick details), even if
   //     the message reads like an FAQ. Booking intent also boosts the weighted
-  //     priority (see leadPriorityScore). Not for an already-qualified lead —
-  //     they are handled below.
-  if (confident && facts.bookingIntent && current !== 'qualified') {
-    return nextScreeningStep(current, bookingFacts(facts), screenAll, escalate, true);
+  //     priority (see leadPriorityScore).
+  //
+  //     This fires ONLY on a booking intent expressed by THIS message. Reading it
+  //     off the merged facts made the rule permanent: once someone tapped
+  //     "קביעת פגישה", every later message was funnelled into screening, so their
+  //     questions, objections and requests for testimonials were silently ignored
+  //     for the rest of the conversation. Screening answers from a booking lead
+  //     still continue the flow — they fall through to the screening rule below.
+  if (confident && analysis.extracted.bookingIntent === true && current !== 'qualified') {
+    return alsoAnswering(
+      nextScreeningStep(current, bookingFacts(facts), screenAll, escalate, true),
+      analysis,
+    );
   }
 
   // 2c. An explicit request for testimonials / recommendations / reviews of past
@@ -187,7 +204,27 @@ export function decideTransition(
   //    pending question (or qualify). An unparseable answer simply re-asks the
   //    same question, whose buttons are already in front of the person — the flow
   //    never dead-ends on "rephrase".
-  return nextScreeningStep(current, facts, screenAll, escalate, intentSubstance);
+  return alsoAnswering(
+    nextScreeningStep(current, facts, screenAll, escalate, intentSubstance),
+    analysis,
+  );
+}
+
+/**
+ * Attaches a reply to the person's own question to a screening decision.
+ *
+ * The screening flow's job is to ask the next question; on its own it happily
+ * takes an answer and moves on, which is how a genuine question asked in the same
+ * breath ("בשכונת נווה זאב, לידור יודע למכור שם?") ended up silently ignored. When
+ * the classifier reports the message also asked something, the turn answers that
+ * first and then asks its question — a conversation, not a form.
+ */
+function alsoAnswering(decision: Decision, analysis: Analysis): Decision {
+  if (!analysis.asksQuestion) return decision;
+  return {
+    ...decision,
+    addressFirst: analysis.intent === 'OBJECTION' ? 'handle_objection' : 'answer_aside',
+  };
 }
 
 /**

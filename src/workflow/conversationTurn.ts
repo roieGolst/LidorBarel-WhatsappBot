@@ -987,6 +987,24 @@ export function createConversationWorkflow(
         }
       }
 
+      // The person asked something while also answering the pending question.
+      // Answer them FIRST, then let the flow continue below with its own message —
+      // otherwise the bot reads as a form that ignores anything it did not expect.
+      // This reply deliberately ends without a question, since the screening
+      // question follows it immediately.
+      if (decision.addressFirst) {
+        const aside = await generate({
+          action: decision.addressFirst,
+          escalate: decision.escalate,
+          history: ctx.turns,
+        });
+        plan.push({
+          part: { kind: 'text', text: aside.text },
+          storeBody: aside.text,
+          usage: aside.usage,
+        });
+      }
+
       // The action's message. The main menu and the screening questions are fixed
       // spec content sent as buttons/a list; every other action is written and
       // validated by the model.

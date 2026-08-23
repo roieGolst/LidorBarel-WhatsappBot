@@ -18,6 +18,7 @@ function analysis(overrides: Partial<Analysis> = {}): Analysis {
     needsEscalation: false,
     wantsBuyerProof: false,
     wantsSocialProof: false,
+    asksQuestion: false,
     ...overrides,
   };
 }
@@ -163,6 +164,89 @@ describe('decideTransition', () => {
       );
       expect(decision.action).toBe('ask_intent');
       expect(decision.action).not.toBe('low_intent_hold');
+    });
+  });
+
+  describe('a booking lead can still ask things (regression)', () => {
+    // Tapping "קביעת פגישה" stored bookingIntent, and the booking rule then read
+    // it off the merged facts on EVERY later turn — funnelling every message into
+    // screening, so questions, objections and testimonial requests were ignored
+    // for the rest of the conversation.
+    const booked: KnownFacts = { bookingIntent: true, timeline: 'immediate' };
+
+    it('answers a testimonial request instead of marching on with screening', () => {
+      const decision = decideTransition(
+        'assessing_intent',
+        analysis({ intent: 'FAQ', wantsSocialProof: true }),
+        {
+          ...booked,
+          sellIntent: 'ready',
+          neighborhood: 'נווה זאב',
+          currentlyMarketed: 'no',
+        },
+        true,
+      );
+      expect(decision.action).toBe('send_social_proof');
+    });
+
+    it('answers an FAQ instead of marching on with screening', () => {
+      const decision = decideTransition(
+        'screening_currently_marketed',
+        analysis({ intent: 'FAQ' }),
+        { ...booked, sellIntent: 'ready', neighborhood: 'נווה זאב' },
+        true,
+      );
+      expect(decision.action).toBe('answer_faq');
+    });
+
+    it('still advances the flow on an actual screening answer', () => {
+      const decision = decideTransition(
+        'screening_currently_marketed',
+        analysis({ extracted: { currentlyMarketed: 'no' } }),
+        { ...booked, sellIntent: 'ready', neighborhood: 'נווה זאב' },
+        true,
+      );
+      expect(decision.action).toBe('ask_intent');
+    });
+  });
+
+  describe('answering a question asked alongside a screening answer', () => {
+    it('attaches a reply to the question, then continues the flow', () => {
+      // "בשכונת נווה זאב, לידור יודע למכור שם?" — both an answer and a question.
+      const decision = decideTransition(
+        'screening_neighborhood',
+        analysis({ extracted: { neighborhood: 'נווה זאב' }, asksQuestion: true }),
+        { sellIntent: 'ready' },
+        true,
+      );
+      expect(decision.action).toBe('ask_timeline'); // the flow still moves
+      expect(decision.addressFirst).toBe('answer_aside'); // and they get an answer
+    });
+
+    it('gives a raised concern the full objection handler, not a brief aside', () => {
+      // A concern deserves real engagement, so it takes the dedicated handler and
+      // the flow waits a turn. The answer it carried is still merged into the facts.
+      const decision = decideTransition(
+        'screening_neighborhood',
+        analysis({
+          intent: 'OBJECTION',
+          extracted: { neighborhood: 'נווה זאב' },
+          asksQuestion: true,
+        }),
+        { sellIntent: 'ready' },
+        true,
+      );
+      expect(decision.action).toBe('handle_objection');
+    });
+
+    it('adds nothing when the message only answers', () => {
+      const decision = decideTransition(
+        'screening_neighborhood',
+        analysis({ extracted: { neighborhood: 'נווה זאב' } }),
+        { sellIntent: 'ready' },
+        true,
+      );
+      expect(decision.addressFirst).toBeUndefined();
     });
   });
 

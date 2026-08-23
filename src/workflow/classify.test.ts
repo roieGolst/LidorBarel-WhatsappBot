@@ -21,6 +21,7 @@ describe('parseAnalysis', () => {
       needsEscalation: false,
       wantsBuyerProof: false,
       wantsSocialProof: false,
+      asksQuestion: false,
     });
   });
 
@@ -33,6 +34,7 @@ describe('parseAnalysis', () => {
       needsEscalation: false,
       wantsBuyerProof: false,
       wantsSocialProof: false,
+      asksQuestion: false,
     });
   });
 

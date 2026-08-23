@@ -27,8 +27,8 @@ Requirements are numbered per [PRODUCT-REQUIREMENTS.md](PRODUCT-REQUIREMENTS.md)
 | 4b | Evaluate lead quality and readiness | ✅ | `qualified`, `disqualification_reason`, `priority_score`. |
 | 4c | Sync to Monday CRM | ❌ | No module, no dependency. `outbox` table written by nothing. |
 | 5 | Schedule consultation call | ❌ | No module, no dependency. |
-| 6 | Follow-up stop conditions | ⚠️ | Opt-out primitives solid; **consent gate is inert** (see §3). |
-| 7 | Never message after opt-out | ✅ | Enforced at `guardedSend` for all paths that currently exist. |
+| 6 | Follow-up stop conditions | 🟡 | Opt-out and consent both enforced. No follow-ups exist yet to cancel — Phase 4. |
+| 7 | Never message after opt-out | ✅ | Enforced at `guardedSend`, the single choke point every send passes through. |
 
 ---
 
@@ -58,8 +58,8 @@ dangerous than plain gaps, because reviewers trust them.
 
 | ID | Defect | Evidence | Risk |
 |---|---|---|---|
-| **D-1** | **Consent gate is inert.** `canReceiveProactiveMessage()` is implemented and unit-tested but has **zero production callers**. `guardedSend` checks opt-out only, never `consent_status`. `src/db/schema.ts` claims "the send path refuses them"; plan v5 claims "enforced in code, not by policy". | `src/db/repositories/contacts.ts` · `src/whatsapp/guardedSend.ts` | Harmless today (no proactive path). **Becomes an Amendment 40 exposure the moment template send ships.** Must be wired *before* Phase 3. Violates **NN-2**. |
-| **D-2** | **Send window never checked.** `sendWindow()` / `canSendFreeForm()` are implemented and tested with **zero production callers**. Nothing falls back to a template when the 24h window is closed. | `src/whatsapp/window.ts` | Masked today (all sends are replies inside an open window). A send outside the window will be rejected by Meta. |
+| ~~**D-1**~~ | ~~Consent gate is inert.~~ **Fixed in Phase 2.** `guardedSend` now takes an explicit send intent and checks `canReceiveProactiveMessage` for every proactive send. The type system makes a proactive send inexpressible without a contact to check. | `src/whatsapp/guardedSend.ts` | Resolved. **NN-2 enforced and tested.** |
+| ~~**D-2**~~ | ~~Send window never checked.~~ **Fixed in Phase 2.** Free-form sends are refused outside the 24-hour window; an approved template is the documented exception. | `src/whatsapp/guardedSend.ts` | Resolved. |
 | ~~**D-3**~~ | ~~`leadgen` payloads are silently discarded.~~ **Fixed in Phase 1.** The route now dispatches on `envelope.object`, and an unconfigured lead path fails closed with 503 rather than ACKing. | `src/whatsapp/routes.ts` · `src/leads/` | Resolved. |
 | **D-4** | **Unused scaffolding.** `outbox` table, `appointment_requests` table, all `appointment_*` stages, `messages.template_ref`, `campaign_referrals.form_id` / `.external_lead_id`, `setMondayItemId()` — all defined, none written or read by production code. | `src/db/schema.ts` | Not a bug; a reminder that schema presence ≠ implementation. |
 
@@ -75,8 +75,8 @@ purpose — precedes the projection and booking layers**. The original ordering
 |---|---|---|---|
 | **0** | Alignment documents (this set) | — | ✅ Done |
 | **1** | `leadgen` intake: parse, retrieve by `leadgen_id`, persist contact + referral. **Sends nothing.** | 0 | ✅ Done |
-| **2** | Wire the consent gate (**D-1**) and window enforcement (**D-2**) | 1 | ⏭ Next |
-| **3** | Approved-template first contact + grace period | 2, Meta approvals | Not started |
+| **2** | Wire the consent gate (**D-1**) and window enforcement (**D-2**) | 1 | ✅ Done |
+| **3** | Approved-template first contact + grace period | 2, E-1 | ⏭ Next (buildable now; go-live waits on E-1) |
 | **4** | Follow-up scheduler with all stop conditions | 3 | Not started |
 | **5** | Monday sync via transactional outbox | 4 | Not started |
 | **6** | Appointments + Google Calendar | 5 | Not started |
@@ -108,6 +108,29 @@ retired seller forms. Exactly one form is live: `1746567036243410`.
 rest are recorded for attribution with no conversation opened. Replacing the form
 (for updated privacy wording, say) means a new id in both lists — Meta forms are
 immutable, so wording changes always produce a new form.
+
+### What Phase 2 delivers
+
+`guardedSend` is now the enforcement point for three rules rather than one, and
+callers state *what kind of send this is* instead of passing a bare phone number:
+
+```ts
+{ kind: 'reply',     to, conversation }            // consent not at issue
+{ kind: 'proactive', to, contact, isTemplate }     // consent required
+```
+
+The discriminated union is the point: a proactive send **cannot be expressed**
+without a contact to check consent against. That is what stops D-1 recurring —
+the previous signature accepted a phone number, so forgetting the check was the
+path of least resistance.
+
+Rules enforced, in order: opt-out (outranks everything, template included),
+consent for proactive sends, then an open messaging window unless the payload is
+an approved template. A recipient/contact mismatch is also refused, so consent can
+never be satisfied by checking a different person's record.
+
+The dev-reset confirmation, previously the one send bypassing the choke point,
+now goes through it too.
 
 ### What Phase 1 delivers
 
@@ -149,9 +172,10 @@ onward, so start them early.
 
 ## 6. Test coverage reality
 
-479 tests across 33 files, colocated, with integration tests running against a
-real PostgreSQL. Phase 1 added 102, including the consent fail-closed cases, the
-form-gating rules, and the webhook's retry-classification behaviour.
+494 tests across 33 files, colocated, with integration tests running against a
+real PostgreSQL. Phase 2 added the NN-2 enforcement suite: every non-consenting
+status is refused, opt-out outranks a template, and a contact/recipient mismatch
+is rejected.
 Coverage of the inbound engine is genuinely strong.
 
 **Remaining gap:** there is still **no single test spanning the whole flow**

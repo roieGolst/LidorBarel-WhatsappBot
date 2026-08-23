@@ -34,13 +34,15 @@ Last updated: 2026-08-23
 | 5 | Appointment offer, hold, approval, Calendar write | *(none — tables unused)* | *(none)* | ❌ |
 | 6 | Stop conditions cancel follow-ups | *(no follow-ups to cancel yet)* | *(none)* | ❌ |
 | 7 | No message after opt-out | `whatsapp/guardedSend.ts` | `guardedSend.test.ts` | ✅ |
+| — | Free-form refused outside the 24h window | `whatsapp/guardedSend.ts` · `whatsapp/window.ts` | `guardedSend.test.ts` (messaging window) | ✅ |
+| — | Approved template allowed outside the window | `whatsapp/guardedSend.ts` | `guardedSend.test.ts` | ✅ |
 
 ## Non-negotiable rules
 
 | ID | Rule | Implementation | Tests | Status |
 |---|---|---|---|---|
 | NN-1 | No message after opt-out | `whatsapp/guardedSend.ts` · `db/repositories/optOuts.ts` | `guardedSend.test.ts` · `optOuts.test.ts` | ✅ |
-| NN-2 | **Consent gates every proactive send** | Decision side done and fails closed (`leads/fieldMapping.ts`). **Enforcement side still has no caller** — `canReceiveProactiveMessage()`, see **D-1**. | `fieldMapping.test.ts` · `ingestLead.test.ts` cover the decision; **enforcement is untested because it does not exist** | ⚠️ Phase 2 |
+| NN-2 | **Consent gates every proactive send** | Decision: `leads/fieldMapping.ts`. Enforcement: `whatsapp/guardedSend.ts` (`ConsentRequiredError`) | `fieldMapping.test.ts` · `ingestLead.test.ts` · `guardedSend.test.ts` (proactive consent suite) | ✅ |
 | NN-3 | Five-day follow-up cap | *(none)* | *(none)* | ❌ |
 | NN-4 | Postgres is the source of truth | `db/schema.ts` · repository layer | integration tests on real Postgres | ✅ |
 | NN-5 | LLM never sets a stage | `workflow/decide.ts` owns stages; `classify.ts` returns JSON only | `decide.test.ts` · `conversationTurn.test.ts` | ✅ |

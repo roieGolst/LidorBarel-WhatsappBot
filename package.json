@@ -2,7 +2,7 @@
   "name": "lidor-whatsapp-bot",
   "version": "0.1.0",
   "private": true,
-  "description": "Opt-in WhatsApp lead bot for Lidor Barel real estate — proactively contacts consenting Meta lead-form leads, qualifies them, syncs to Monday.com, books appointments.",
+  "description": "Opt-in WhatsApp lead bot for Lidor Barel real estate \u2014 proactively contacts consenting Meta lead-form leads, qualifies them, syncs to Monday.com, books appointments.",
   "type": "module",
   "engines": {
     "node": ">=24"
@@ -25,7 +25,9 @@
     "db:up": "docker compose up -d",
     "db:down": "docker compose down",
     "db:refresh": "docker compose down -v && docker compose up -d --wait && npm run db:migrate",
-    "db:logs": "docker compose logs -f"
+    "db:logs": "docker compose logs -f",
+    "leads:test": "node scripts/send-test-leadgen.mjs",
+    "leads:show": "node scripts/show-leads.mjs"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

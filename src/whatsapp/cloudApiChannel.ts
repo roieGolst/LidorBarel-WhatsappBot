@@ -7,6 +7,7 @@ import type {
   ListRow,
   MediaCache,
   OutboundResult,
+  OutboundTemplate,
   ReplyButton,
   WhatsAppChannel,
 } from './channel.js';
@@ -133,6 +134,37 @@ export class CloudApiChannel implements WhatsAppChannel {
             },
           ],
         },
+      },
+    });
+  }
+
+  /**
+   * Sends a pre-approved template.
+   *
+   * The body carries no parameters — the approved wording is fixed and complete —
+   * so the only component supplied is the header's video, when the template
+   * declares one. The video reuses the same upload-and-cache path as an ordinary
+   * video send, so the clip is uploaded once and reused across templates and
+   * restarts rather than per send.
+   */
+  async sendTemplate(to: string, template: OutboundTemplate): Promise<OutboundResult> {
+    const components: Record<string, unknown>[] = [];
+
+    if (template.headerVideoPath) {
+      const id = await this.uploadMediaCached(template.headerVideoPath, 'video/mp4');
+      components.push({
+        type: 'header',
+        parameters: [{ type: 'video', video: { id } }],
+      });
+    }
+
+    return this.postMessage({
+      to,
+      type: 'template',
+      template: {
+        name: template.name,
+        language: { code: template.language },
+        ...(components.length > 0 ? { components } : {}),
       },
     });
   }

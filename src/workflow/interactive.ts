@@ -133,6 +133,12 @@ export const INTRO_VIDEO_PATH = resolve(process.cwd(), 'assets/intro_video.mp4')
  * that move a lead forward — a fit check and booking — come first. Booking runs
  * the same screening flow (a call is booked only after a few quick details), so
  * there is no separate "talk to a human" shortcut.
+ *
+ * **This deliberately does not match the `welcome_message` template**, which
+ * renders four inline quick-reply buttons in a single bubble. WhatsApp caps
+ * *interactive* reply buttons at three (templates allow ten), so matching it
+ * would mean dropping or nesting an option, or paying to send a template on
+ * every inbound opening. Reviewed and kept as a list. Do not "unify" the two.
  */
 export const MAIN_MENU = {
   body: 'אשמח לעזור לך למכור את הנכס במחיר הטוב ביותר 🏠\nאיך תרצה להתחיל?',

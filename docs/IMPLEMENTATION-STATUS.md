@@ -102,9 +102,12 @@ id permanently identifies the exact wording agreed to. An explicit per-lead
 refusal always overrides the form rule, and unlisted forms stay
 `privacy_policy_only`.
 
-The Page also runs investor and recruitment campaigns. `META_LEAD_SELLER_FORMS`
-gates which forms enter the seller flow; leads from the rest are recorded for
-attribution with no conversation opened.
+The Page also runs investor and recruitment campaigns, and carries several
+retired seller forms. Exactly one form is live: `1746567036243410`.
+`META_LEAD_SELLER_FORMS` gates which forms enter the seller flow; leads from the
+rest are recorded for attribution with no conversation opened. Replacing the form
+(for updated privacy wording, say) means a new id in both lists — Meta forms are
+immutable, so wording changes always produce a new form.
 
 ### What Phase 1 delivers
 

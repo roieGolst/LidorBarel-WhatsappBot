@@ -2,7 +2,7 @@
   "name": "lidor-whatsapp-bot",
   "version": "0.1.0",
   "private": true,
-  "description": "Inbound opt-in WhatsApp bot for Lidor Barel real estate — qualifies leads, syncs to Monday.com, books appointments.",
+  "description": "Opt-in WhatsApp lead bot for Lidor Barel real estate — proactively contacts consenting Meta lead-form leads, qualifies them, syncs to Monday.com, books appointments.",
   "type": "module",
   "engines": {
     "node": ">=24"

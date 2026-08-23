@@ -1,10 +1,50 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+Guidance for Claude Code (claude.ai/code) when working in this repository.
 
-An inbound-only, opt-in WhatsApp bot for Lidor Barel's real estate business: it
-qualifies leads against a fixed spec, projects them into Monday.com, and books
-appointments into Google Calendar. Cold outbound is deliberately out of scope.
+---
+
+## ⚠️ Read these before analysing or changing anything
+
+This project's purpose has been repeatedly misunderstood by fresh sessions,
+because older documentation described it incorrectly. **Read these three files
+first, in order, before giving implementation advice or writing code:**
+
+1. **[docs/PRODUCT-REQUIREMENTS.md](docs/PRODUCT-REQUIREMENTS.md)** — the single
+   source of truth for what this product does. Highest authority in the repo.
+2. **[docs/IMPLEMENTATION-STATUS.md](docs/IMPLEMENTATION-STATUS.md)** — what is
+   actually built today vs. planned, plus known defects.
+3. **[docs/TRACEABILITY.md](docs/TRACEABILITY.md)** — requirement → module → test.
+
+[docs/plan-v5.md](docs/plan-v5.md) holds the full technical plan. The Champions
+Chatbot Builder spec defines the bot's *behaviour* (voice, questions,
+disqualification rules, objection handling) — implement it, don't invent business
+rules.
+
+### What this bot is
+
+An **AI WhatsApp bot that proactively contacts people who submitted Lidor Barel's
+paid Meta lead form and consented to WhatsApp contact**, qualifies them, projects
+them into Monday.com, and books consultation calls into Google Calendar.
+
+**Proactive, business-initiated outreach to consenting paid leads is the primary
+purpose.** It is not a future feature.
+
+> **Do not describe this project as "inbound-only".** Earlier revisions of this
+> file and `README.md` did, and it was wrong. *Cold outbound* to a purchased list
+> is out of scope; *opt-in outreach to paid leads who consented* is the core
+> product. Those are different things.
+
+### Verify before you assert
+
+**A docstring, comment, or plan entry is not evidence that something works.**
+Before claiming a behaviour exists, confirm there is a production caller and a
+test. This repository contains guards that are implemented, tested, and never
+invoked — see defects **D-1** and **D-2** in
+[docs/IMPLEMENTATION-STATUS.md](docs/IMPLEMENTATION-STATUS.md). If you find code
+and documentation disagreeing, report it rather than trusting the prose.
+
+---
 
 ## Environment & commands
 
@@ -36,11 +76,21 @@ reverse.** The projection can be rebuilt from Postgres at any time. Same princip
 LangGraph checkpoints: disposable execution state, rebuildable from `messages` +
 `conversations`.
 
-Request path for an inbound message:
+Two entry paths lead into the same conversation engine.
+
+**(a) Business-initiated — the primary flow.** Not yet implemented; see phases 1–3.
+
+```
+Meta Instant Form ─▶ leadgen webhook ─▶ retrieve lead by leadgen_id
+                  ─▶ contact + campaign_referrals ─▶ CONSENT GATE
+                  ─▶ approved template ─▶ (lead replies) ─▶ path (b)
+```
+
+**(b) User-initiated — implemented and mature.**
 
 ```
 Meta webhook ─▶ signature verify (raw body) ─▶ idempotent ingestion (Postgres)
-             ─▶ [M3] LangGraph workflow ─▶ transactional outbox ─▶ Monday / Calendar / notify
+             ─▶ LangGraph workflow ─▶ transactional outbox ─▶ Monday / Calendar / notify
 ```
 
 - **Webhook signature** (`src/whatsapp/signature.ts`): Meta signs the *exact bytes* of
@@ -55,12 +105,24 @@ Meta webhook ─▶ signature verify (raw body) ─▶ idempotent ingestion (Pos
   retries are safe.
 - **Reply generation does NOT happen in the webhook** — an LLM call is too slow for a
   webhook and belongs in the workflow/queue.
-- **LangGraph boundary (M3+):** the graph decides *what to say next within one
+- **LangGraph boundary:** the graph decides *what to say next within one
   conversation*; everything about *how to send it and who else to tell* (transport,
   Monday sync, follow-ups, opt-out enforcement) lives outside. `conversations.stage` is
   owned exclusively by application code — the LLM returns JSON only and never sets a
   stage, so a hallucinated transition is structurally impossible. Checkpoints live in a
   separate `langgraph` Postgres schema (see `src/workflow/checkpointer.ts`).
+
+### Compliance rules that must never be weakened
+
+Full list in [docs/PRODUCT-REQUIREMENTS.md](docs/PRODUCT-REQUIREMENTS.md) §3.
+
+- **Never message a contact who opted out.** Enforced at the single choke point
+  `src/whatsapp/guardedSend.ts`, which throws rather than silently no-ops.
+- **Consent gates every proactive send.** Only `whatsapp_opt_in` may receive a
+  business-initiated message; a privacy-policy checkbox is not sufficient.
+  Israeli Amendment 40 exposure is up to ₪1,000 per message.
+- **Follow-ups stop at five days**, and immediately on any stop condition.
+- **Transcripts and phone numbers never reach logs.**
 
 ### Data & conventions worth knowing before editing
 
@@ -91,17 +153,15 @@ Meta webhook ─▶ signature verify (raw body) ─▶ idempotent ingestion (Pos
 
 ## Working discipline
 
-- **One milestone per branch, one at a time.** Branches are named `milestone/N-<slug>`
-  (e.g. `milestone/2-inbound-channel`, `milestone/3-conversation-workflow`), each built on
-  the previous and reviewed before the next begins. Do not stack a new milestone's commits
-  onto a prior milestone's branch.
-- **The design is authoritative and already decided.** The implementation plan (v5) lives
-  at `~/.claude/plans/i-m-building-an-ai-powered-elegant-newt.md`; the bot's behaviour
-  (voice, screening questions, disqualification rules, objection handling) is defined by
-  the Champions Chatbot Builder spec. Implement those — don't invent business rules.
+- **One phase per branch, one at a time.** Phases are defined in
+  [docs/IMPLEMENTATION-STATUS.md](docs/IMPLEMENTATION-STATUS.md) §4. Each is built on
+  the previous and reviewed before the next begins. Do not stack a new phase's commits
+  onto a prior phase's branch.
+- **Update the status and traceability docs in the same pull request** as the code
+  change that moves an item. A phase is not done while those files still say it isn't.
 - **Monday.com:** match columns/labels by **ID, never label text** (renames are safe, ID
   changes are not; several label IDs are non-intuitive). Write scope is the **לידים** and
   **פעילות** boards only. Monday's native Lead Ads integration must stay **disabled** or
   every submission double-creates items.
-- Commit messages: concise imperative subject + a body explaining *why* (see history),
-  ending with the `Co-Authored-By` trailer.
+- Commit messages: concise imperative subject + a body explaining *why* (see history).
+  **Do not add a `Co-Authored-By` trailer.**

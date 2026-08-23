@@ -1,38 +1,45 @@
-# Lidor Barel — Inbound WhatsApp Bot
+# Lidor Barel — WhatsApp Lead Bot
 
 An AI-powered WhatsApp bot for Lidor Barel's real estate business in Beer Sheva.
 
-It handles **inbound, opt-in leads only** — people who message first or arrive
-through Click-to-WhatsApp ads. The bot qualifies them against the screening
+It **proactively contacts people who submitted the paid Meta campaign lead form
+and consented to WhatsApp contact**, qualifies them against the screening
 questions in the Chatbot Builder specification, creates and updates leads in
 Monday.com, offers appointment slots, and books approved meetings into Google
-Calendar.
+Calendar. People who message first are handled by the same conversation engine.
 
-Cold outbound outreach is deliberately **out of scope**. See
-[the implementation plan](#implementation-plan) for the reasoning.
+**Cold outbound** — unsolicited messaging to a purchased or scraped list — is
+deliberately out of scope. That is a different thing from the opt-in outreach
+above, which is this product's primary purpose.
+
+📄 **[docs/PRODUCT-REQUIREMENTS.md](docs/PRODUCT-REQUIREMENTS.md) is the source of
+truth** for what this product does. See also
+[implementation status](docs/IMPLEMENTATION-STATUS.md) and
+[traceability](docs/TRACEABILITY.md).
 
 ## Status
 
-Milestone 4 of 9 — outbound sending and opt-out.
+The **inbound conversation engine is mature and well covered by tests**. The
+**proactive outreach path — the core purpose — is not yet built.**
 
-| # | Milestone | Status |
-|---|-----------|--------|
-| 0 | Repo and foundations | Done |
-| 1 | Data layer | Done |
-| 2 | Inbound WhatsApp channel | Done |
-| 3 | Conversation workflow (LangGraph) | Done |
-| 4 | Outbound sending and opt-out | In progress |
+| Phase | Deliverable | Status |
+|---|---|---|
+| 0 | Alignment documents | In progress |
+| 1 | `leadgen` intake (receives leads, sends nothing) | Not started |
+| 2 | Consent gate + send-window enforcement | Not started |
+| 3 | Approved-template first contact | Not started |
+| 4 | Follow-up scheduler (≤ 5 days) | Not started |
 | 5 | Monday.com sync | Not started |
 | 6 | Appointments and Calendar | Not started |
-| 7 | Follow-ups | Not started |
-| 8 | Admin panel | Not started |
-| 9 | Simulation and hardening | Not started |
+| 7 | Admin panel, simulation, hardening | Not started |
 
-Milestone 4's core is in: opt-out is enforced on every outbound send, free-form
-replies go through the real WhatsApp Cloud API, and send-window state is tracked.
-The window-aware **template** fallback and proactive (business-initiated)
-outreach are deferred until Meta Business verification and approved message
-templates are in place — external items, by design.
+Already delivered: repo foundations, data layer, inbound WhatsApp channel with
+idempotent ingestion, the LangGraph conversation workflow, opt-out enforcement,
+and the spec's opening sequence with interactive buttons and lists.
+
+Phases 3 onward depend on external items — Meta Business verification, lead-form
+consent wording, and approved message templates. See
+[IMPLEMENTATION-STATUS.md](docs/IMPLEMENTATION-STATUS.md) §5.
 
 ## Requirements
 
@@ -123,8 +130,11 @@ log output.
 ## Implementation plan
 
 The full plan — architecture, data model, conversation flows, costs, risks, and
-milestone breakdown — lives at
-`~/.claude/plans/i-m-building-an-ai-powered-elegant-newt.md`.
+phase breakdown — lives in the repository at [docs/plan-v5.md](docs/plan-v5.md).
+
+Note its precedence rules: the **v5** section supersedes the earlier **v4**
+"outbound removed from scope" section, and
+[docs/PRODUCT-REQUIREMENTS.md](docs/PRODUCT-REQUIREMENTS.md) supersedes both.
 
 It is updated whenever an implementation decision materially differs from it.
 

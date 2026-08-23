@@ -1,9 +1,12 @@
 import { getLogger } from '../logger.js';
+import type { OutboundTemplate } from '../whatsapp/channel.js';
 import {
   findLeadsAwaitingFirstContact,
   sendFirstContact,
   type FirstContactDeps,
 } from './firstContact.js';
+import { findConversationsDueForFollowUp, sendFollowUp } from './followUp.js';
+import type { FollowUpLimits } from './followUpPolicy.js';
 
 /**
  * The loop that drives business-initiated first contact.
@@ -20,6 +23,12 @@ import {
  */
 
 export interface OutreachSweeperOptions extends FirstContactDeps {
+  /** IANA timezone for the follow-up business-hours rules. */
+  timeZone: string;
+  /** Caps and cadence for the follow-up sequence. */
+  followUpLimits: FollowUpLimits;
+  /** Template for nudging outside the window. Absent disables those nudges. */
+  followUpTemplate?: OutboundTemplate | undefined;
   /** How long to leave a fresh lead alone before reaching out. */
   gracePeriodMs: number;
   /** How often to look for due leads. */
@@ -31,9 +40,20 @@ export interface OutreachSweeperOptions extends FirstContactDeps {
   batchSize: number;
 }
 
+/** What one sweep did. */
+export interface SweepResult {
+  /** First-contact templates sent. */
+  sent: number;
+  /** Conversations examined but deliberately not messaged. */
+  skipped: number;
+  failed: number;
+  followUpsSent: number;
+  followUpsFailed: number;
+}
+
 export interface OutreachSweeper {
   /** Runs one sweep immediately. Exposed so tests drive it without waiting. */
-  runOnce(): Promise<{ sent: number; skipped: number; failed: number }>;
+  runOnce(): Promise<SweepResult>;
   stop(): void;
 }
 
@@ -49,35 +69,71 @@ export function startOutreachSweeper(options: OutreachSweeperOptions): OutreachS
   let running = false;
   let stopped = false;
 
-  async function runOnce(): Promise<{ sent: number; skipped: number; failed: number }> {
-    const due = await findLeadsAwaitingFirstContact(
+  async function runOnce(): Promise<SweepResult> {
+    const result: SweepResult = {
+      sent: 0,
+      skipped: 0,
+      failed: 0,
+      followUpsSent: 0,
+      followUpsFailed: 0,
+    };
+
+    // First contact before follow-ups: a lead who has never been spoken to is
+    // more valuable than one more nudge to someone who is already ignoring us,
+    // and the batch limit is shared between them.
+    const newLeads = await findLeadsAwaitingFirstContact(
       options.db,
       options.gracePeriodMs,
       options.batchSize,
     );
 
-    let sent = 0;
-    let skipped = 0;
-    let failed = 0;
-
-    for (const conversationId of due) {
+    for (const conversationId of newLeads) {
       if (stopped) break;
       try {
         const outcome = await sendFirstContact(options, conversationId);
-        if (outcome.sent) sent += 1;
-        else skipped += 1;
+        if (outcome.sent) result.sent += 1;
+        else result.skipped += 1;
       } catch (error) {
         // One lead's failure must not stop the sweep. The claim was already
         // released, so this lead is retried on the next pass.
-        failed += 1;
+        result.failed += 1;
         logger.error({ err: error, conversationId }, 'first contact failed');
       }
     }
 
-    if (sent > 0 || failed > 0) {
-      logger.info({ due: due.length, sent, skipped, failed }, 'outreach sweep');
+    const dueFollowUps = await findConversationsDueForFollowUp(
+      options.db,
+      options.batchSize,
+    );
+
+    for (const conversationId of dueFollowUps) {
+      if (stopped) break;
+      try {
+        const outcome = await sendFollowUp(
+          {
+            db: options.db,
+            channel: options.channel,
+            limits: options.followUpLimits,
+            timeZone: options.timeZone,
+            template: options.followUpTemplate,
+          },
+          conversationId,
+        );
+        if (outcome.sent) result.followUpsSent += 1;
+        else result.skipped += 1;
+      } catch (error) {
+        result.followUpsFailed += 1;
+        logger.error({ err: error, conversationId }, 'follow-up failed');
+      }
     }
-    return { sent, skipped, failed };
+
+    if (result.sent + result.followUpsSent + result.failed + result.followUpsFailed > 0) {
+      logger.info(
+        { newLeads: newLeads.length, dueFollowUps: dueFollowUps.length, ...result },
+        'outreach sweep',
+      );
+    }
+    return result;
   }
 
   const timer = setInterval(() => {

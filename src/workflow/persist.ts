@@ -61,6 +61,15 @@ export interface PersistTurnInput {
   /** Reply-generation audit flags — only meaningful when the model wrote. */
   regenerated?: boolean;
   fellBack?: boolean;
+  /**
+   * When to nudge if the person does not answer this turn, or `null` to leave no
+   * follow-up pending.
+   *
+   * Computed by the caller, which knows the configured cadence; omitted entirely
+   * leaves the existing schedule untouched, so a caller that does not care about
+   * follow-ups cannot accidentally cancel one.
+   */
+  nextFollowupAt?: Date | null;
 }
 
 export async function persistTurn(db: Database, input: PersistTurnInput): Promise<void> {
@@ -81,6 +90,11 @@ export async function persistTurn(db: Database, input: PersistTurnInput): Promis
         ...(input.qualified !== undefined ? { qualified: input.qualified } : {}),
         ...(input.disqualificationReason !== undefined
           ? { disqualificationReason: input.disqualificationReason }
+          : {}),
+        // Undefined leaves any existing schedule alone; null cancels it. Only a
+        // caller that computed a cadence should be moving this.
+        ...(input.nextFollowupAt !== undefined
+          ? { nextFollowupAt: input.nextFollowupAt }
           : {}),
       })
       .where(eq(conversations.id, input.conversationId));

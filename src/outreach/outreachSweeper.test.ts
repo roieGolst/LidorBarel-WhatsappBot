@@ -53,6 +53,12 @@ function sweeper(channel: FakeChannel) {
     // Long enough that only the explicit runOnce() executes during a test.
     intervalMs: 60_000,
     batchSize: 10,
+    timeZone: 'Asia/Jerusalem',
+    followUpLimits: {
+      intervalMs: 24 * 60 * 60 * 1000,
+      maxFollowUps: 5,
+      maxAgeMs: 5 * 24 * 60 * 60 * 1000,
+    },
   });
 }
 
@@ -120,7 +126,7 @@ describe('outreach sweeper', () => {
     const result = await sweep.runOnce();
     sweep.stop();
 
-    expect(result).toEqual({ sent: 0, skipped: 0, failed: 0 });
+    expect(result).toMatchObject({ sent: 0, failed: 0, followUpsSent: 0 });
   });
 
   it('stops sweeping once stopped', async () => {

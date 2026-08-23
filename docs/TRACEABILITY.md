@@ -26,7 +26,9 @@ Last updated: 2026-08-23
 | 2c | Grace period before first contact | `outreach/firstContact.ts` (`findLeadsAwaitingFirstContact`) | `firstContact.test.ts` | ✅ |
 | 2c | First contact sent at most once | `outreach/firstContact.ts` (CAS claim on stage) | `firstContact.test.ts` (concurrent sweeps) | ✅ |
 | 2c | Template does not open a messaging window | `outreach/firstContact.ts` | `firstContact.test.ts` · `e2e/leadLifecycle.test.ts` | ✅ |
-| 3 | Follow-up scheduling, ≤ 5 days | schema only — `conversations.next_followup_at` | *(none)* | 📋 |
+| 3 | Follow-up scheduling, ≤ 5 days | `outreach/followUpPolicy.ts` · `outreach/followUp.ts` | `followUpPolicy.test.ts` · `followUp.test.ts` | ✅ |
+| 3 | Nudge wording stays on-voice | `outreach/followUpMessages.ts` | `followUpMessages.test.ts` (same validator as generated replies) | ✅ |
+| 3 | Never sends on Shabbat / outside business hours | `outreach/followUpPolicy.ts` | `followUpPolicy.test.ts` | ✅ |
 | 4a | Conversation turn, transcript, media | `workflow/conversationTurn.ts` | `conversationTurn.test.ts` | ✅ |
 | 4a | Answer validation and re-asking | `workflow/validateAnswer.ts` | `validateAnswer.test.ts` | ✅ |
 | 4b | Screening and stage transitions | `workflow/decide.ts` | `decide.test.ts` | ✅ |
@@ -34,7 +36,7 @@ Last updated: 2026-08-23
 | 4b | Priority score | `workflow/decide.ts` (`leadPriorityScore`) | `decide.test.ts` | ✅ |
 | 4c | Monday projection via outbox | *(none — `outbox` table unused)* | *(none)* | ❌ |
 | 5 | Appointment offer, hold, approval, Calendar write | *(none — tables unused)* | *(none)* | ❌ |
-| 6 | Stop conditions cancel follow-ups | *(no follow-ups to cancel yet)* | *(none)* | ❌ |
+| 6 | Stop conditions cancel follow-ups | `outreach/followUp.ts` · `db/repositories/conversations.ts` (`recordInboundActivity`) | `followUp.test.ts` (stop conditions) · `e2e/leadLifecycle.test.ts` | ✅ |
 | 7 | No message after opt-out | `whatsapp/guardedSend.ts` | `guardedSend.test.ts` | ✅ |
 | — | Free-form refused outside the 24h window | `whatsapp/guardedSend.ts` · `whatsapp/window.ts` | `guardedSend.test.ts` (messaging window) | ✅ |
 | — | Approved template allowed outside the window | `whatsapp/guardedSend.ts` | `guardedSend.test.ts` | ✅ |
@@ -45,7 +47,7 @@ Last updated: 2026-08-23
 |---|---|---|---|---|
 | NN-1 | No message after opt-out | `whatsapp/guardedSend.ts` · `db/repositories/optOuts.ts` | `guardedSend.test.ts` · `optOuts.test.ts` | ✅ |
 | NN-2 | **Consent gates every proactive send** | Decision: `leads/fieldMapping.ts`. Enforcement: `whatsapp/guardedSend.ts` (`ConsentRequiredError`) | `fieldMapping.test.ts` · `ingestLead.test.ts` · `guardedSend.test.ts` (proactive consent suite) | ✅ |
-| NN-3 | Five-day follow-up cap | *(none)* | *(none)* | ❌ |
+| NN-3 | Five-day follow-up cap | `outreach/followUpPolicy.ts` (count **and** age caps) | `followUpPolicy.test.ts` · `followUp.test.ts` | ✅ |
 | NN-4 | Postgres is the source of truth | `db/schema.ts` · repository layer | integration tests on real Postgres | ✅ |
 | NN-5 | LLM never sets a stage | `workflow/decide.ts` owns stages; `classify.ts` returns JSON only | `decide.test.ts` · `conversationTurn.test.ts` | ✅ |
 | NN-6 | No personal data in logs | `logger.ts` redaction | `config.test.ts` (partial) | 🟡 |
@@ -81,5 +83,9 @@ template button → window opens → qualification asks Q2 next.
 | Opted-out contact, any send | **Refused** (NN-1) | ✅ `guardedSend.test.ts` |
 | Same lead swept twice / two instances | Sent **once** | ✅ `firstContact.test.ts` |
 
-**Not yet covered** — the steps that do not exist: Monday projection (Phase 5),
-Calendar booking (Phase 6), and follow-up cancellation (Phase 4).
+The lifecycle test also covers the nudge sequence: a silent lead is contacted,
+nudged, and then replies — after which the schedule is cleared and the counter
+reset.
+
+**Not yet covered** — the steps that do not exist: Monday projection (Phase 5)
+and Calendar booking (Phase 6).

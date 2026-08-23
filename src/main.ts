@@ -104,7 +104,26 @@ async function buildConversationPipeline(
     queue = createConversationQueue(config.redisUrl);
     worker = createConversationWorker(
       config.redisUrl,
-      { db, llm, channel },
+      {
+        db,
+        llm,
+        channel,
+        // Scheduling is gated on outreach being enabled: the sweeper is what
+        // sends these, so scheduling without it would only accumulate due rows
+        // that nothing ever picks up.
+        ...(config.outreachEnabled
+          ? {
+              followUp: {
+                limits: {
+                  intervalMs: config.followUpIntervalHours * 60 * 60 * 1000,
+                  maxFollowUps: config.followUpMaxCount,
+                  maxAgeMs: config.followUpMaxDays * 24 * 60 * 60 * 1000,
+                },
+                timeZone: config.timezone,
+              },
+            }
+          : {}),
+      },
       checkpointer,
     );
 
@@ -178,6 +197,23 @@ async function main(): Promise<void> {
         'not starting it, since replies would go unanswered',
     );
   } else {
+    const followUpLimits = {
+      intervalMs: config.followUpIntervalHours * 60 * 60 * 1000,
+      maxFollowUps: config.followUpMaxCount,
+      maxAgeMs: config.followUpMaxDays * 24 * 60 * 60 * 1000,
+    };
+
+    if (!config.followUpTemplateName) {
+      // The common case is a lead who never answered the opening, so their
+      // window is never open and every nudge needs a template. Without one the
+      // sequence is effectively inert — worth saying at boot rather than leaving
+      // it to be noticed as "follow-ups do nothing".
+      log.warn(
+        'FOLLOWUP_TEMPLATE_NAME is unset — follow-ups can only reach leads who ' +
+          'replied within the last 24 hours; non-responders cannot be nudged',
+      );
+    }
+
     outreach = startOutreachSweeper({
       db,
       channel: pipeline.channel,
@@ -186,9 +222,20 @@ async function main(): Promise<void> {
         language: config.outreachTemplateLanguage,
         headerVideoPath: INTRO_VIDEO_PATH,
       },
+      followUp: { limits: followUpLimits, timeZone: config.timezone },
       gracePeriodMs: config.outreachGracePeriodMinutes * 60 * 1000,
       intervalMs: config.outreachSweepSeconds * 1000,
       batchSize: config.outreachBatchSize,
+      timeZone: config.timezone,
+      followUpLimits,
+      ...(config.followUpTemplateName
+        ? {
+            followUpTemplate: {
+              name: config.followUpTemplateName,
+              language: config.followUpTemplateLanguage,
+            },
+          }
+        : {}),
     });
     log.info(
       {

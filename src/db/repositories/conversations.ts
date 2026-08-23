@@ -14,7 +14,7 @@ export type ConversationStage = Conversation['stage'];
  * terminal end is *reopened in place* so a genuine return continues in the same
  * record with a clean slate rather than dragging the old outcome onto new answers.
  */
-const TERMINAL_STAGES = [
+export const TERMINAL_STAGES = [
   'closed_no_response',
   'opted_out',
   'disqualified',
@@ -153,8 +153,12 @@ export async function recordInboundActivity(
     .set({
       lastInboundAt: messageAt,
       windowExpiresAt: new Date(messageAt.getTime() + SERVICE_WINDOW_MS),
-      // Any reply cancels pending follow-ups; the person is engaged again.
+      // Any reply cancels pending follow-ups; the person is engaged again. The
+      // counter resets too: the cap is "five nudges into a silence", so a lead
+      // who answers and later goes quiet gets a fresh sequence rather than
+      // inheriting a spent one.
       nextFollowupAt: null,
+      followupCount: 0,
       updatedAt: new Date(),
     })
     .where(eq(conversations.id, conversationId));

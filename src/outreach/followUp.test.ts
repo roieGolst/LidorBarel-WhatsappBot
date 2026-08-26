@@ -86,7 +86,15 @@ async function seed(
 }
 
 function deps(channel: FakeChannel, template?: { name: string; language: string }) {
-  return { db, channel, limits: LIMITS, timeZone: TZ, template };
+  // Seeded conversations have never replied, so the no-reply slot is the one
+  // exercised unless a test says otherwise.
+  return {
+    db,
+    channel,
+    limits: LIMITS,
+    timeZone: TZ,
+    templates: { noReply: template, incomplete: template },
+  };
 }
 
 const TEMPLATE = { name: 'followup_nudge', language: 'he' };
@@ -140,6 +148,81 @@ describe('sendFollowUp', () => {
 
       expect(outcome).toMatchObject({ sent: true });
       expect(channel.sent[0]).toMatchObject({ kind: 'template' });
+    });
+
+    describe('picks the template that fits the situation', () => {
+      // Wording is fixed at approval, so the wrong template is not a cosmetic
+      // slip: it tells someone who already described their property that we are
+      // thanking them for leaving details.
+      const NO_REPLY = { name: 'seller_followup_1', language: 'he' };
+      const INCOMPLETE = { name: 'seller_followup_incomplete', language: 'he' };
+
+      function bothTemplates(channel: FakeChannel) {
+        return {
+          db,
+          channel,
+          limits: LIMITS,
+          timeZone: TZ,
+          templates: { noReply: NO_REPLY, incomplete: INCOMPLETE },
+        };
+      }
+
+      it('uses the cold template for a lead who never replied', async () => {
+        const channel = new FakeChannel();
+        const { conversationId } = await seed({ windowOpen: false });
+
+        await sendFollowUp(bothTemplates(channel), conversationId, NOW);
+
+        expect(channel.sent[0]).toMatchObject({
+          kind: 'template',
+          template: { name: 'seller_followup_1' },
+        });
+      });
+
+      it('uses the mid-conversation template once they have answered', async () => {
+        const channel = new FakeChannel();
+        const { conversationId } = await seed({ windowOpen: false });
+        // They answered at some point, then went quiet; the window has since
+        // closed, so a template is required but a cold one would be wrong.
+        await db
+          .update(conversations)
+          .set({
+            lastInboundAt: new Date(NOW.getTime() - 3 * DAY),
+            lastOutboundAt: new Date(NOW.getTime() - 2 * DAY),
+            nextFollowupAt: NOW,
+            stage: 'screening_neighborhood',
+          })
+          .where(eq(conversations.id, conversationId));
+
+        await sendFollowUp(bothTemplates(channel), conversationId, NOW);
+
+        expect(channel.sent[0]).toMatchObject({
+          kind: 'template',
+          template: { name: 'seller_followup_incomplete' },
+        });
+      });
+
+      it('skips rather than substituting when the fitting template is missing', async () => {
+        const channel = new FakeChannel();
+        const { conversationId } = await seed({ windowOpen: false });
+        await db
+          .update(conversations)
+          .set({
+            lastInboundAt: new Date(NOW.getTime() - 3 * DAY),
+            lastOutboundAt: new Date(NOW.getTime() - 2 * DAY),
+            nextFollowupAt: NOW,
+          })
+          .where(eq(conversations.id, conversationId));
+
+        const outcome = await sendFollowUp(
+          { db, channel, limits: LIMITS, timeZone: TZ, templates: { noReply: NO_REPLY } },
+          conversationId,
+          NOW,
+        );
+
+        expect(outcome).toEqual({ sent: false, reason: 'no_template_available' });
+        expect(channel.sent).toHaveLength(0);
+      });
     });
 
     it('sends nothing when no follow-up template is configured', async () => {

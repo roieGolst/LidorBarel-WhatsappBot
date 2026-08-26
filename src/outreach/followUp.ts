@@ -46,10 +46,27 @@ export interface FollowUpDeps {
   /** IANA timezone for business hours. */
   timeZone: string;
   /**
-   * Template for nudging outside the 24-hour window. Absent means out-of-window
-   * follow-ups cannot be sent at all — see {@link sendFollowUp}.
+   * Templates for nudging outside the 24-hour window, by situation. A missing
+   * one means that situation cannot be nudged — see {@link sendFollowUp}.
    */
-  template?: OutboundTemplate | undefined;
+  templates?: FollowUpTemplates | undefined;
+}
+
+/**
+ * The two situations a follow-up template has to cover, which need different
+ * words.
+ *
+ * Someone who never answered has to be re-introduced to why we are writing at
+ * all. Someone who answered three questions and stopped has not forgotten —
+ * thanking them for leaving details would read as though we had. A template's
+ * wording is fixed at approval time, so the distinction cannot be papered over
+ * with a variable; it needs two approvals.
+ */
+export interface FollowUpTemplates {
+  /** Never replied to the opening. */
+  noReply?: OutboundTemplate | undefined;
+  /** Started answering, then went quiet before finishing. */
+  incomplete?: OutboundTemplate | undefined;
 }
 
 /**
@@ -143,14 +160,21 @@ export async function sendFollowUp(
   const followUpNumber = claimed.followupCount + 1;
   const windowOpen = isWithinServiceWindow(claimed, now);
 
-  // Outside the window only an approved template may be sent. A lead who never
-  // answered the opening template has no window at all, so without a follow-up
-  // template approved for that purpose there is nothing legitimate to send —
-  // the sequence pauses rather than sending something Meta would reject.
-  if (!windowOpen && !deps.template) {
+  // Outside the window only an approved template may be sent, and which one
+  // depends on how far the person got: `lastInboundAt` is the whole test, since
+  // anyone who has ever answered is mid-conversation rather than cold.
+  const startedButUnfinished = claimed.lastInboundAt !== null;
+  const template = startedButUnfinished
+    ? deps.templates?.incomplete
+    : deps.templates?.noReply;
+
+  // Without the right template there is nothing legitimate to send, so the
+  // sequence pauses rather than sending something Meta would reject — or, worse,
+  // the wrong words to someone who already told us about their property.
+  if (!windowOpen && !template) {
     logger.warn(
-      { conversationId, followUpNumber },
-      'follow-up skipped: outside the messaging window and no follow-up template configured',
+      { conversationId, followUpNumber, startedButUnfinished },
+      'follow-up skipped: outside the messaging window and no template configured for this case',
     );
     return { sent: false, reason: 'no_template_available' };
   }
@@ -167,7 +191,7 @@ export async function sendFollowUp(
       () =>
         windowOpen
           ? deps.channel.sendText(contact.phone, body)
-          : deps.channel.sendTemplate(contact.phone, deps.template!),
+          : deps.channel.sendTemplate(contact.phone, template!),
     );
     providerMessageId = result.providerMessageId;
   } catch (error) {
@@ -195,7 +219,7 @@ export async function sendFollowUp(
       body,
       providerMessageId,
       deliveryStatus: 'pending',
-      ...(windowOpen ? {} : { templateRef: deps.template?.name ?? null }),
+      ...(windowOpen ? {} : { templateRef: template?.name ?? null }),
     });
 
     await tx

@@ -135,6 +135,8 @@ not push it past the five-day cap, so a message moved out of Shabbat can end the
 sequence instead of extending it. Hour-by-hour stepping keeps this correct across
 Israel's DST change.
 
+**Two out-of-window templates, not one.** Which is sent depends on `lastInboundAt`: someone who never answered needs re-introducing, someone mid-qualification does not. A missing template means that nudge is skipped rather than substituted.
+
 **Wording is written, not generated.** A background nudge with nobody watching
 does not need an LLM turn, and `followUpMessages.test.ts` runs each message
 through the same voice validator the model's replies face.
@@ -228,7 +230,8 @@ onward, so start them early.
 | E-6 | ✅ Done — Monday native Lead Ads integration disabled | — |
 | E-7 | Monday API token + the five additive column IDs | Phase 5 |
 | E-8 | Google Cloud project, calendar credentials and sharing | Phase 6 |
-| E-10 | **A second approved template for follow-ups.** A lead who never answered the opening has no messaging window, so without one the sequence can only reach leads who replied within 24 hours — i.e. not the main case. Must be created and approved separately; re-sending `welcome_message` as a nudge would be wrong. | Nudging non-responders |
+| E-10 | **Approved template: nudging a lead who never replied.** They have no messaging window, so without it non-responders cannot be nudged at all. Drafted and validated — see the Phase 4 notes. | Nudging non-responders |
+| E-11 | **Approved template: nudging a lead who started and stopped.** Different wording — thanking someone mid-qualification for "leaving details" reads as though we lost track of them. Without it, those nudges only work within 24 hours of their last message. | Nudging partial completions |
 
 ---
 

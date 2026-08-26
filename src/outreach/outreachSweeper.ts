@@ -1,11 +1,14 @@
 import { getLogger } from '../logger.js';
-import type { OutboundTemplate } from '../whatsapp/channel.js';
 import {
   findLeadsAwaitingFirstContact,
   sendFirstContact,
   type FirstContactDeps,
 } from './firstContact.js';
-import { findConversationsDueForFollowUp, sendFollowUp } from './followUp.js';
+import {
+  findConversationsDueForFollowUp,
+  sendFollowUp,
+  type FollowUpTemplates,
+} from './followUp.js';
 import type { FollowUpLimits } from './followUpPolicy.js';
 
 /**
@@ -27,8 +30,8 @@ export interface OutreachSweeperOptions extends FirstContactDeps {
   timeZone: string;
   /** Caps and cadence for the follow-up sequence. */
   followUpLimits: FollowUpLimits;
-  /** Template for nudging outside the window. Absent disables those nudges. */
-  followUpTemplate?: OutboundTemplate | undefined;
+  /** Templates for nudging outside the window, by situation. */
+  followUpTemplates?: FollowUpTemplates | undefined;
   /** How long to leave a fresh lead alone before reaching out. */
   gracePeriodMs: number;
   /** How often to look for due leads. */
@@ -115,7 +118,7 @@ export function startOutreachSweeper(options: OutreachSweeperOptions): OutreachS
             channel: options.channel,
             limits: options.followUpLimits,
             timeZone: options.timeZone,
-            template: options.followUpTemplate,
+            templates: options.followUpTemplates,
           },
           conversationId,
         );

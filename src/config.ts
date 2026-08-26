@@ -189,7 +189,18 @@ const configSchema = z.object({
    */
   followUpTemplateName: z.string().min(1).optional(),
 
-  /** Language code for {@link followUpTemplateName}. */
+  /**
+   * Approved template for nudging someone who **started** answering and went
+   * quiet, once their window has closed.
+   *
+   * Separate from {@link followUpTemplateName} because the words differ: a lead
+   * mid-qualification has not forgotten who we are, and thanking them for
+   * leaving details would read as though we had lost track. Template wording is
+   * fixed at approval, so this needs its own approval rather than a variable.
+   */
+  followUpIncompleteTemplateName: z.string().min(1).optional(),
+
+  /** Language code for both follow-up templates. */
   followUpTemplateLanguage: z.string().min(1).default('he'),
 
   // --- Anthropic (LLM) ------------------------------------------------------
@@ -240,6 +251,7 @@ function readEnv(env: NodeJS.ProcessEnv): Record<string, unknown> {
     followUpMaxCount: env.FOLLOWUP_MAX_COUNT,
     followUpMaxDays: env.FOLLOWUP_MAX_DAYS,
     followUpTemplateName: env.FOLLOWUP_TEMPLATE_NAME,
+    followUpIncompleteTemplateName: env.FOLLOWUP_INCOMPLETE_TEMPLATE_NAME,
     followUpTemplateLanguage: env.FOLLOWUP_TEMPLATE_LANGUAGE,
     anthropicApiKey: env.ANTHROPIC_API_KEY,
   };
@@ -274,6 +286,7 @@ const ENV_VAR_NAMES: Record<keyof Config, string> = {
   followUpMaxCount: 'FOLLOWUP_MAX_COUNT',
   followUpMaxDays: 'FOLLOWUP_MAX_DAYS',
   followUpTemplateName: 'FOLLOWUP_TEMPLATE_NAME',
+  followUpIncompleteTemplateName: 'FOLLOWUP_INCOMPLETE_TEMPLATE_NAME',
   followUpTemplateLanguage: 'FOLLOWUP_TEMPLATE_LANGUAGE',
   anthropicApiKey: 'ANTHROPIC_API_KEY',
 };

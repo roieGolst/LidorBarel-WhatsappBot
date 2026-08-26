@@ -203,16 +203,39 @@ async function main(): Promise<void> {
       maxAgeMs: config.followUpMaxDays * 24 * 60 * 60 * 1000,
     };
 
+    // Each missing template silently disables one whole class of nudge, and the
+    // symptom — "follow-ups do nothing" — points nowhere near the cause.
     if (!config.followUpTemplateName) {
-      // The common case is a lead who never answered the opening, so their
-      // window is never open and every nudge needs a template. Without one the
-      // sequence is effectively inert — worth saying at boot rather than leaving
-      // it to be noticed as "follow-ups do nothing".
       log.warn(
-        'FOLLOWUP_TEMPLATE_NAME is unset — follow-ups can only reach leads who ' +
-          'replied within the last 24 hours; non-responders cannot be nudged',
+        'FOLLOWUP_TEMPLATE_NAME is unset — leads who never replied cannot be ' +
+          'nudged at all, since they have no open messaging window',
       );
     }
+    if (!config.followUpIncompleteTemplateName) {
+      log.warn(
+        'FOLLOWUP_INCOMPLETE_TEMPLATE_NAME is unset — leads who started ' +
+          'answering can only be nudged within 24 hours of their last message',
+      );
+    }
+
+    const followUpTemplates = {
+      ...(config.followUpTemplateName
+        ? {
+            noReply: {
+              name: config.followUpTemplateName,
+              language: config.followUpTemplateLanguage,
+            },
+          }
+        : {}),
+      ...(config.followUpIncompleteTemplateName
+        ? {
+            incomplete: {
+              name: config.followUpIncompleteTemplateName,
+              language: config.followUpTemplateLanguage,
+            },
+          }
+        : {}),
+    };
 
     outreach = startOutreachSweeper({
       db,
@@ -228,14 +251,7 @@ async function main(): Promise<void> {
       batchSize: config.outreachBatchSize,
       timeZone: config.timezone,
       followUpLimits,
-      ...(config.followUpTemplateName
-        ? {
-            followUpTemplate: {
-              name: config.followUpTemplateName,
-              language: config.followUpTemplateLanguage,
-            },
-          }
-        : {}),
+      followUpTemplates,
     });
     log.info(
       {

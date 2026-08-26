@@ -204,7 +204,7 @@ describe('lead lifecycle: form submission to qualification', () => {
       .where(eq(conversations.id, conversationId));
 
     const nudge = await sendFollowUp(
-      { db, channel, limits, timeZone: TZ, template: FOLLOW_UP_TEMPLATE },
+      { db, channel, limits, timeZone: TZ, templates: { noReply: FOLLOW_UP_TEMPLATE } },
       conversationId,
     );
     expect(nudge).toMatchObject({ sent: true, followUpNumber: 1 });

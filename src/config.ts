@@ -168,6 +168,41 @@ const configSchema = z.object({
   /** Most leads contacted per sweep, so a campaign spike is spread out. */
   outreachBatchSize: z.coerce.number().int().min(1).max(500).default(25),
 
+  /**
+   * Gap between follow-ups. The specification says one day apart; shortening it
+   * for a test is fine, but the five-day cap below still bounds the sequence.
+   */
+  followUpIntervalHours: z.coerce.number().min(0.01).max(168).default(24),
+
+  /** Most follow-ups ever sent to one lead (NN-3). */
+  followUpMaxCount: z.coerce.number().int().min(0).max(10).default(5),
+
+  /** Longest a follow-up sequence may run, from first contact (NN-3). */
+  followUpMaxDays: z.coerce.number().min(0.01).max(30).default(5),
+
+  /**
+   * Approved template for nudging **outside** the 24-hour window.
+   *
+   * A lead who never answered the opening template has no window at all, so
+   * without this no follow-up can reach them. Unset means out-of-window nudges
+   * are skipped rather than sent as something Meta would reject.
+   */
+  followUpTemplateName: z.string().min(1).optional(),
+
+  /**
+   * Approved template for nudging someone who **started** answering and went
+   * quiet, once their window has closed.
+   *
+   * Separate from {@link followUpTemplateName} because the words differ: a lead
+   * mid-qualification has not forgotten who we are, and thanking them for
+   * leaving details would read as though we had lost track. Template wording is
+   * fixed at approval, so this needs its own approval rather than a variable.
+   */
+  followUpIncompleteTemplateName: z.string().min(1).optional(),
+
+  /** Language code for both follow-up templates. */
+  followUpTemplateLanguage: z.string().min(1).default('he'),
+
   // --- Anthropic (LLM) ------------------------------------------------------
   //
   // Optional as a group so the app still boots for tests and simulation, which
@@ -212,6 +247,12 @@ function readEnv(env: NodeJS.ProcessEnv): Record<string, unknown> {
     outreachGracePeriodMinutes: env.OUTREACH_GRACE_PERIOD_MINUTES,
     outreachSweepSeconds: env.OUTREACH_SWEEP_SECONDS,
     outreachBatchSize: env.OUTREACH_BATCH_SIZE,
+    followUpIntervalHours: env.FOLLOWUP_INTERVAL_HOURS,
+    followUpMaxCount: env.FOLLOWUP_MAX_COUNT,
+    followUpMaxDays: env.FOLLOWUP_MAX_DAYS,
+    followUpTemplateName: env.FOLLOWUP_TEMPLATE_NAME,
+    followUpIncompleteTemplateName: env.FOLLOWUP_INCOMPLETE_TEMPLATE_NAME,
+    followUpTemplateLanguage: env.FOLLOWUP_TEMPLATE_LANGUAGE,
     anthropicApiKey: env.ANTHROPIC_API_KEY,
   };
 }
@@ -241,6 +282,12 @@ const ENV_VAR_NAMES: Record<keyof Config, string> = {
   outreachGracePeriodMinutes: 'OUTREACH_GRACE_PERIOD_MINUTES',
   outreachSweepSeconds: 'OUTREACH_SWEEP_SECONDS',
   outreachBatchSize: 'OUTREACH_BATCH_SIZE',
+  followUpIntervalHours: 'FOLLOWUP_INTERVAL_HOURS',
+  followUpMaxCount: 'FOLLOWUP_MAX_COUNT',
+  followUpMaxDays: 'FOLLOWUP_MAX_DAYS',
+  followUpTemplateName: 'FOLLOWUP_TEMPLATE_NAME',
+  followUpIncompleteTemplateName: 'FOLLOWUP_INCOMPLETE_TEMPLATE_NAME',
+  followUpTemplateLanguage: 'FOLLOWUP_TEMPLATE_LANGUAGE',
   anthropicApiKey: 'ANTHROPIC_API_KEY',
 };
 

@@ -21,6 +21,8 @@ import type {
   WhatsAppChannel,
 } from '../whatsapp/channel.js';
 import { guardedSend } from '../whatsapp/guardedSend.js';
+import { scheduleNextFollowUp, type FollowUpLimits } from '../outreach/followUpPolicy.js';
+import { followUpAllowedFrom } from '../outreach/followUp.js';
 import type { Conversation } from '../db/repositories/conversations.js';
 import { classifyAndExtract, WORKFLOW_OWNED_FIELDS } from './classify.js';
 import { isAffirmative, isNegative } from './confirmation.js';
@@ -89,6 +91,12 @@ export interface ConversationDeps {
   db: Database;
   llm: LlmClient;
   channel: WhatsAppChannel;
+  /**
+   * Cadence for nudging a lead who goes quiet mid-conversation. Absent leaves
+   * the follow-up schedule untouched, which is what tests and the fake harness
+   * want — the scheduling is a production concern, not a conversation one.
+   */
+  followUp?: { limits: FollowUpLimits; timeZone: string } | undefined;
 }
 
 /** One message to send this turn, before it has a provider id. */
@@ -424,9 +432,42 @@ export function createConversationWorkflow(
     },
   );
 
-  const persist = task('ct_persist', (args: PersistTurnInput) =>
-    persistTurn(deps.db, args),
-  );
+  /**
+   * Persists the turn, and schedules the nudge for the silence that starts now.
+   *
+   * Computed here rather than at each of the ten call sites: a turn that forgot
+   * to schedule would simply never follow up, silently, and the omission would
+   * look identical to a lead who answered. Deriving it from the turn's own
+   * outcome means every branch is covered by construction.
+   *
+   * `followupCount` is zero at this point because the inbound that triggered the
+   * turn reset it (`recordInboundActivity`), which is also why the silence is
+   * anchored at now.
+   */
+  const persist = task('ct_persist', (args: PersistTurnInput) => {
+    const at = new Date();
+    const nextFollowupAt = deps.followUp
+      ? scheduleNextFollowUp(
+          {
+            followupCount: 0,
+            silenceSince: at,
+            // A turn that sent nothing leaves nothing to follow up on.
+            stageAllowsFollowUp:
+              args.outbound.length > 0 && followUpAllowedFrom(args.toStage),
+            lastInboundAt: null,
+            lastOutboundAt: at,
+          },
+          deps.followUp.limits,
+          deps.followUp.timeZone,
+          at,
+        )
+      : undefined;
+
+    return persistTurn(deps.db, {
+      ...args,
+      ...(nextFollowupAt !== undefined ? { nextFollowupAt } : {}),
+    });
+  });
 
   /** The interactive re-ask for a "go back" — the pending question after undo. */
   const backPart = (

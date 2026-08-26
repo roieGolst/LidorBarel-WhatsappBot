@@ -9,6 +9,7 @@ import type { GraphLeadsClient, RetrievedLead } from '../leads/graphLeads.js';
 import { ingestLead } from '../leads/ingestLead.js';
 import { FakeLlmClient } from '../llm/fake.js';
 import { sendFirstContact } from '../outreach/firstContact.js';
+import { sendFollowUp } from '../outreach/followUp.js';
 import { FakeChannel } from '../whatsapp/fakeChannel.js';
 import { ingestMessage } from '../whatsapp/ingest.js';
 import type { InboundMessageEvent } from '../whatsapp/payload.js';
@@ -85,6 +86,8 @@ const INGEST_DEPS = {
 };
 
 const TEMPLATE = { name: 'welcome_message', language: 'he' };
+const FOLLOW_UP_TEMPLATE = { name: 'followup_nudge', language: 'he' };
+const TZ = 'Asia/Jerusalem';
 
 function inbound(text: string, id: string): InboundMessageEvent {
   return {
@@ -165,6 +168,56 @@ describe('lead lifecycle: form submission to qualification', () => {
     // currently-marketed remain.
     expect(result.stage).toBe('screening_neighborhood');
     expect(channel.sent.length).toBeGreaterThan(1);
+  });
+
+  it('nudges a silent lead, then stops — and a reply cancels the sequence', async () => {
+    // Requirement §2.3 and §2.6 end to end: the lead is contacted, ignores it,
+    // gets nudged, then answers — after which nothing further is scheduled.
+    const channel = new FakeChannel();
+    const DAY = 24 * 60 * 60 * 1000;
+    const limits = { intervalMs: DAY, maxFollowUps: 5, maxAgeMs: 5 * DAY };
+
+    const ingested = await ingestLead(
+      db,
+      { leadgenId: 'LEAD-4', formId: FORM_ID },
+      INGEST_DEPS,
+    );
+    const conversationId = ingested.conversationId!;
+
+    await sendFirstContact(
+      { db, channel, template: TEMPLATE, followUp: { limits, timeZone: TZ } },
+      conversationId,
+    );
+
+    // The opening scheduled a nudge rather than leaving the lead in silence.
+    const [afterOpening] = await db
+      .select()
+      .from(conversations)
+      .where(eq(conversations.id, conversationId));
+    expect(afterOpening?.nextFollowupAt).not.toBeNull();
+
+    // A day passes with no reply. The nudge needs a template, because a lead who
+    // never answered has no open window.
+    await db
+      .update(conversations)
+      .set({ nextFollowupAt: new Date(Date.now() - 1000) })
+      .where(eq(conversations.id, conversationId));
+
+    const nudge = await sendFollowUp(
+      { db, channel, limits, timeZone: TZ, templates: { noReply: FOLLOW_UP_TEMPLATE } },
+      conversationId,
+    );
+    expect(nudge).toMatchObject({ sent: true, followUpNumber: 1 });
+
+    // Now they answer. Any reply cancels the sequence and resets the counter.
+    await ingestMessage(db, inbound('בדיקת התאמה', 'wamid.LATE-REPLY'));
+
+    const [afterReply] = await db
+      .select()
+      .from(conversations)
+      .where(eq(conversations.id, conversationId));
+    expect(afterReply?.nextFollowupAt).toBeNull();
+    expect(afterReply?.followupCount).toBe(0);
   });
 
   it('never opens with a template for a lead who did not consent', async () => {

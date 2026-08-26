@@ -6,6 +6,7 @@ import { getLogger } from '../logger.js';
 import { WELCOME_MESSAGE } from '../workflow/interactive.js';
 import type { OutboundTemplate, WhatsAppChannel } from '../whatsapp/channel.js';
 import { guardedSend } from '../whatsapp/guardedSend.js';
+import { scheduleNextFollowUp, type FollowUpLimits } from './followUpPolicy.js';
 
 /**
  * Business-initiated first contact: the proactive reach-out to a lead who filled
@@ -38,6 +39,11 @@ export interface FirstContactDeps {
   channel: WhatsAppChannel;
   /** The approved template to open with. */
   template: OutboundTemplate;
+  /**
+   * When to nudge if the lead never answers. Absent means no follow-up is
+   * scheduled — the opening is sent and the sequence ends there.
+   */
+  followUp?: { limits: FollowUpLimits; timeZone: string } | undefined;
 }
 
 /**
@@ -131,9 +137,28 @@ export async function sendFirstContact(
       templateRef: deps.template.name,
     });
 
+    // Schedule the first nudge now, while we know the sequence just started.
+    // `recordInboundActivity` clears it the moment the lead replies, so the
+    // cancellation path needs no cooperation from here.
+    const now = new Date();
+    const nextFollowupAt = deps.followUp
+      ? scheduleNextFollowUp(
+          {
+            followupCount: 0,
+            silenceSince: now,
+            stageAllowsFollowUp: true,
+            lastInboundAt: null,
+            lastOutboundAt: now,
+          },
+          deps.followUp.limits,
+          deps.followUp.timeZone,
+          now,
+        )
+      : null;
+
     await tx
       .update(conversations)
-      .set({ lastOutboundAt: new Date(), updatedAt: new Date() })
+      .set({ lastOutboundAt: now, nextFollowupAt, updatedAt: now })
       .where(eq(conversations.id, conversationId));
 
     await tx.insert(events).values({

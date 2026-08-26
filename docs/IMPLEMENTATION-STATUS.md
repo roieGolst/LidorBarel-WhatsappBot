@@ -22,12 +22,12 @@ Requirements are numbered per [PRODUCT-REQUIREMENTS.md](PRODUCT-REQUIREMENTS.md)
 | 2a | Receive lead via `leadgen` webhook | ✅ | `src/leads/leadgenPayload.ts`, dispatched from the shared webhook route. |
 | 2b | Create / update contact + lead records | ✅ | `src/leads/ingestLead.ts`. Contact + conversation + referral in one transaction. |
 | 2c | Initiate WhatsApp contact via template | ✅ | `src/outreach/`. **Off by default** — `OUTREACH_ENABLED` must be set, and E-1 gates go-live. |
-| 3 | Follow-ups for up to five days | 📋 | `next_followup_at` / `followup_count` columns and index exist. No scheduler. |
+| 3 | Follow-ups for up to five days | ✅ | `src/outreach/followUp*.ts`. Two caps, business hours, Shabbat-safe. Out-of-window nudges need an approved template (E-10). |
 | 4a | Continue conversation, collect information | ✅ | The mature part of the system. |
 | 4b | Evaluate lead quality and readiness | ✅ | `qualified`, `disqualification_reason`, `priority_score`. |
 | 4c | Sync to Monday CRM | ❌ | No module, no dependency. `outbox` table written by nothing. |
 | 5 | Schedule consultation call | ❌ | No module, no dependency. |
-| 6 | Follow-up stop conditions | 🟡 | Opt-out and consent both enforced. No follow-ups exist yet to cancel — Phase 4. |
+| 6 | Follow-up stop conditions | ✅ | Reply, terminal stage, qualification complete, both caps, opt-out, consent. Each covered by a test. |
 | 7 | Never message after opt-out | ✅ | Enforced at `guardedSend`, the single choke point every send passes through. |
 
 ---
@@ -77,8 +77,8 @@ purpose — precedes the projection and booking layers**. The original ordering
 | **1** | `leadgen` intake: parse, retrieve by `leadgen_id`, persist contact + referral. **Sends nothing.** | 0 | ✅ Done |
 | **2** | Wire the consent gate (**D-1**) and window enforcement (**D-2**) | 1 | ✅ Done |
 | **3** | Approved-template first contact + grace period | 2, E-1 | ✅ Built (go-live waits on E-1) |
-| **4** | Follow-up scheduler with all stop conditions | 3 | ⏭ Next |
-| **5** | Monday sync via transactional outbox | 4 | Not started |
+| **4** | Follow-up scheduler with all stop conditions | 3 | ✅ Done |
+| **5** | Monday sync via transactional outbox | 4 | ⏭ Next |
 | **6** | Appointments + Google Calendar | 5 | Not started |
 | **7** | Admin panel, simulation, production readiness | 6 | Not started |
 
@@ -108,6 +108,38 @@ retired seller forms. Exactly one form is live: `1746567036243410`.
 rest are recorded for attribution with no conversation opened. Replacing the form
 (for updated privacy wording, say) means a new id in both lists — Meta forms are
 immutable, so wording changes always produce a new form.
+
+### What Phase 4 delivers
+
+The follow-up sequence, and — more to the point — every way it stops.
+
+**Two independent caps.** The requirement says "up to five days"; the spec says
+"5 messages, 1 day apart". Both are enforced and whichever is reached first ends
+the sequence, because reading either loosely means messaging someone on day six.
+
+**Anchored on the silence, not the conversation.** The cap runs from the person's
+last message, or the opening if they never replied. A lead who answers on day six
+and then goes quiet is entitled to the same sequence as one who never answered;
+anchoring on conversation age would silently deny it. Equally, "has replied" is
+never the stop test — a mid-qualification lead has replied many times. The test is
+whether they answered our *latest* message.
+
+**Stops:** a reply, a terminal stage, `qualified` or `appointment_confirmed`
+(requirement §2.6's "completes the qualification process"), either cap, opt-out,
+or missing consent. Reaching a cap also closes the conversation, so it leaves the
+working set. Every path clears the schedule, so nothing can sit due forever.
+
+**Business hours.** Never on Shabbat; Sun–Thu 08:00–20:00, Fri 08:00–14:00 in
+`APP_TIMEZONE`. A due nudge is shifted into the next open slot — but shifting may
+not push it past the five-day cap, so a message moved out of Shabbat can end the
+sequence instead of extending it. Hour-by-hour stepping keeps this correct across
+Israel's DST change.
+
+**Two out-of-window templates, not one.** Which is sent depends on `lastInboundAt`: someone who never answered needs re-introducing, someone mid-qualification does not. A missing template means that nudge is skipped rather than substituted.
+
+**Wording is written, not generated.** A background nudge with nobody watching
+does not need an LLM turn, and `followUpMessages.test.ts` runs each message
+through the same voice validator the model's replies face.
 
 ### What Phase 3 delivers
 
@@ -198,15 +230,17 @@ onward, so start them early.
 | E-6 | ✅ Done — Monday native Lead Ads integration disabled | — |
 | E-7 | Monday API token + the five additive column IDs | Phase 5 |
 | E-8 | Google Cloud project, calendar credentials and sharing | Phase 6 |
+| E-10 | **Approved template: nudging a lead who never replied.** They have no messaging window, so without it non-responders cannot be nudged at all. Drafted and validated — see the Phase 4 notes. | Nudging non-responders |
+| E-11 | **Approved template: nudging a lead who started and stopped.** Different wording — thanking someone mid-qualification for "leaving details" reads as though we lost track of them. Without it, those nudges only work within 24 hours of their last message. | Nudging partial completions |
 
 ---
 
 ## 6. Test coverage reality
 
-527 tests across 36 files, colocated, with integration tests running against a
-real PostgreSQL. Phase 3 added the first-contact suite — at-most-once delivery
-under concurrent sweeps, claim release on failure, and the grace period — plus
-the end-to-end lifecycle test.
+587 tests across 39 files, colocated, with integration tests running against a
+real PostgreSQL. Phase 4 added the stop-condition suite — every cap, stage, and
+refusal asserted separately — plus Shabbat and business-hours cases pinned to
+real Israeli local times in both DST states.
 Coverage of the inbound engine is genuinely strong.
 
 **The end-to-end test now exists**: `src/e2e/leadLifecycle.test.ts` carries a lead

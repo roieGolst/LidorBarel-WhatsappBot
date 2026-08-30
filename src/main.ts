@@ -1,4 +1,4 @@
-import 'dotenv/config';
+ import 'dotenv/config';
 import type { PostgresSaver } from '@langchain/langgraph-checkpoint-postgres';
 import { ConfigError, getConfig, type Config } from './config.js';
 import { refreshMediaCatalog } from './whatsapp/mediaCatalog.js';

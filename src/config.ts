@@ -203,6 +203,27 @@ const configSchema = z.object({
   /** Language code for both follow-up templates. */
   followUpTemplateLanguage: z.string().min(1).default('he'),
 
+  // --- Monday.com (CRM projection) -------------------------------------------
+  //
+  // Optional: without a token the outbox simply holds events until one appears.
+  // Nothing is lost — Postgres is the source of truth and the board is rebuilt
+  // from it (rule NN-4).
+
+  /** API token for the Monday account. Never logged. */
+  mondayApiToken: z.string().min(1).optional(),
+
+  /** Pinned API version, so Monday cannot change the schema under us. */
+  mondayApiVersion: z.string().min(1).default('2024-10'),
+
+  /** How often to drain the outbox into Monday. */
+  outboxIntervalSeconds: z.coerce.number().int().min(1).max(3600).default(10),
+
+  /** Events claimed per drain. */
+  outboxBatchSize: z.coerce.number().int().min(1).max(500).default(50),
+
+  /** Delivery attempts before an event is parked as failed for inspection. */
+  outboxMaxAttempts: z.coerce.number().int().min(1).max(50).default(8),
+
   // --- Anthropic (LLM) ------------------------------------------------------
   //
   // Optional as a group so the app still boots for tests and simulation, which
@@ -253,6 +274,11 @@ function readEnv(env: NodeJS.ProcessEnv): Record<string, unknown> {
     followUpTemplateName: env.FOLLOWUP_TEMPLATE_NAME,
     followUpIncompleteTemplateName: env.FOLLOWUP_INCOMPLETE_TEMPLATE_NAME,
     followUpTemplateLanguage: env.FOLLOWUP_TEMPLATE_LANGUAGE,
+    mondayApiToken: env.MONDAY_API_TOKEN,
+    mondayApiVersion: env.MONDAY_API_VERSION,
+    outboxIntervalSeconds: env.OUTBOX_INTERVAL_SECONDS,
+    outboxBatchSize: env.OUTBOX_BATCH_SIZE,
+    outboxMaxAttempts: env.OUTBOX_MAX_ATTEMPTS,
     anthropicApiKey: env.ANTHROPIC_API_KEY,
   };
 }
@@ -288,6 +314,11 @@ const ENV_VAR_NAMES: Record<keyof Config, string> = {
   followUpTemplateName: 'FOLLOWUP_TEMPLATE_NAME',
   followUpIncompleteTemplateName: 'FOLLOWUP_INCOMPLETE_TEMPLATE_NAME',
   followUpTemplateLanguage: 'FOLLOWUP_TEMPLATE_LANGUAGE',
+  mondayApiToken: 'MONDAY_API_TOKEN',
+  mondayApiVersion: 'MONDAY_API_VERSION',
+  outboxIntervalSeconds: 'OUTBOX_INTERVAL_SECONDS',
+  outboxBatchSize: 'OUTBOX_BATCH_SIZE',
+  outboxMaxAttempts: 'OUTBOX_MAX_ATTEMPTS',
   anthropicApiKey: 'ANTHROPIC_API_KEY',
 };
 

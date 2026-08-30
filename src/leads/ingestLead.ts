@@ -6,6 +6,7 @@ import { findOrCreateConversation } from '../db/repositories/conversations.js';
 import { campaignReferrals, conversations } from '../db/schema.js';
 import { tryNormalizePhone } from '../domain/phone.js';
 import { getLogger } from '../logger.js';
+import { enqueueOutboxEvent } from '../outbox/outbox.js';
 import {
   decideConsent,
   mapLeadFields,
@@ -166,6 +167,15 @@ export async function ingestLead(
       })
       .onConflictDoNothing({ target: campaignReferrals.externalLeadId })
       .returning({ id: campaignReferrals.id });
+
+    // A paid lead should reach Lidor's board straight away, not only once the
+    // person replies. Queued in this transaction, so a lead cannot exist without
+    // its projection being queued. Only for a lead we actually engage — an
+    // investor-form lead is recorded for attribution and does not belong on the
+    // seller board.
+    if (inserted.length > 0 && conversationId) {
+      await enqueueOutboxEvent(tx, conversationId);
+    }
 
     return {
       leadgenId: event.leadgenId,

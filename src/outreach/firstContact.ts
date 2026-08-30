@@ -3,6 +3,7 @@ import type { Database } from '../db/client.js';
 import { findContactById } from '../db/repositories/contacts.js';
 import { conversations, events, messages } from '../db/schema.js';
 import { getLogger } from '../logger.js';
+import { enqueueOutboxEvent } from '../outbox/outbox.js';
 import { WELCOME_MESSAGE } from '../workflow/interactive.js';
 import type { OutboundTemplate, WhatsAppChannel } from '../whatsapp/channel.js';
 import { guardedSend } from '../whatsapp/guardedSend.js';
@@ -170,6 +171,8 @@ export async function sendFirstContact(
       actor: 'system',
       metadata: { action: 'send_first_contact', template: deps.template.name },
     });
+
+    await enqueueOutboxEvent(tx, conversationId);
   });
 
   // Safe to log: conversation id and template name only, never the phone.

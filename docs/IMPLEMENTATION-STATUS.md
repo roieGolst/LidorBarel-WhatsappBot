@@ -25,7 +25,7 @@ Requirements are numbered per [PRODUCT-REQUIREMENTS.md](PRODUCT-REQUIREMENTS.md)
 | 3 | Follow-ups for up to five days | ✅ | `src/outreach/followUp*.ts`. Two caps, business hours, Shabbat-safe. Out-of-window nudges need an approved template (E-10). |
 | 4a | Continue conversation, collect information | ✅ | The mature part of the system. |
 | 4b | Evaluate lead quality and readiness | ✅ | `qualified`, `disqualification_reason`, `priority_score`. |
-| 4c | Sync to Monday CRM | ❌ | No module, no dependency. `outbox` table written by nothing. |
+| 4c | Sync to Monday CRM | ✅ | `src/monday/` + `src/outbox/`. Verified against the live board. `ציון רצינות` awaits approved weights. |
 | 5 | Schedule consultation call | ❌ | No module, no dependency. |
 | 6 | Follow-up stop conditions | ✅ | Reply, terminal stage, qualification complete, both caps, opt-out, consent. Each covered by a test. |
 | 7 | Never message after opt-out | ✅ | Enforced at `guardedSend`, the single choke point every send passes through. |
@@ -78,8 +78,8 @@ purpose — precedes the projection and booking layers**. The original ordering
 | **2** | Wire the consent gate (**D-1**) and window enforcement (**D-2**) | 1 | ✅ Done |
 | **3** | Approved-template first contact + grace period | 2, E-1 | ✅ Built (go-live waits on E-1) |
 | **4** | Follow-up scheduler with all stop conditions | 3 | ✅ Done |
-| **5** | Monday sync via transactional outbox | 4 | ⏭ Next |
-| **6** | Appointments + Google Calendar | 5 | Not started |
+| **5** | Monday sync via transactional outbox | 4 | ✅ Done |
+| **6** | Appointments via פעילות (Monday writes the Calendar event) | 5 | ⏭ Next — much smaller than planned |
 | **7** | Admin panel, simulation, production readiness | 6 | Not started |
 
 Phase 1 required **no migration** — `campaign_referrals.form_id` and
@@ -108,6 +108,36 @@ retired seller forms. Exactly one form is live: `1746567036243410`.
 rest are recorded for attribution with no conversation opened. Replacing the form
 (for updated privacy wording, say) means a new id in both lists — Meta forms are
 immutable, so wording changes always produce a new form.
+
+### What Phase 5 delivers
+
+The Monday projection, through a transactional outbox.
+
+**The outbox event is written in the same transaction as the state change**, which
+is the property that matters: a conversation cannot advance without its
+projection being queued, and the conversation never waits on Monday to do it. A
+Monday outage delays the board and nothing else (NN-4).
+
+Delivery carries no payload beyond the conversation id — the worker re-reads
+current state, so a delayed, repeated, or out-of-order delivery projects the
+truth rather than a stale snapshot. That also makes several events for one
+conversation coalesce into a single write.
+
+Written against the **real board**, verified live: every column id, label id, and
+value format was exercised against Monday before the code was trusted, including
+a create/update/move/delete round trip.
+
+Two behaviours worth knowing:
+
+- **Status is set after creation, not during it.** A board automation sets
+  `ליד חדש` on create; passing a status in the same mutation races it.
+- **The bot moves one group and only one.** Automations file every status except
+  the disqualified/opted-out set, which the bot files into `לידים לא מתאימים`
+  itself. See [MONDAY-MAPPING.md](MONDAY-MAPPING.md).
+
+`ציון רצינות` is deliberately **not populated**: the current score is
+one-dimensional (timeline only, five possible values) and would put a misleading
+number in front of Lidor. It waits on approved weights.
 
 ### What Phase 4 delivers
 
@@ -228,8 +258,8 @@ onward, so start them early.
 | E-4 | ✅ Done — template approved by Meta | — |
 | E-5 | `leads_retrieval` permission + Page access token (`META_PAGE_ACCESS_TOKEN`) + Page subscribed to `leadgen` | Phase 1 go-live |
 | E-6 | ✅ Done — Monday native Lead Ads integration disabled | — |
-| E-7 | Monday API token + the five additive column IDs | Phase 5 |
-| E-8 | Google Cloud project, calendar credentials and sharing | Phase 6 |
+| ~~E-7~~ | ✅ Done — token in place, columns verified live, board automations corrected | — |
+| ~~E-8~~ | ~~Google Cloud project, calendar credentials~~ **Dropped.** פעילות is bidirectionally synced with Lidor's calendar, so booking is a Monday write and availability is a Monday read. | — |
 | E-10 | **Approved template: nudging a lead who never replied.** They have no messaging window, so without it non-responders cannot be nudged at all. Drafted and validated — see the Phase 4 notes. | Nudging non-responders |
 | E-11 | **Approved template: nudging a lead who started and stopped.** Different wording — thanking someone mid-qualification for "leaving details" reads as though we lost track of them. Without it, those nudges only work within 24 hours of their last message. | Nudging partial completions |
 

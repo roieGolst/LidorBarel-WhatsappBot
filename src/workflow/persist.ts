@@ -2,6 +2,7 @@ import { eq } from 'drizzle-orm';
 import type { Database } from '../db/client.js';
 import type { ConversationStage } from '../db/repositories/conversations.js';
 import { contacts, conversations, events, messages, optOuts } from '../db/schema.js';
+import { enqueueOutboxEvent } from '../outbox/outbox.js';
 import {
   leadPriorityScore,
   type DisqualificationReason,
@@ -122,6 +123,11 @@ export async function persistTurn(db: Database, input: PersistTurnInput): Promis
         })
         .onConflictDoNothing({ target: messages.providerMessageId });
     }
+
+    // Queued in the same transaction as the state change it describes: the
+    // conversation cannot advance without its projection being queued, and the
+    // conversation never waits on Monday to do it.
+    await enqueueOutboxEvent(tx, input.conversationId);
 
     await tx.insert(events).values({
       aggregateType: 'conversation',

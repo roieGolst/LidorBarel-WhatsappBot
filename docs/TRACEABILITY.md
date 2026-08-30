@@ -34,7 +34,9 @@ Last updated: 2026-08-23
 | 4b | Screening and stage transitions | `workflow/decide.ts` | `decide.test.ts` | ✅ |
 | 4b | Intent / extraction classification | `workflow/classify.ts` | `classify.test.ts` | ✅ |
 | 4b | Priority score | `workflow/decide.ts` (`leadPriorityScore`) | `decide.test.ts` | ✅ |
-| 4c | Monday projection via outbox | *(none — `outbox` table unused)* | *(none)* | ❌ |
+| 4c | Monday projection via outbox | `monday/syncLead.ts` · `outbox/outbox.ts` · `outbox/outboxWorker.ts` | `mondayProjection.test.ts` · `leadMapping.test.ts` | ✅ |
+| 4c | Outbox written in the state change's transaction | `workflow/persist.ts` · `leads/ingestLead.ts` · `outreach/firstContact.ts` | `e2e/leadLifecycle.test.ts` | ✅ |
+| NN-4 | A Monday outage cannot interrupt a conversation | delivery is out of the reply path | `mondayProjection.test.ts` (retry/park) | ✅ |
 | 5 | Appointment offer, hold, approval, Calendar write | *(none — tables unused)* | *(none)* | ❌ |
 | 6 | Stop conditions cancel follow-ups | `outreach/followUp.ts` · `db/repositories/conversations.ts` (`recordInboundActivity`) | `followUp.test.ts` (stop conditions) · `e2e/leadLifecycle.test.ts` | ✅ |
 | 7 | No message after opt-out | `whatsapp/guardedSend.ts` | `guardedSend.test.ts` | ✅ |

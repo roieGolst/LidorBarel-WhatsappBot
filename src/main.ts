@@ -1,10 +1,12 @@
- import 'dotenv/config';
+import 'dotenv/config';
 import type { PostgresSaver } from '@langchain/langgraph-checkpoint-postgres';
 import { ConfigError, getConfig, type Config } from './config.js';
 import { refreshMediaCatalog } from './whatsapp/mediaCatalog.js';
 import { closeDatabase, getDatabase } from './db/client.js';
 import { getFreshMediaId, saveMediaId } from './db/repositories/mediaUploads.js';
 import { createGraphLeadsClient } from './leads/graphLeads.js';
+import { createMondayClient } from './monday/client.js';
+import { startOutboxWorker, type OutboxWorker } from './outbox/outboxWorker.js';
 import {
   startOutreachSweeper,
   type OutreachSweeper,
@@ -262,6 +264,29 @@ async function main(): Promise<void> {
     );
   }
 
+  // Monday projection. Runs independently of everything else: without a token
+  // the outbox simply accumulates, and nothing is lost because Postgres is the
+  // source of truth and the board is rebuilt from it (NN-4).
+  let outboxWorker: OutboxWorker | undefined;
+  const monday = createMondayClient();
+  if (!monday) {
+    log.warn('Monday projection disabled: MONDAY_API_TOKEN is unset — events will queue');
+  } else {
+    outboxWorker = startOutboxWorker({
+      db,
+      monday,
+      // Form names make the board readable; an id tells Lidor nothing. Absent a
+      // leads client the column is simply left empty.
+      ...(leadsClient
+        ? { resolveFormName: (formId: string) => leadsClient.formName(formId) }
+        : {}),
+      intervalMs: config.outboxIntervalSeconds * 1000,
+      batchSize: config.outboxBatchSize,
+      maxAttempts: config.outboxMaxAttempts,
+    });
+    log.info('Monday projection enabled');
+  }
+
   const app = buildServer({
     db,
     config,
@@ -293,6 +318,7 @@ async function main(): Promise<void> {
         // Stopped before the worker and the database: a sweep in flight would
         // otherwise try to send through a closing channel.
         outreach?.stop();
+        outboxWorker?.stop();
         if (pipeline) {
           await pipeline.worker.close();
           await pipeline.queue.close();
@@ -338,6 +364,7 @@ async function main(): Promise<void> {
       conversationWorker: pipeline ? 'enabled' : 'disabled',
       leadgenIntake: leadIngest ? 'enabled' : 'disabled',
       proactiveOutreach: outreach ? 'enabled' : 'disabled',
+      mondayProjection: outboxWorker ? 'enabled' : 'disabled',
     },
     'server started',
   );

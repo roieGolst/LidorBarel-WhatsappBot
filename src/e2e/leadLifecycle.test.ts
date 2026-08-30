@@ -3,7 +3,7 @@ import type { PostgresSaver } from '@langchain/langgraph-checkpoint-postgres';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import type { Database } from '../db/client.js';
 import { findContactByPhone } from '../db/repositories/contacts.js';
-import { conversations } from '../db/schema.js';
+import { conversations, outbox } from '../db/schema.js';
 import { setupTestDatabase, testDatabaseUrl, truncateAll } from '../db/testing.js';
 import type { GraphLeadsClient, RetrievedLead } from '../leads/graphLeads.js';
 import { ingestLead } from '../leads/ingestLead.js';
@@ -124,6 +124,16 @@ describe('lead lifecycle: form submission to qualification', () => {
     expect(afterIngest?.extracted).toEqual({
       sellIntent: 'ready',
       timeline: 'immediate',
+    });
+
+    // The projection was queued in the same transaction as the lead itself, so a
+    // paid lead cannot exist without Lidor's board being told about it.
+    const queued = await db.select().from(outbox);
+    expect(queued).toHaveLength(1);
+    expect(queued[0]).toMatchObject({
+      aggregateId: conversationId,
+      eventType: 'monday_lead_sync',
+      status: 'pending',
     });
 
     // 2. The grace period elapses and the bot opens with the approved template.

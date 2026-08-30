@@ -59,12 +59,20 @@ The previous column (`dropdown_mm6ah57b`, 10 labels, `א` where the domain says
 
 ### `lead_status` and groups
 
-**The bot writes `lead_status` only. It must never move an item between groups.**
+**The bot writes `lead_status` always, and moves groups only for the six statuses
+no automation covers.**
 
-The board already carries ~12 automations, and group membership is entirely
-derived from status by them (`ליד חדש` → `לידים חדשים`, `ממתין לשיחה` →
-`לידים בטיפול`, and so on). A bot that also moved groups would race those
-automations and make the board flap.
+Group membership is otherwise derived from status by the board's own automations
+(`ליד חדש` → `לידים חדשים`, `ממתין לשיחה` → `לידים בטיפול`, and so on), and moving
+those groups from code would race them and make the board flap.
+
+The exception is the disqualified/opted-out set — statuses `4`, `6`, `7`, `8`,
+`9`, `10` — which has no automation. For those, and only those, the bot also
+moves the item to **`group_mm6qfq86` (לידים לא מתאימים)**.
+
+This split is deliberate, not an oversight. If automations are added for those
+statuses later, the bot's move becomes a harmless no-op — it targets the same
+group — so the two cannot conflict.
 
 There is one automation the bot has to accommodate rather than fight:
 
@@ -80,8 +88,8 @@ automation wins about as often as it loses.
 | engaged / screening_* | `2` ליד חדש | לידים חדשים |
 | qualified / handed_off | `14` ממתין לשיחה | לידים בטיפול |
 | appointment_confirmed | `0` ממתין לפגישה ייעוץ | לידים בטיפול |
-| disqualified | `7` exclusive · `8` uncooperative · `9` no_urgency · `10` not_selling | ⚠️ none yet |
-| opted_out | `6` ביקש להפסיק | ⚠️ none yet |
+| disqualified | `7` exclusive · `8` uncooperative · `9` no_urgency · `10` not_selling | לידים לא מתאימים — **bot moves** |
+| opted_out | `6` ביקש להפסיק | לידים לא מתאימים — **bot moves** |
 | closed_no_response | `3` ליד ללא מענה | לידים ללא מענה |
 | unusable phone | `5` חסר מידע | לידים בטיפול |
 
@@ -96,33 +104,28 @@ phone someone mid-qualification.
 
 These are in the board today and each one misfires once the bot starts writing.
 
-**1. A disqualified lead would be created as a client.**
+All three are resolved (2026-08-26). Kept here because each explains why the
+current arrangement is the way it is, and undoing any of them reintroduces a
+specific failure.
 
-> `When an item is moved to לידים סגורים → create an item in לקוחות`
+**1. ✅ A disqualified lead would have been created as a client.**
 
-Only `ליד מוצלח (לקוח)` reaches that group today, so it is correct as it stands.
-But the disqualification statuses (`7/8/9/10`) have no group automation yet, and
-the obvious fix — routing them to `לידים סגורים` — would create a client record
-for someone who just said they are not selling.
+`create an item in לקוחות` used to trigger on *movement into* `לידים סגורים`.
+That was correct only while a won lead was the only thing reaching that group;
+routing disqualified leads there would have created a client record for someone
+who had just said they were not selling. Now triggered on
+**status = `ליד מוצלח (לקוח)`**. Do not move it back to a group trigger.
 
-Fix: trigger the `לקוחות` creation on **status = `ליד מוצלח (לקוח)`**, not on the
-group move. The status carries the meaning; the group is a view of it.
+**2. ✅ `אינטרקציה אחרונה` would have flooded Lidor.**
 
-**2. `אינטרקציה אחרונה` will flood Lidor with notifications.**
+A date-arrives notification on a field the bot updates on every message. Deleted.
+The daily digest (`passed in the last 7 days → notify`) expresses the same intent
+without firing per message, and remains.
 
-> `When אינטרקציה אחרונה arrives, notify Lidor Barel`
+**3. ✅ Six statuses had no group.**
 
-A date-arrives trigger on a field the bot updates on every message. The daily
-digest automation (`if אינטרקציה אחרונה passed in the last 7 days → notify`) is
-the same intent without the noise; keep that one and drop this.
-
-**3. Six statuses have no group automation.**
-
-`4` ליד לא מתאים · `6` ביקש להפסיק · `7` בלעדיות · `8` לא שיתף פעולה ·
-`9` אין דחיפות · `10` לא מעוניין למכור.
-
-They need a home that is **not** `לידים סגורים` — suggested: a new
-`לידים לא מתאימים` group, leaving `סגורים` to mean *won*.
+`לידים לא מתאימים` (`group_mm6qfq86`) now exists for them, keeping `סגורים` to
+mean *won*. No automation drives it, so the bot performs that move itself.
 
 ### Automations the bot depends on
 

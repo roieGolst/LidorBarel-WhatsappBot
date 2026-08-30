@@ -59,26 +59,83 @@ The previous column (`dropdown_mm6ah57b`, 10 labels, `א` where the domain says
 
 ### `lead_status` and groups
 
-The bot writes **both together**. Two columns encoding one state is how they
-drift, so there must be no Monday automation moving groups — it would race the
-bot's writes.
+**The bot writes `lead_status` only. It must never move an item between groups.**
 
-| Our stage | Group | `lead_status` |
+The board already carries ~12 automations, and group membership is entirely
+derived from status by them (`ליד חדש` → `לידים חדשים`, `ממתין לשיחה` →
+`לידים בטיפול`, and so on). A bot that also moved groups would race those
+automations and make the board flap.
+
+There is one automation the bot has to accommodate rather than fight:
+
+> `When an item is created → set סטטוס to ליד חדש, set אינטרקציה אחרונה to today`
+
+So an item is **created first and its status set afterwards**, in a second call.
+Setting status inside the create mutation races the automation, and the
+automation wins about as often as it loses.
+
+| Our stage | `lead_status` the bot writes | Group (by automation) |
 |---|---|---|
-| awaiting_first_contact | לידים חדשים | `2` ליד חדש |
-| engaged / screening_* | לידים בטיפול | `2` ליד חדש |
-| qualified / handed_off | לידים בטיפול | `14` ממתין לשיחה |
-| appointment_confirmed | לידים בטיפול | `0` ממתין לפגישה ייעוץ |
-| disqualified | לידים סגורים | `7` exclusive · `8` uncooperative · `9` no_urgency · `10` not_selling |
-| opted_out | לידים סגורים | `6` ביקש להפסיק |
-| closed_no_response | לידים ללא מענה | `3` ליד ללא מענה |
-| unusable phone | לידים סגורים | `5` חסר מידע |
+| awaiting_first_contact | `2` ליד חדש | לידים חדשים |
+| engaged / screening_* | `2` ליד חדש | לידים חדשים |
+| qualified / handed_off | `14` ממתין לשיחה | לידים בטיפול |
+| appointment_confirmed | `0` ממתין לפגישה ייעוץ | לידים בטיפול |
+| disqualified | `7` exclusive · `8` uncooperative · `9` no_urgency · `10` not_selling | ⚠️ none yet |
+| opted_out | `6` ביקש להפסיק | ⚠️ none yet |
+| closed_no_response | `3` ליד ללא מענה | לידים ללא מענה |
+| unusable phone | `5` חסר מידע | לידים בטיפול |
 
 `1` ליד מוצלח (לקוח) is **Lidor's**, set by hand when a lead converts. The bot
 must never write it.
 
-Moving to `לידים בטיפול` on the lead's first reply is what tells Lidor the bot is
-mid-conversation — calling someone at that moment wastes the qualification.
+Reaching `ממתין לשיחה` is what tells Lidor the bot is done and the lead is his to
+call — before that the automations keep it in `לידים בטיפול`, so he knows not to
+phone someone mid-qualification.
+
+### ⚠️ Automation problems to resolve before go-live
+
+These are in the board today and each one misfires once the bot starts writing.
+
+**1. A disqualified lead would be created as a client.**
+
+> `When an item is moved to לידים סגורים → create an item in לקוחות`
+
+Only `ליד מוצלח (לקוח)` reaches that group today, so it is correct as it stands.
+But the disqualification statuses (`7/8/9/10`) have no group automation yet, and
+the obvious fix — routing them to `לידים סגורים` — would create a client record
+for someone who just said they are not selling.
+
+Fix: trigger the `לקוחות` creation on **status = `ליד מוצלח (לקוח)`**, not on the
+group move. The status carries the meaning; the group is a view of it.
+
+**2. `אינטרקציה אחרונה` will flood Lidor with notifications.**
+
+> `When אינטרקציה אחרונה arrives, notify Lidor Barel`
+
+A date-arrives trigger on a field the bot updates on every message. The daily
+digest automation (`if אינטרקציה אחרונה passed in the last 7 days → notify`) is
+the same intent without the noise; keep that one and drop this.
+
+**3. Six statuses have no group automation.**
+
+`4` ליד לא מתאים · `6` ביקש להפסיק · `7` בלעדיות · `8` לא שיתף פעולה ·
+`9` אין דחיפות · `10` לא מעוניין למכור.
+
+They need a home that is **not** `לידים סגורים` — suggested: a new
+`לידים לא מתאימים` group, leaving `סגורים` to mean *won*.
+
+### Automations the bot depends on
+
+Worth knowing, because removing one silently changes behaviour:
+
+| Trigger | Effect |
+|---|---|
+| item created | status → `ליד חדש`, `אינטרקציה אחרונה` → today |
+| status → `ליד חדש` | move to `לידים חדשים` |
+| status → `ממתין לשיחה` / `ממתין לפגישה ייעוץ` / `חסר מידע` | move to `לידים בטיפול` |
+| status → `ליד ללא מענה` | move to `לידים ללא מענה` |
+| status → `ליד מוצלח (לקוח)` | move to `לידים סגורים` |
+| activity created in Emails & Activities | create a `פעילות` item and link it back |
 
 ## פעילות — appointments
 

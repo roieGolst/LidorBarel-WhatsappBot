@@ -35,6 +35,7 @@ export type TurnAction =
   | 'ask_intent' // gauge seriousness/motivation before handing off
   | 'low_intent_hold' // just price-checking → don't forward to Lidor
   | 'proceed_qualified'
+  | 'offer_slots' // qualified AND asked to book → offer real free times
   | 'send_disqualification'
   | 'acknowledge_opt_out'
   | 'answer_faq'
@@ -91,6 +92,7 @@ export function decideTransition(
   analysis: Analysis,
   known: KnownFacts = {},
   screenAll = false,
+  canBook = false,
 ): Decision {
   // Whether the reply needs the stronger model. Frustration pushes to Sonnet;
   // screening answers stay on Haiku (§7).
@@ -145,7 +147,7 @@ export function decideTransition(
   //     still continue the flow — they fall through to the screening rule below.
   if (confident && analysis.extracted.bookingIntent === true && current !== 'qualified') {
     return alsoAnswering(
-      nextScreeningStep(current, bookingFacts(facts), screenAll, escalate, true),
+      nextScreeningStep(current, bookingFacts(facts), screenAll, escalate, true, canBook),
       analysis,
     );
   }
@@ -205,7 +207,7 @@ export function decideTransition(
   //    same question, whose buttons are already in front of the person — the flow
   //    never dead-ends on "rephrase".
   return alsoAnswering(
-    nextScreeningStep(current, facts, screenAll, escalate, intentSubstance),
+    nextScreeningStep(current, facts, screenAll, escalate, intentSubstance, canBook),
     analysis,
   );
 }
@@ -254,6 +256,7 @@ export function decideMainMenu(
   current: ConversationStage,
   known: KnownFacts = {},
   screenAll = false,
+  canBook = false,
 ): Decision {
   switch (choice) {
     case 'check_fit':
@@ -278,6 +281,7 @@ export function decideMainMenu(
         screenAll,
         false,
         choice === 'book_meeting',
+        canBook,
       );
     }
     case 'testimonials':
@@ -309,6 +313,7 @@ function nextScreeningStep(
   screenAll: boolean,
   escalate: boolean,
   intentHasSubstance = false,
+  canBook = false,
 ): Decision {
   if (screenAll && facts.sellIntent === undefined) {
     return { nextStage: 'screening_sell_intent', action: 'ask_sell_intent', escalate };
@@ -347,6 +352,19 @@ function nextScreeningStep(
   if (!intentHasSubstance) {
     return { nextStage: 'assessing_intent', action: 'ask_intent', escalate: true };
   }
+  // A qualified lead who asked for a meeting is offered real times rather than a
+  // promise that Lidor will call: they have already said yes, and making them
+  // wait for a callback is where that intent goes cold. Only when booking is
+  // actually wired up — otherwise the handoff is still the honest answer.
+  if (canBook && facts.bookingIntent === true) {
+    return {
+      nextStage: 'appointment_proposed',
+      action: 'offer_slots',
+      qualified: true,
+      escalate,
+    };
+  }
+
   return {
     nextStage: 'qualified',
     action: 'proceed_qualified',

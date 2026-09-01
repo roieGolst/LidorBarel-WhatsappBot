@@ -21,6 +21,23 @@ import type {
   WhatsAppChannel,
 } from '../whatsapp/channel.js';
 import { guardedSend } from '../whatsapp/guardedSend.js';
+import {
+  bookSlot,
+  findSlotsToOffer,
+  latestOffer,
+  recordOffer,
+  type BookingDeps,
+} from '../appointments/booking.js';
+import {
+  NO_SLOTS_MESSAGE,
+  SLOT_OFFER_BODY,
+  SLOT_OFFER_BUTTON,
+  SLOT_TAKEN_MESSAGE,
+  bookingConfirmation,
+  matchSlot,
+  parseStoredSlots,
+  slotListRows,
+} from '../appointments/slotMessages.js';
 import { scheduleNextFollowUp, type FollowUpLimits } from '../outreach/followUpPolicy.js';
 import { followUpAllowedFrom } from '../outreach/followUp.js';
 import type { Conversation } from '../db/repositories/conversations.js';
@@ -97,6 +114,12 @@ export interface ConversationDeps {
    * want — the scheduling is a production concern, not a conversation one.
    */
   followUp?: { limits: FollowUpLimits; timeZone: string } | undefined;
+  /**
+   * Booking. Absent means a qualified lead who asks for a meeting is handed to
+   * Lidor instead of offered times — which is the honest answer when nothing can
+   * actually write to his calendar.
+   */
+  appointments?: BookingDeps | undefined;
 }
 
 /** One message to send this turn, before it has a provider id. */
@@ -336,6 +359,15 @@ const DEV_RESET_CONFIRMATION =
  * the pending question still stands. On a burst of photos it is sent once (see
  * the dedupe in the entrypoint), not once per image.
  */
+/**
+ * How long an offer of times stays honourable.
+ *
+ * Not a reservation — nothing is written to the calendar until a time is chosen.
+ * It bounds how long the offer is trusted, after which availability is
+ * recomputed rather than assumed.
+ */
+const OFFER_HOLD_MS = 30 * 60 * 1000;
+
 const PHOTO_ACK_MESSAGE = 'קיבלתי את התמונות, תודה! 📸 אצרף אותן לפרטים שיעברו ללידור.';
 
 /** Stored placeholder for the sent testimonial video. */
@@ -638,6 +670,103 @@ export function createConversationWorkflow(
       });
       if (gate.kind !== 'proceed') {
         return handleGate(gate, ctx, conversationId);
+      }
+
+      // Slot selection: the lead answered an offer of meeting times. Handled
+      // before classification because a tapped time needs no interpretation —
+      // and running it through the model risks a "yes I want that one" being
+      // read as an answer to whatever question came before.
+      //
+      // A reply that matches nothing falls through to the normal flow: someone
+      // offered three times may well ask a question instead of picking one.
+      if (ctx.stage === 'appointment_proposed' && deps.appointments) {
+        const timeZone = deps.appointments.slotOptions.timeZone;
+        const offer = await latestOffer(deps.db, conversationId);
+        const chosen = offer
+          ? matchSlot(ctx.currentText, parseStoredSlots(offer.proposedSlots), timeZone)
+          : undefined;
+
+        if (chosen) {
+          const outcome = await bookSlot(deps.appointments, conversationId, chosen);
+
+          if (outcome.booked) {
+            const text = bookingConfirmation(chosen, timeZone);
+            const { providerMessageId } = await send({
+              to: ctx.contactPhone,
+              conversation: ctx,
+              part: { kind: 'text', text },
+            });
+            await persist({
+              conversationId,
+              contactId: ctx.contactId,
+              contactPhone: ctx.contactPhone,
+              fromStage: ctx.stage,
+              toStage: 'appointment_confirmed',
+              action: 'confirm_booking',
+              extracted: ctx.known,
+              outbound: [{ body: text, providerMessageId }],
+            });
+            return {
+              stage: 'appointment_confirmed',
+              action: 'confirm_booking',
+              text,
+              sent: true,
+            };
+          }
+
+          // Taken between the offer and the tap. Apologise and offer what is
+          // left rather than leaving them with a booking that silently failed.
+          const fresh = await findSlotsToOffer(deps.appointments);
+          const parts: { part: OutboundPart; storeBody: string }[] = fresh.length
+            ? [
+                {
+                  part: {
+                    kind: 'list' as const,
+                    body: SLOT_TAKEN_MESSAGE,
+                    buttonLabel: SLOT_OFFER_BUTTON,
+                    rows: slotListRows(fresh, timeZone),
+                  },
+                  storeBody: SLOT_TAKEN_MESSAGE,
+                },
+              ]
+            : [
+                {
+                  part: { kind: 'text' as const, text: NO_SLOTS_MESSAGE },
+                  storeBody: NO_SLOTS_MESSAGE,
+                },
+              ];
+
+          if (fresh.length) {
+            await recordOffer(deps.appointments, conversationId, fresh, OFFER_HOLD_MS);
+          }
+
+          const outbound: OutboundMessageRecord[] = [];
+          for (const item of parts) {
+            const { providerMessageId } = await send({
+              to: ctx.contactPhone,
+              conversation: ctx,
+              part: item.part,
+            });
+            outbound.push({ body: item.storeBody, providerMessageId });
+          }
+          const toStage = fresh.length ? 'appointment_proposed' : 'qualified';
+          await persist({
+            conversationId,
+            contactId: ctx.contactId,
+            contactPhone: ctx.contactPhone,
+            fromStage: ctx.stage,
+            toStage,
+            action: 'offer_slots',
+            extracted: ctx.known,
+            outbound,
+          });
+          return {
+            stage: toStage,
+            action: 'offer_slots',
+            text: outbound.at(-1)?.body ?? '',
+            sent: true,
+          };
+        }
       }
 
       // Property photo: the lead attached an image. Record it on the lead (a
@@ -961,9 +1090,21 @@ export function createConversationWorkflow(
       if (ctx.isFirstResponse && validated.intent !== 'OPT_OUT') {
         decision = { nextStage: 'engaged', action: 'show_main_menu', escalate: false };
       } else if (menuChoice) {
-        decision = decideMainMenu(menuChoice, ctx.stage, ctx.known, ctx.screenAll);
+        decision = decideMainMenu(
+          menuChoice,
+          ctx.stage,
+          ctx.known,
+          ctx.screenAll,
+          Boolean(deps.appointments),
+        );
       } else {
-        decision = decideTransition(ctx.stage, validated, ctx.known, ctx.screenAll);
+        decision = decideTransition(
+          ctx.stage,
+          validated,
+          ctx.known,
+          ctx.screenAll,
+          Boolean(deps.appointments),
+        );
       }
 
       // Booking intent: the "קביעת פגישה" menu choice, or a message the classifier
@@ -1105,7 +1246,39 @@ export function createConversationWorkflow(
       let fellBack = false;
       const question = screeningQuestionFor(decision.action);
       const canned = cannedReplyFor(decision.action);
-      if (decision.action === 'show_main_menu') {
+      // A qualified lead who asked for a meeting is offered Lidor's real free
+      // times. If he has nothing free in the horizon the turn falls back to the
+      // handoff — promising times that do not exist would be worse than saying
+      // he will call.
+      if (decision.action === 'offer_slots' && deps.appointments) {
+        const timeZone = deps.appointments.slotOptions.timeZone;
+        const offeredSlots = await findSlotsToOffer(deps.appointments);
+
+        if (offeredSlots.length > 0) {
+          await recordOffer(
+            deps.appointments,
+            conversationId,
+            offeredSlots,
+            OFFER_HOLD_MS,
+          );
+          plan.push({
+            part: {
+              kind: 'list',
+              body: SLOT_OFFER_BODY,
+              buttonLabel: SLOT_OFFER_BUTTON,
+              rows: slotListRows(offeredSlots, timeZone),
+            },
+            storeBody: SLOT_OFFER_BODY,
+          });
+        } else {
+          plan.push({
+            part: { kind: 'text', text: NO_SLOTS_MESSAGE },
+            storeBody: NO_SLOTS_MESSAGE,
+          });
+          // Nothing was offered, so the conversation is not waiting on a choice.
+          decision = { ...decision, nextStage: 'qualified' };
+        }
+      } else if (decision.action === 'show_main_menu') {
         plan.push({
           part: {
             kind: 'list',

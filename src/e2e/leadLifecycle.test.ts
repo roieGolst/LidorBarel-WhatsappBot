@@ -3,13 +3,18 @@ import type { PostgresSaver } from '@langchain/langgraph-checkpoint-postgres';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import type { Database } from '../db/client.js';
 import { findContactByPhone } from '../db/repositories/contacts.js';
-import { conversations, outbox } from '../db/schema.js';
+import { conversations, messages, outbox } from '../db/schema.js';
 import { setupTestDatabase, testDatabaseUrl, truncateAll } from '../db/testing.js';
 import type { GraphLeadsClient, RetrievedLead } from '../leads/graphLeads.js';
 import { ingestLead } from '../leads/ingestLead.js';
 import { FakeLlmClient } from '../llm/fake.js';
 import { sendFirstContact } from '../outreach/firstContact.js';
 import { sendFollowUp } from '../outreach/followUp.js';
+import { DEFAULT_SLOT_OPTIONS } from '../appointments/availability.js';
+import { formatSlot } from '../appointments/slotMessages.js';
+import { findSlotsToOffer } from '../appointments/booking.js';
+import { ACTIVITY_COLUMNS } from '../monday/leadMapping.js';
+import type { MondayClient } from '../monday/client.js';
 import { FakeChannel } from '../whatsapp/fakeChannel.js';
 import { ingestMessage } from '../whatsapp/ingest.js';
 import type { InboundMessageEvent } from '../whatsapp/payload.js';
@@ -100,6 +105,19 @@ function inbound(text: string, id: string): InboundMessageEvent {
   };
 }
 
+/** Stands in for the פעילות board, which mirrors Lidor's calendar. */
+class FakeCalendar {
+  created: { name: string; values: Record<string, unknown> }[] = [];
+  private counter = 0;
+  listItems() {
+    return Promise.resolve([]);
+  }
+  createItem(_board: string, name: string, values: Record<string, unknown>) {
+    this.created.push({ name, values });
+    return Promise.resolve(`activity-${++this.counter}`);
+  }
+}
+
 describe('lead lifecycle: form submission to qualification', () => {
   it('carries a lead from the form through to the bot answering their reply', async () => {
     const channel = new FakeChannel();
@@ -178,6 +196,88 @@ describe('lead lifecycle: form submission to qualification', () => {
     // currently-marketed remain.
     expect(result.stage).toBe('screening_neighborhood');
     expect(channel.sent.length).toBeGreaterThan(1);
+  });
+
+  it('books a consultation when a qualified lead picks a time', async () => {
+    // The end of the whole funnel: a paid lead who asked for a meeting gets real
+    // times and a real event in Lidor's calendar, without leaving WhatsApp.
+    const channel = new FakeChannel();
+    const calendar = new FakeCalendar();
+    const appointments = {
+      db,
+      monday: calendar as unknown as MondayClient,
+      slotOptions: { ...DEFAULT_SLOT_OPTIONS, timeZone: TZ },
+    };
+
+    const ingested = await ingestLead(
+      db,
+      { leadgenId: 'LEAD-BOOK', formId: FORM_ID },
+      INGEST_DEPS,
+    );
+    const conversationId = ingested.conversationId!;
+
+    // The bot has already spoken, so this turn is not the opening sequence.
+    await db.insert(messages).values({
+      conversationId,
+      direction: 'outbound',
+      body: 'האם הנכס משווק כרגע?',
+      providerMessageId: `out-${conversationId}`,
+    });
+
+    // Qualified, and they asked for a meeting.
+    await db
+      .update(conversations)
+      .set({
+        stage: 'assessing_intent',
+        extracted: {
+          sellIntent: 'ready',
+          timeline: 'immediate',
+          neighborhood: 'רמות',
+          currentlyMarketed: 'no',
+          bookingIntent: true,
+        },
+      })
+      .where(eq(conversations.id, conversationId));
+    await ingestMessage(db, inbound('כן, אני רוצה להתקדם למכירה', 'wamid.BOOK-1'));
+
+    const llm = new FakeLlmClient([
+      JSON.stringify({
+        intent: 'ANSWER',
+        confidence: 0.9,
+        extracted: { seriousSeller: true, sellMotivation: 'עוברים דירה' },
+      }),
+    ]);
+    const workflow = createConversationWorkflow(
+      { db, llm, channel, appointments },
+      checkpointer,
+    );
+    const offered = await workflow.invoke(conversationId, {
+      configurable: { thread_id: conversationId },
+    });
+
+    // Real times, offered in WhatsApp rather than a promise of a callback.
+    expect(offered.action).toBe('offer_slots');
+    expect(offered.stage).toBe('appointment_proposed');
+    const list = channel.sent.at(-1)!;
+    expect(list.kind).toBe('list');
+
+    // They tap one. The tapped row arrives as its title text.
+    const slots = await findSlotsToOffer(appointments);
+    const picked = formatSlot(slots[0]!, TZ);
+    await ingestMessage(db, inbound(picked, 'wamid.BOOK-2'));
+
+    const booked = await createConversationWorkflow(
+      { db, llm: new FakeLlmClient([]), channel, appointments },
+      checkpointer,
+    ).invoke(conversationId, { configurable: { thread_id: conversationId } });
+
+    expect(booked.action).toBe('confirm_booking');
+    expect(booked.stage).toBe('appointment_confirmed');
+
+    // A consultation, linked to the lead, in Lidor's calendar.
+    expect(calendar.created).toHaveLength(1);
+    expect(calendar.created[0]!.values[ACTIVITY_COLUMNS.type]).toEqual({ index: 0 });
+    expect(calendar.created[0]!.values[ACTIVITY_COLUMNS.start]).toBeDefined();
   });
 
   it('nudges a silent lead, then stops — and a reply cancels the sequence', async () => {

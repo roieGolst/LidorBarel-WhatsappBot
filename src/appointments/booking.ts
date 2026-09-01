@@ -1,4 +1,4 @@
-import { eq } from 'drizzle-orm';
+import { desc, eq } from 'drizzle-orm';
 import type { Database } from '../db/client.js';
 import { getConversationById } from '../db/repositories/conversations.js';
 import { appointmentRequests, conversations } from '../db/schema.js';
@@ -132,6 +132,23 @@ export async function recordOffer(
   return row!.id;
 }
 
+/** The most recent offer made to a conversation, if any. */
+export async function latestOffer(
+  db: Database,
+  conversationId: string,
+): Promise<{ id: string; proposedSlots: unknown } | undefined> {
+  const [row] = await db
+    .select({
+      id: appointmentRequests.id,
+      proposedSlots: appointmentRequests.proposedSlots,
+    })
+    .from(appointmentRequests)
+    .where(eq(appointmentRequests.conversationId, conversationId))
+    .orderBy(desc(appointmentRequests.createdAt))
+    .limit(1);
+  return row;
+}
+
 export type BookingOutcome =
   | { booked: true; appointmentId: string; activityItemId: string; slot: Slot }
   | { booked: false; reason: 'slot_taken' | 'no_offer' | 'conversation_missing' };
@@ -160,7 +177,9 @@ export async function bookSlot(
     .select()
     .from(appointmentRequests)
     .where(eq(appointmentRequests.conversationId, conversationId))
-    .orderBy(appointmentRequests.createdAt)
+    // The most recent offer: a re-offer after a slot was taken supersedes the
+    // one before it.
+    .orderBy(desc(appointmentRequests.createdAt))
     .limit(1);
   if (!offer) return { booked: false, reason: 'no_offer' };
 

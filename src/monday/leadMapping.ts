@@ -224,6 +224,13 @@ export function leadColumnValues(
     values[LEAD_COLUMNS.propertyNotes] = { text: facts.additionalNotes };
   }
 
+  // The score is the point of the whole qualification: Lidor works a queue, and
+  // this sets its order. Written as a string because Monday's numbers column
+  // takes one.
+  if (conversation.priorityScore !== null) {
+    values[LEAD_COLUMNS.score] = String(conversation.priorityScore);
+  }
+
   const lastInteraction = conversation.lastInboundAt ?? conversation.lastOutboundAt;
   if (lastInteraction) {
     values[LEAD_COLUMNS.lastInteraction] = dateValue(lastInteraction);

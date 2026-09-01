@@ -118,6 +118,7 @@ const conversation = (over = {}) =>
   ({
     stage: 'engaged',
     disqualificationReason: null,
+    priorityScore: null,
     lastInboundAt: new Date('2026-08-26T09:00:00Z'),
     lastOutboundAt: null,
     ...over,
@@ -220,6 +221,29 @@ describe('leadColumnValues', () => {
     );
 
     expect(values).not.toHaveProperty(LEAD_COLUMNS.neighborhood);
+  });
+
+  it("projects the priority score, which orders Lidor's queue", () => {
+    const values = leadColumnValues(
+      {
+        contact: contact(),
+        conversation: conversation({ priorityScore: 93 }),
+        facts: {},
+      },
+      { includeStatus: true },
+    );
+
+    expect(values[LEAD_COLUMNS.score]).toBe('93');
+  });
+
+  it('leaves the score blank while it is unknown', () => {
+    // An unscored lead should look unscored, not bottom-of-queue.
+    const values = leadColumnValues(
+      { contact: contact(), conversation: conversation(), facts: {} },
+      { includeStatus: true },
+    );
+
+    expect(values).not.toHaveProperty(LEAD_COLUMNS.score);
   });
 
   it('never syncs gender or a creation date', () => {

@@ -560,9 +560,12 @@ describe('conversationTurn', () => {
     const conversation = await getConversationById(db, conversationId);
     const extracted = conversation?.extracted as KnownFacts;
     expect(extracted.bookingIntent).toBe(true);
-    // Booking implies immediate urgency → Q3 skipped and priority maxed.
+    // Booking implies immediate urgency, so Q3 is skipped.
     expect(extracted.timeline).toBe('immediate');
-    expect(conversation?.priorityScore).toBe(100);
+    // 40 (immediate) + 15 (booking). Deliberately not the maximum: they have
+    // asked for a meeting but not yet said the property is ready to list, and a
+    // fully-screened ready seller should still outrank them.
+    expect(conversation?.priorityScore).toBe(55);
   });
 
   it('sends a three-option screening question as buttons', async () => {
@@ -737,7 +740,9 @@ describe('conversationTurn', () => {
     expect(result.action).toBe('ask_currently_marketed');
     const conversation = await getConversationById(db, conversationId);
     expect(conversation?.disqualificationReason).toBeNull();
-    expect(conversation?.priorityScore).toBe(25); // lowest urgency
+    // 5 (no urgency) + 30 (ready to list). Low urgency drags the score down
+    // without erasing the fact that the property itself is ready.
+    expect(conversation?.priorityScore).toBe(35);
   });
 
   it('asks about exclusivity before disqualifying a lead with another agent', async () => {

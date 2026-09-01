@@ -175,7 +175,30 @@ double-book him. Confirm before offering slots.
 
 ## Open
 
-- **Scoring weights need Lidor's approval** before `ציון רצינות` is populated —
-  plan v5 §17 item 9. The current function is one-dimensional (timeline only,
-  five possible values) and is not a usable prioritisation layer.
 - `color_mm69jtnb` label id `5` is blank and should be named or removed.
+- Whether the Calendar sync covers every calendar Lidor keeps — **answered
+  2026-08-26: it covers everything relevant**, so availability may be read from
+  the `פעילות` board.
+
+## `ציון רצינות` — the call order
+
+Approved by Lidor on 2026-08-26 and now populated. This column is the product's
+actual output: the bot exists to tell him **who is worth calling first**.
+
+| Factor | Max | Values |
+|---|---|---|
+| Timeline | 40 | immediate 40 · within month 30 · still checking 15 · no urgency 5 |
+| Readiness to list | 30 | מוכן 30 · לא בטוח 12 · לא מעוניין 0 |
+| Booking intent | 15 | asked for a meeting |
+| Engagement | 15 | finished screening 8 · sent photos 4 · reads as serious 3 |
+
+Asking for a meeting also counts as immediate urgency when no timeline is known,
+so "book me in" before Q3 cannot score below someone who just said they have no
+urgency.
+
+A lead with nothing known scores `null`, not zero — unscored should look
+unscored, not rejected.
+
+Judge any change to these weights by whether it improves the **order** Lidor
+works his queue in. The previous version scored on timeline alone and produced
+five possible values, so forty leads tied eight ways at every level.

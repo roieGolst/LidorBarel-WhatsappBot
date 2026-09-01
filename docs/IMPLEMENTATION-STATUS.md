@@ -24,7 +24,7 @@ Requirements are numbered per [PRODUCT-REQUIREMENTS.md](PRODUCT-REQUIREMENTS.md)
 | 2c | Initiate WhatsApp contact via template | ✅ | `src/outreach/`. **Off by default** — `OUTREACH_ENABLED` must be set, and E-1 gates go-live. |
 | 3 | Follow-ups for up to five days | ✅ | `src/outreach/followUp*.ts`. Two caps, business hours, Shabbat-safe. Out-of-window nudges need an approved template (E-10). |
 | 4a | Continue conversation, collect information | ✅ | The mature part of the system. |
-| 4b | Evaluate lead quality and readiness | ✅ | `qualified`, `disqualification_reason`, `priority_score`. |
+| 4b | Evaluate lead quality and readiness | ✅ | Four-factor 0–100 score, approved by Lidor and projected to `ציון רצינות`. |
 | 4c | Sync to Monday CRM | ✅ | `src/monday/` + `src/outbox/`. Verified against the live board. `ציון רצינות` awaits approved weights. |
 | 5 | Schedule consultation call | ❌ | No module, no dependency. |
 | 6 | Follow-up stop conditions | ✅ | Reply, terminal stage, qualification complete, both caps, opt-out, consent. Each covered by a test. |
@@ -135,9 +135,10 @@ Two behaviours worth knowing:
   the disqualified/opted-out set, which the bot files into `לידים לא מתאימים`
   itself. See [MONDAY-MAPPING.md](MONDAY-MAPPING.md).
 
-`ציון רצינות` is deliberately **not populated**: the current score is
-one-dimensional (timeline only, five possible values) and would put a misleading
-number in front of Lidor. It waits on approved weights.
+`ציון רצינות` is populated from the four-factor score Lidor approved on
+2026-08-26 (timeline 40 · readiness 30 · booking 15 · engagement 15). This is the
+product's actual output — the bot exists to tell him who to call first — so
+scoring changes are judged on whether they improve the call order.
 
 ### What Phase 4 delivers
 

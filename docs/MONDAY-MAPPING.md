@@ -79,8 +79,15 @@ There is one automation the bot has to accommodate rather than fight:
 > `When an item is created → set סטטוס to ליד חדש, set אינטרקציה אחרונה to today`
 
 So an item is **created first and its status set afterwards**, in a second call.
-Setting status inside the create mutation races the automation, and the
-automation wins about as often as it loses.
+
+That is still not enough on its own. The automation fires *asynchronously*, so it
+can land after the follow-up call and overwrite the status back to `ליד חדש` —
+observed live: a `qualified` lead was created, set to `ממתין לשיחה`, and found as
+`ליד חדש` moments later.
+
+What makes it correct is that **creation queues a second projection**. By the time
+that runs the automation has certainly fired, the item exists, and the update path
+sets the status unopposed. Only creation queues it, so it cannot loop.
 
 | Our stage | `lead_status` the bot writes | Group (by automation) |
 |---|---|---|

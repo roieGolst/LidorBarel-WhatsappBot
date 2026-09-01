@@ -99,6 +99,30 @@ describe('syncLead', () => {
     });
   });
 
+  it('queues a second pass on creation, because the board overwrites the status', async () => {
+    // The "when an item is created" automation sets ליד חדש asynchronously and
+    // overwrites whatever the create pass wrote. Verified live. The second pass
+    // takes the update path, where nothing competes.
+    const fake = new FakeMonday();
+    const { conversationId } = await seedLead({ stage: 'qualified' });
+
+    await syncLead({ db, monday: monday(fake) }, conversationId);
+
+    const queued = await db.select().from(outbox);
+    expect(queued.filter((row) => row.aggregateId === conversationId)).toHaveLength(1);
+  });
+
+  it('does not queue another pass when updating, so it cannot loop', async () => {
+    const fake = new FakeMonday();
+    const { conversationId } = await seedLead();
+    await syncLead({ db, monday: monday(fake) }, conversationId);
+    await db.delete(outbox);
+
+    await syncLead({ db, monday: monday(fake) }, conversationId);
+
+    expect(await db.select().from(outbox)).toHaveLength(0);
+  });
+
   it('stores the item id so the next sync updates rather than duplicates', async () => {
     const fake = new FakeMonday();
     const { conversationId } = await seedLead();

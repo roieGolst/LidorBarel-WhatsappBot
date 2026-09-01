@@ -7,6 +7,7 @@ import {
 } from '../db/repositories/conversations.js';
 import { campaignReferrals } from '../db/schema.js';
 import { getLogger } from '../logger.js';
+import { enqueueOutboxEvent } from '../outbox/outbox.js';
 import type { KnownFacts } from '../workflow/decide.js';
 import type { MondayClient } from './client.js';
 import {
@@ -105,9 +106,19 @@ export async function syncLead(
     );
     await setMondayItemId(deps.db, conversationId, itemId);
 
-    // The automation has now set "ליד חדש"; correct it if the conversation has
-    // already moved past that.
+    // The board's "when an item is created" automation sets ליד חדש, and it fires
+    // asynchronously — so writing the real status now is a race this side loses
+    // about as often as it wins. Verified against the live board: the status set
+    // here was overwritten back to ליד חדש moments later.
+    //
+    // It is still written, because winning the race is the common case and costs
+    // nothing. What guarantees correctness is the second pass queued below: by
+    // the time it runs the automation has certainly fired, the item exists, and
+    // the update path sets the status unopposed. Only queued on creation, so it
+    // cannot loop.
     await applyStatus(deps, itemId, projection.conversation);
+    await enqueueOutboxEvent(deps.db, conversationId);
+
     logger.info({ conversationId, itemId }, 'created Monday lead');
     return { synced: true, itemId, created: true };
   }

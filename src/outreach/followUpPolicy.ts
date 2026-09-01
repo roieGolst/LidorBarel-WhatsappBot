@@ -1,3 +1,5 @@
+import { hm, isWithinHours, type OpeningWindow } from '../domain/localTime.js';
+
 /**
  * When a follow-up may be sent, and when the sequence must stop.
  *
@@ -12,16 +14,22 @@
  * sequence. Reading either one loosely would mean messaging someone on day six.
  */
 
-/** Israel's business hours, per the specification. Never on Shabbat. */
-const BUSINESS_HOURS: Record<number, { open: number; close: number } | null> = {
-  0: { open: 8, close: 20 }, // Sunday
-  1: { open: 8, close: 20 },
-  2: { open: 8, close: 20 },
-  3: { open: 8, close: 20 },
-  4: { open: 8, close: 20 }, // Thursday
+/**
+ * When the bot may **send** a message, per the specification. Never on Shabbat.
+ *
+ * Distinct from when Lidor may *meet* someone (`appointments/availability.ts`):
+ * a follow-up at 08:00 is fine, a consultation call at 08:00 is not. Two rules,
+ * deliberately not shared.
+ */
+const MESSAGING_HOURS: Record<number, OpeningWindow | null> = {
+  0: { open: hm(8), close: hm(20) }, // Sunday
+  1: { open: hm(8), close: hm(20) },
+  2: { open: hm(8), close: hm(20) },
+  3: { open: hm(8), close: hm(20) },
+  4: { open: hm(8), close: hm(20) }, // Thursday
   // Friday closes early: the spec's working hours already stop well before
   // sunset, which keeps the bot clear of Shabbat without needing a sunset table.
-  5: { open: 8, close: 14 },
+  5: { open: hm(8), close: hm(14) },
   6: null, // Saturday — Shabbat. Never.
 };
 
@@ -105,37 +113,9 @@ export function decideFollowUp(
   return { follow: true };
 }
 
-/** Local weekday and hour for an instant, in the configured timezone. */
-function localParts(at: Date, timeZone: string): { weekday: number; hour: number } {
-  const parts = new Intl.DateTimeFormat('en-US', {
-    timeZone,
-    weekday: 'short',
-    hour: 'numeric',
-    hour12: false,
-  }).formatToParts(at);
-
-  const weekdayName = parts.find((p) => p.type === 'weekday')?.value ?? 'Sun';
-  const hour = Number(parts.find((p) => p.type === 'hour')?.value ?? '0');
-
-  const weekdays: Record<string, number> = {
-    Sun: 0,
-    Mon: 1,
-    Tue: 2,
-    Wed: 3,
-    Thu: 4,
-    Fri: 5,
-    Sat: 6,
-  };
-  // `hour12: false` renders midnight as 24 in some environments.
-  return { weekday: weekdays[weekdayName] ?? 0, hour: hour === 24 ? 0 : hour };
-}
-
 /** Whether a message may be sent at this instant. */
 export function isWithinBusinessHours(at: Date, timeZone: string): boolean {
-  const { weekday, hour } = localParts(at, timeZone);
-  const window = BUSINESS_HOURS[weekday];
-  if (!window) return false;
-  return hour >= window.open && hour < window.close;
+  return isWithinHours(at, timeZone, MESSAGING_HOURS);
 }
 
 /**

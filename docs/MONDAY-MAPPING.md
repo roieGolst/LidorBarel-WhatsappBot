@@ -155,6 +155,21 @@ No schema changes needed.
 | `location_mkpchxzd` | location | מיקום | — |
 | `activity_owner` | people | Owner | — |
 
+### ⚠️ Date columns: read `value`, never `text`
+
+Monday renders a date column's `text` in the **account's** timezone and holds
+UTC in its `value`. Verified on the live board:
+
+```
+text : "2026-07-27 08:30"     ← Asia/Jerusalem
+value: {"date":"2026-07-27","time":"05:30:00"}   ← UTC
+```
+
+Parsing `text` on a UTC server shifts every date by the offset — three hours for
+this account. For a calendar that means reading Lidor's commitments in the wrong
+place and booking on top of real meetings. `MondayClient.listItems` therefore
+returns both, and anything time-sensitive uses `value`.
+
 ### The Calendar integration changes Phase 6
 
 `פעילות` is **bidirectionally synced** with Lidor's Google Calendar: Monday

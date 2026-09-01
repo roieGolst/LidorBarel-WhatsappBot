@@ -10,6 +10,20 @@ import { getLogger } from '../logger.js';
  * a board the bot has no business touching.
  */
 
+/**
+ * One item's column values, as both rendered text and raw JSON.
+ *
+ * Both are kept because they differ in ways that matter: for a date column,
+ * `text` is rendered in the **account's** timezone while `value` holds UTC.
+ * Reading `text` and parsing it on a UTC server shifts every date by the offset
+ * — three hours, for this account — which for a calendar means booking over
+ * existing meetings. Anything time-sensitive must read `value`.
+ */
+export interface MondayItem {
+  id: string;
+  columnValues: Record<string, { text: string | null; value: string | null }>;
+}
+
 /** Monday rejects a query it dislikes with HTTP 200 and an `errors` array. */
 export class MondayError extends Error {
   constructor(
@@ -148,6 +162,51 @@ export class MondayClient {
       { item: [itemId] },
     );
     return data.items.length > 0;
+  }
+
+  /**
+   * Items on a board with their column values, for reading state back.
+   *
+   * Pages through the board rather than filtering server-side. Monday's rule
+   * syntax for date ranges is awkward and the activity board holds a few hundred
+   * items at most, so the range is applied in code. If that board ever grows into
+   * the thousands, this is the call to push the filter into.
+   */
+  async listItems(
+    boardId: string,
+    columnIds: string[],
+    limit = 500,
+  ): Promise<MondayItem[]> {
+    const data = await this.request<{
+      boards: {
+        items_page: {
+          items: {
+            id: string;
+            column_values: { id: string; text: string | null; value: string | null }[];
+          }[];
+        };
+      }[];
+    }>(
+      `query($board:[ID!],$cols:[String!],$limit:Int!){
+         boards(ids:$board){
+           items_page(limit:$limit){
+             items { id column_values(ids:$cols){ id text value } }
+           }
+         }
+       }`,
+      { board: [boardId], cols: columnIds, limit },
+    );
+
+    const items = data.boards[0]?.items_page.items ?? [];
+    return items.map((item) => ({
+      id: item.id,
+      columnValues: Object.fromEntries(
+        item.column_values.map((column) => [
+          column.id,
+          { text: column.text, value: column.value },
+        ]),
+      ),
+    }));
   }
 
   /** Deletes an item. Used by tests to clean up after themselves. */

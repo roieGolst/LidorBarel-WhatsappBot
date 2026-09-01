@@ -251,12 +251,89 @@ describe('decideTransition', () => {
   });
 
   describe('leadPriorityScore', () => {
-    it('ranks urgency (higher = sooner), undefined until the timeline is known', () => {
-      expect(leadPriorityScore({ timeline: 'immediate' })).toBe(100);
-      expect(leadPriorityScore({ timeline: 'within_month' })).toBe(75);
-      expect(leadPriorityScore({ timeline: 'still_checking' })).toBe(50);
-      expect(leadPriorityScore({ timeline: 'no_urgency' })).toBe(25);
+    // Weights approved by Lidor: timeline 40, readiness 30, booking 15,
+    // engagement 15. The score sets the order he works his queue in, so the
+    // ordering assertions matter more than any individual number.
+    it('weights the timeline, the strongest predictor', () => {
+      expect(leadPriorityScore({ timeline: 'immediate' })).toBe(40);
+      expect(leadPriorityScore({ timeline: 'within_month' })).toBe(30);
+      expect(leadPriorityScore({ timeline: 'still_checking' })).toBe(15);
+      expect(leadPriorityScore({ timeline: 'no_urgency' })).toBe(5);
+    });
+
+    it('weights readiness to list', () => {
+      expect(leadPriorityScore({ sellIntent: 'ready' })).toBe(30);
+      expect(leadPriorityScore({ sellIntent: 'not_sure' })).toBe(12);
+      expect(leadPriorityScore({ sellIntent: 'not_selling' })).toBe(0);
+    });
+
+    it('adds engagement, the weakest factor', () => {
+      expect(leadPriorityScore({ currentlyMarketed: 'no' })).toBe(8);
+      expect(leadPriorityScore({ photoCount: 3 })).toBe(4);
+      expect(leadPriorityScore({ seriousSeller: true })).toBe(3);
+      expect(leadPriorityScore({ photoCount: 0 })).toBeUndefined();
+    });
+
+    it('reaches exactly 100 for the best possible lead', () => {
+      expect(
+        leadPriorityScore({
+          timeline: 'immediate',
+          sellIntent: 'ready',
+          bookingIntent: true,
+          currentlyMarketed: 'no',
+          photoCount: 2,
+          seriousSeller: true,
+        }),
+      ).toBe(100);
+    });
+
+    it('is undefined while nothing is known', () => {
+      // An unscored lead should look unscored, not rejected.
       expect(leadPriorityScore({})).toBeUndefined();
+    });
+
+    it('orders a realistic queue the way Lidor should work it', () => {
+      const wantsMeeting = leadPriorityScore({
+        timeline: 'immediate',
+        sellIntent: 'ready',
+        bookingIntent: true,
+        currentlyMarketed: 'no',
+      })!;
+      const readyNow = leadPriorityScore({
+        timeline: 'immediate',
+        sellIntent: 'ready',
+        currentlyMarketed: 'no',
+      })!;
+      const thinkingSoon = leadPriorityScore({
+        timeline: 'within_month',
+        sellIntent: 'not_sure',
+        currentlyMarketed: 'no',
+      })!;
+      const browsing = leadPriorityScore({
+        timeline: 'no_urgency',
+        sellIntent: 'not_sure',
+      })!;
+
+      expect(wantsMeeting).toBeGreaterThan(readyNow);
+      expect(readyNow).toBeGreaterThan(thinkingSoon);
+      expect(thinkingSoon).toBeGreaterThan(browsing);
+    });
+
+    it('separates leads the old one-dimensional score tied together', () => {
+      // Timeline alone produced five possible values, so a queue of forty tied
+      // eight ways at every level. These four share a timeline and must differ.
+      const scores = [
+        leadPriorityScore({
+          timeline: 'immediate',
+          sellIntent: 'ready',
+          bookingIntent: true,
+        }),
+        leadPriorityScore({ timeline: 'immediate', sellIntent: 'ready' }),
+        leadPriorityScore({ timeline: 'immediate', sellIntent: 'not_sure' }),
+        leadPriorityScore({ timeline: 'immediate' }),
+      ];
+
+      expect(new Set(scores).size).toBe(scores.length);
     });
   });
 
@@ -524,12 +601,16 @@ describe('decideTransition', () => {
   });
 
   describe('booking intent', () => {
-    it('boosts the weighted priority score', () => {
-      expect(leadPriorityScore({ bookingIntent: true })).toBe(60);
-      expect(leadPriorityScore({ timeline: 'no_urgency', bookingIntent: true })).toBe(50);
-      expect(leadPriorityScore({ timeline: 'immediate', bookingIntent: true })).toBe(100);
-      // Without booking intent the timeline-only score is unchanged.
-      expect(leadPriorityScore({ timeline: 'no_urgency' })).toBe(25);
+    it('treats asking for a meeting as urgency plus intent', () => {
+      // Without the urgency proxy, "book me in" before Q3 would score below
+      // someone who has just said they have no urgency at all.
+      expect(leadPriorityScore({ bookingIntent: true })).toBe(55);
+    });
+
+    it('does not let the booking proxy override a stated timeline', () => {
+      expect(leadPriorityScore({ timeline: 'no_urgency', bookingIntent: true })).toBe(20);
+      expect(leadPriorityScore({ timeline: 'immediate', bookingIntent: true })).toBe(55);
+      expect(leadPriorityScore({ timeline: 'no_urgency' })).toBe(5);
     });
 
     it('runs the screening flow even when the message reads like an FAQ', () => {

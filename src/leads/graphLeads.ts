@@ -96,6 +96,39 @@ export class GraphLeadsClient {
 
   constructor(private readonly credentials: GraphLeadsCredentials) {}
 
+  private readonly formNames = new Map<string, string | undefined>();
+
+  /**
+   * Resolves a form's display name, memoized for the process.
+   *
+   * A failure returns `undefined` rather than throwing: a missing form name must
+   * never stop a lead reaching the CRM.
+   */
+  async formName(formId: string): Promise<string | undefined> {
+    if (this.formNames.has(formId)) return this.formNames.get(formId);
+
+    const { pageAccessToken, graphApiVersion } = this.credentials;
+    try {
+      const response = await fetch(
+        `https://graph.facebook.com/${graphApiVersion}/${encodeURIComponent(formId)}?fields=name`,
+        {
+          headers: { Authorization: `Bearer ${pageAccessToken}` },
+          signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+        },
+      );
+      if (!response.ok) {
+        this.formNames.set(formId, undefined);
+        return undefined;
+      }
+      const body = (await response.json()) as { name?: string };
+      this.formNames.set(formId, body.name);
+      return body.name;
+    } catch {
+      this.formNames.set(formId, undefined);
+      return undefined;
+    }
+  }
+
   /**
    * Fetches one lead's answers by its `leadgen_id`.
    *
@@ -166,6 +199,21 @@ export class GraphLeadsClient {
       raw: body,
     };
   }
+}
+
+/**
+ * The display name of a lead form, cached for the process.
+ *
+ * Monday shows Lidor which form a lead came from, and an id tells him nothing.
+ * Form names change rarely and the account has a handful of forms, so one
+ * lookup per form per process is cheaper than storing the name on every lead —
+ * and a failed lookup degrades to no name rather than blocking the projection.
+ */
+export async function fetchFormName(
+  client: GraphLeadsClient,
+  formId: string,
+): Promise<string | undefined> {
+  return client.formName(formId);
 }
 
 /**

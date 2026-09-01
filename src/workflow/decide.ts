@@ -444,25 +444,94 @@ function bookingFacts(facts: KnownFacts): KnownFacts {
     : facts;
 }
 
-export function leadPriorityScore(facts: KnownFacts): number | undefined {
-  const base =
-    facts.timeline === 'immediate'
-      ? 100
-      : facts.timeline === 'within_month'
-        ? 75
-        : facts.timeline === 'still_checking'
-          ? 50
-          : facts.timeline === 'no_urgency'
-            ? 25
-            : undefined;
+const TIMELINE_POINTS: Record<NonNullable<KnownFacts['timeline']>, number> = {
+  immediate: 40,
+  within_month: 30,
+  still_checking: 15,
+  no_urgency: 5,
+};
 
-  // Explicit intent to book a meeting / proceed is a strong quality signal: it
-  // lifts the weighted score (+25, capped at 100) and gives a solid floor even
-  // before the timeline is known, so a booking lead ranks ahead of a passive one.
-  if (facts.bookingIntent) {
-    return base === undefined ? 60 : Math.min(100, base + 25);
+const READINESS_POINTS: Record<NonNullable<KnownFacts['sellIntent']>, number> = {
+  ready: 30,
+  not_sure: 12,
+  // Disqualifies anyway; scored at zero so an inconsistent state cannot inflate.
+  not_selling: 0,
+};
+
+const BOOKING_POINTS = 15;
+
+// Engagement, 15 points split three ways. Deliberately the smallest factor:
+// these are proxies for seriousness, not statements of it, and a chatty lead
+// with no urgency must never outrank a terse one selling next week.
+const SCREENING_COMPLETE_POINTS = 8;
+const PHOTOS_POINTS = 4;
+const SERIOUS_SELLER_POINTS = 3;
+
+/**
+ * How worth calling this lead is, 0–100.
+ *
+ * This is the product's output as far as Lidor is concerned: he works a queue,
+ * and the score decides its order. It is written to `ציון רצינות` on the לידים
+ * board.
+ *
+ * Four factors, weighted as Lidor approved:
+ *
+ * | Factor | Max | Why |
+ * |---|---|---|
+ * | Timeline | 40 | when they will sell — the strongest predictor of a deal |
+ * | Sell readiness | 30 | whether the property is actually ready to list |
+ * | Booking intent | 15 | they asked for a meeting; rare and decisive |
+ * | Engagement | 15 | weak proxies: finished screening, sent photos, reads as serious |
+ *
+ * The previous version scored on timeline alone and produced five possible
+ * values, so a queue of forty leads tied eight ways at every level — a sort key
+ * that does not sort is not a prioritisation layer.
+ *
+ * Returns `undefined` while nothing is known, so an unscored lead is visibly
+ * unscored rather than sitting at the bottom of the queue looking rejected.
+ */
+export function leadPriorityScore(facts: KnownFacts): number | undefined {
+  let score = 0;
+  let known = false;
+
+  if (facts.timeline) {
+    score += TIMELINE_POINTS[facts.timeline];
+    known = true;
+  } else if (facts.bookingIntent) {
+    // Asking for a meeting is itself an urgency signal. Without it, a lead who
+    // says "book me in" before answering Q3 would score below someone with no
+    // urgency at all.
+    score += TIMELINE_POINTS.immediate;
+    known = true;
   }
-  return base;
+
+  if (facts.sellIntent) {
+    score += READINESS_POINTS[facts.sellIntent];
+    known = true;
+  }
+
+  if (facts.bookingIntent) {
+    score += BOOKING_POINTS;
+    known = true;
+  }
+
+  // Answering Q4 is the last screening step, so knowing it means the lead saw
+  // the flow through rather than dropping halfway.
+  if (facts.currentlyMarketed !== undefined) {
+    score += SCREENING_COMPLETE_POINTS;
+    known = true;
+  }
+  if ((facts.photoCount ?? 0) > 0) {
+    score += PHOTOS_POINTS;
+    known = true;
+  }
+  if (facts.seriousSeller === true) {
+    score += SERIOUS_SELLER_POINTS;
+    known = true;
+  }
+
+  if (!known) return undefined;
+  return Math.max(0, Math.min(100, score));
 }
 
 /**

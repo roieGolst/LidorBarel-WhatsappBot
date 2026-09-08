@@ -137,6 +137,53 @@ Calendar event written by Monday's sync, lead status projected — the same
 standard every earlier phase was closed to. The e2e test proves the flow against
 a fake Monday only.
 
+#### Post-qualification robustness — 2026-09-08 (tasks from one live conversation)
+
+One real conversation, run end to end by the developer, went wrong four times
+after the answers were complete. Each is a task below, done and tested
+(`workflow/changedAnswers.test.ts` carries the scenario tests; the unit rules are
+in `decide.test.ts`).
+
+- [x] **Booking-context replies.** A lead who was just offered real times and
+  asked "אין מוקדם יותר היום?" was told "אין לי לוח זמנים לתאם כאן" — the
+  pre-booking rule that the bot never discusses times — and then re-asked the
+  intent question. Now `appointment_proposed` has its own routing
+  (`assist_booking`): the reply is written with the standing times handed to the
+  model as `[CONTEXT]` (a list message stores only its body), the voice rule
+  says system-offered times are real, the list is re-sent when the hold has
+  lapsed or the calendar moved, and an outright "none suits" ends the booking
+  honestly (`decline_slots`, back to `qualified`).
+- [x] **A changed answer is confirmed, never taken on faith.** After the meeting
+  was booked one stray "כן, עם מתווך" tap was applied as-is and closed the lead
+  as exclusive with another agent. Past screening (`POST_SCREENING_STAGES`) a
+  screening answer that differs from the known one is now held as
+  `pendingFactChange` and checked with two buttons; yes applies it and lets its
+  consequences run, no keeps the earlier answer, anything else lets the check
+  lapse without applying it. Asked at most once per change.
+- [x] **The closes are fixed Hebrew.** The disqualification close came out as
+  "תודה על ההתנגדות הגדולה … בלי ספק" — model-written. The exclusivity question
+  and all three closes (`DISQUALIFIED_MESSAGE`, `EXCLUSIVE_FOLLOWUP_MESSAGE`,
+  `EXCLUSIVE_NO_FOLLOWUP_MESSAGE`) are canned and pass the same validator as a
+  generated reply.
+- [x] **Exclusivity end → callback reminder in Lidor's calendar.** The classifier
+  now resolves the stated end to a date (`exclusivityEndsOn`, given today's
+  date) and the projection files a `פעילות` item — `שיחת הכרות`, 10:00 local on
+  that date (never Shabbat), linked to the lead — exactly once
+  (`conversations.exclusivity_callback_item_id`, migration 0008). The end date
+  and follow-up wish also reach `פרטי נכס`; before this they never left Postgres.
+- [x] **A return keeps the answers.** Reopening a closed conversation wiped every
+  fact, so a lead who tapped an old meeting time after being closed was asked
+  "are you selling?" from scratch. Now only the answer that closed the door is
+  cleared (Q1 for not-selling, Q4 + exclusivity for exclusive), the intent check
+  stays passed (`intentAssessed`), and a slot label tapped outside the booking
+  stage is read deterministically as "I want a meeting": a booked lead is told
+  the meeting is set, a complete lead gets fresh times, an incomplete one gets
+  the single missing question and then the times.
+
+**Known limit:** a lead who confirms a disqualifying change *after* a meeting was
+booked is closed per the spec, and the meeting stays in Lidor's calendar (the bot
+never deletes a `פעילות` item — see MONDAY-MAPPING). Lidor sees both on the
+board; a cancel/reschedule flow is not built.
 - [x] **Live booking verified — 2026-09-08.** Two real bookings against the live
   account (items `3212538619`, `3212563443`, both deleted afterwards and confirmed
   `state: deleted`). Each: three free slots read from the live `פעילות` board →

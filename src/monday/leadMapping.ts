@@ -146,8 +146,11 @@ export function statusLabelFor(
   }
 }
 
-/** Monday's date column format, in the board's local terms. */
-function dateValue(at: Date): { date: string; time: string } {
+/**
+ * Monday's date column value. The JSON value is UTC — the board renders it in
+ * the account's timezone — so the instant is written as-is, never shifted.
+ */
+export function boardDateValue(at: Date): { date: string; time: string } {
   const iso = at.toISOString();
   return { date: iso.slice(0, 10), time: iso.slice(11, 19) };
 }
@@ -177,7 +180,7 @@ export const ACTIVITY_COLUMNS = {
 } as const;
 
 /** `סוג פעילות` label ids. The bot only ever books a consultation. */
-export const ACTIVITY_TYPE = { consultation: 0 } as const;
+export const ACTIVITY_TYPE = { consultation: 0, introCall: 4 } as const;
 
 /** `סטטוס` on פעילות. */
 export const ACTIVITY_STATUS = { open: 3, done: 4 } as const;
@@ -244,8 +247,21 @@ export function leadColumnValues(
     if (id !== undefined) values[LEAD_COLUMNS.neighborhood] = { ids: [id] };
     else unlistedPlace = facts.neighborhood;
   }
+  // Exclusivity with another agent is the one thing Lidor most needs to see on
+  // a closed lead: when it ends is when the lead becomes worth a call again.
+  const exclusivity =
+    facts.currentlyMarketed === 'with_agent' && facts.exclusivityEndsAt
+      ? [
+          `בלעדיות עם מתווך אחר עד: ${facts.exclusivityEndsAt}` +
+            (facts.exclusivityEndsOn ? ` (${facts.exclusivityEndsOn})` : '') +
+            (facts.wantsExclusivityFollowup === false
+              ? ' — לא מעוניין שנחזור אליו'
+              : ' — לחזור אליו בסיום הבלעדיות'),
+        ]
+      : [];
   const notes = [
     ...(unlistedPlace ? [`מיקום כפי שנמסר: ${unlistedPlace}`] : []),
+    ...exclusivity,
     ...(facts.additionalNotes ? [facts.additionalNotes] : []),
   ];
   if (notes.length > 0) {
@@ -261,7 +277,7 @@ export function leadColumnValues(
 
   const lastInteraction = conversation.lastInboundAt ?? conversation.lastOutboundAt;
   if (lastInteraction) {
-    values[LEAD_COLUMNS.lastInteraction] = dateValue(lastInteraction);
+    values[LEAD_COLUMNS.lastInteraction] = boardDateValue(lastInteraction);
   }
 
   // Status is set on creation by a board automation, so it is written only on

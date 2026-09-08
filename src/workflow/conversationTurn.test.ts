@@ -26,6 +26,8 @@ import type { KnownFacts } from './decide.js';
 import { ENGLISH_ONLY_REPLY } from './language.js';
 import {
   BOOKING_LEADIN_MESSAGE,
+  EXCLUSIVE_FOLLOWUP_MESSAGE,
+  EXCLUSIVITY_QUESTION,
   INTRO_VIDEO_PATH,
   OFF_TOPIC_REDIRECT_MESSAGE,
   QUALIFIED_HANDOFF_MESSAGE,
@@ -300,7 +302,7 @@ describe('conversationTurn', () => {
     }
 
     it('asks for confirmation instead of restarting, then restarts only on an explicit yes', async () => {
-      const { conversationId } = await seedCompleted('קביעת פגישה 📅');
+      const { conversationId } = await seedCompleted('בדיקת התאמה ✅');
       const channel = new FakeChannel();
       const llm = new FakeLlmClient([
         '{"intent":"ANSWER","confidence":0.9,"extracted":{}}',
@@ -335,7 +337,28 @@ describe('conversationTurn', () => {
       const extracted = conversation?.extracted as KnownFacts;
       expect(extracted.neighborhood).toBeUndefined(); // cleared for a fresh run
       expect(extracted.awaitingRestartConfirm).toBeUndefined();
-      expect(extracted.bookingIntent).toBe(true); // it was the booking flow
+      expect(extracted.intentAssessed).toBeUndefined(); // the whole flow runs again
+    });
+
+    it('"book a meeting" from a qualified lead is answered, never re-screened', async () => {
+      // Without booking wired up the honest answer is the assistant's: Lidor
+      // has the details. The questionnaire is not re-run and no restart is
+      // proposed — they asked for a meeting, not to start over.
+      const { conversationId } = await seedCompleted('קביעת פגישה 📅');
+      const llm = new FakeLlmClient([
+        '{"intent":"ANSWER","confidence":0.9,"extracted":{}}',
+        'הפרטים שלך כבר אצל לידור והוא יחזור אליך לתאם. יש עוד משהו שחשוב שיידע?',
+      ]);
+
+      const result = await workflow({ db, llm, channel: new FakeChannel() }).invoke(
+        conversationId,
+        config(conversationId),
+      );
+
+      expect(result.action).toBe('assist_qualified');
+      expect(result.stage).toBe('qualified');
+      const conversation = await getConversationById(db, conversationId);
+      expect((conversation?.extracted as KnownFacts).neighborhood).toBe('רמות');
     });
 
     it('a plain "לא" declines the restart — and is NOT treated as an opt-out', async () => {
@@ -748,7 +771,6 @@ describe('conversationTurn', () => {
   it('asks about exclusivity before disqualifying a lead with another agent', async () => {
     const llm = new FakeLlmClient([
       '{"intent":"ANSWER","confidence":0.9,"extracted":{"currentlyMarketed":"with_agent"}}',
-      'מתי מסתיימת הבלעדיות עם המתווך, ותרצה שנחזור אליך כשהיא נגמרת?',
     ]);
     const { conversationId } = await seed({
       inbound: 'יש לי כבר מתווך',
@@ -764,12 +786,14 @@ describe('conversationTurn', () => {
 
     expect(result.action).toBe('ask_exclusivity');
     expect(result.stage).toBe('screening_exclusivity');
+    // Fixed wording: the model-written version asked only half the question.
+    expect(result.text).toBe(EXCLUSIVITY_QUESTION);
+    expect(llm.requests).toHaveLength(1);
   });
 
   it('disqualifies once the exclusivity details are captured, keeping the follow-up wish', async () => {
     const llm = new FakeLlmClient([
       '{"intent":"ANSWER","confidence":0.9,"extracted":{"exclusivityEndsAt":"עוד חודשיים","wantsExclusivityFollowup":true}}',
-      'תודה רבה! נחזור אליך כשהבלעדיות מסתיימת. בהצלחה 😊',
     ]);
     const { conversationId } = await seed({
       inbound: 'עוד חודשיים, כן',
@@ -784,6 +808,8 @@ describe('conversationTurn', () => {
     );
 
     expect(result.stage).toBe('disqualified');
+    // The close is fixed Hebrew — a live one came out as "תודה על ההתנגדות הגדולה".
+    expect(result.text).toBe(EXCLUSIVE_FOLLOWUP_MESSAGE);
     const conversation = await getConversationById(db, conversationId);
     expect(conversation?.disqualificationReason).toBe('exclusive_with_other_agent');
     expect((conversation?.extracted as KnownFacts).wantsExclusivityFollowup).toBe(true);

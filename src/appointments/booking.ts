@@ -9,6 +9,7 @@ import {
   ACTIVITY_COLUMNS,
   ACTIVITY_STATUS,
   ACTIVITY_TYPE,
+  boardDateValue,
 } from '../monday/leadMapping.js';
 import { enqueueOutboxEvent } from '../outbox/outbox.js';
 import {
@@ -136,11 +137,21 @@ export async function recordOffer(
 export async function latestOffer(
   db: Database,
   conversationId: string,
-): Promise<{ id: string; proposedSlots: unknown } | undefined> {
+): Promise<
+  | {
+      id: string;
+      proposedSlots: unknown;
+      holdExpiresAt: Date | null;
+      selectedSlot: Date | null;
+    }
+  | undefined
+> {
   const [row] = await db
     .select({
       id: appointmentRequests.id,
       proposedSlots: appointmentRequests.proposedSlots,
+      holdExpiresAt: appointmentRequests.holdExpiresAt,
+      selectedSlot: appointmentRequests.selectedSlot,
     })
     .from(appointmentRequests)
     .where(eq(appointmentRequests.conversationId, conversationId))
@@ -233,10 +244,4 @@ export async function bookSlot(
 
   logger.info({ conversationId, activityItemId }, 'consultation booked');
   return { booked: true, appointmentId: offer.id, activityItemId, slot: chosen };
-}
-
-/** Monday's date column format. */
-function boardDateValue(at: Date): { date: string; time: string } {
-  const iso = at.toISOString();
-  return { date: iso.slice(0, 10), time: iso.slice(11, 19) };
 }

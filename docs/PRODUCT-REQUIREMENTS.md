@@ -50,7 +50,14 @@ wrong and has been corrected.** See [plan-v5.md](plan-v5.md) §"v5 change".
    **synchronizes the relevant information and qualification score with Monday
    CRM**.
 5. When appropriate, the bot may **schedule a consultation call with Lidor**
-   through his calendar.
+   through his calendar. Once times are offered, the conversation stays in that
+   context: a question about the times is answered from the calendar, and a
+   tapped time — even from an old list — is always read as a wish to book.
+   A lead whose answers are complete is **never re-screened**: a changed answer
+   is confirmed with the client before it is applied, and a client who returns
+   after a close is re-asked only the one question that closed the door.
+   When a client is exclusive with another agent and names when that ends, a
+   **callback reminder is placed in Lidor's calendar** for that date.
 6. The follow-up sequence **stops immediately** when any of the following occurs:
    - the client completes the qualification process;
    - the client requests no further messages, or opts out;

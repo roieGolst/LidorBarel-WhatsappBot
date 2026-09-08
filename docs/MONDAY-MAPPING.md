@@ -153,7 +153,7 @@ No schema changes needed.
 
 | Column ID | Type | Title | Bot writes |
 |---|---|---|---|
-| `color_mkpc9t27` | status | סוג פעילות | `0` פגישת ייעוץ |
+| `color_mkpc9t27` | status | סוג פעילות | `0` פגישת ייעוץ (a booked consultation) · `4` שיחת הכרות (the exclusivity callback reminder) |
 | `activity_start_time` | date | זמן התחלה | slot start |
 | `activity_end_time` | date | זמן סיום | slot end |
 | `board_relation_mkpcs6ky` | board_relation | איש קשר | → the לידים item |
@@ -192,6 +192,21 @@ Consequences, stated as rules:
   `state: "deleted"` (likewise `archived`). Anything that asks "does this item
   still exist" must check `state === "active"` — `MondayClient.itemExists` does.
 
+### The exclusivity callback reminder
+
+A lead closed as exclusive with another agent is worth a call the day the
+contract ends. When the person names that end and the classifier can date it
+(`exclusivityEndsOn`), the lead projection files one `פעילות` item —
+`חזרה ללקוח — סיום בלעדיות`, type `4` שיחת הכרות, status `3` Open, 10:00–10:30
+local on the end date (a Saturday rolls to Sunday), `איש קשר` → the lead — and
+records its id in `conversations.exclusivity_callback_item_id` so it is never
+filed twice. Monday's sync turns it into a calendar event. An explicit "don't
+call me" (`wantsExclusivityFollowup: false`) suppresses it; a vague end
+("בקרוב") produces no reminder, only the note below.
+
+The verified label set for `סוג פעילות`: `0` פגישת ייעוץ · `1` שיחת משקיע ·
+`2` סידור · `3` שיחת זום · `4` שיחת הכרות.
+
 ### Two mappings added in the hardening audit
 
 - A conversation in stage `error` — parked because its number could not be
@@ -201,6 +216,9 @@ Consequences, stated as rules:
 - A neighbourhood the dropdown does not list is never written as a label. It goes
   into **`פרטי נכס`** as `מיקום כפי שנמסר: …`, ahead of any other notes, so Lidor
   still sees exactly what the person said.
+- An exclusivity with another agent goes into **`פרטי נכס`** too:
+  `בלעדיות עם מתווך אחר עד: <as said> (<date>) — לחזור אליו בסיום הבלעדיות` (or
+  `— לא מעוניין שנחזור אליו`). Before this the end date never left Postgres.
 
 ### ⚠️ Date columns: read `value`, never `text`
 

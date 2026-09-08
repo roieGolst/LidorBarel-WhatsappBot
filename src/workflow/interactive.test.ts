@@ -1,6 +1,15 @@
 import { describe, expect, it } from 'vitest';
 import type { TurnAction } from './decide.js';
 import {
+  cannedReplyFor,
+  disqualificationClose,
+  DISQUALIFIED_MESSAGE,
+  EXCLUSIVE_FOLLOWUP_MESSAGE,
+  EXCLUSIVE_NO_FOLLOWUP_MESSAGE,
+  EXCLUSIVITY_QUESTION,
+  FACT_CHANGE_APPLIED_MESSAGE,
+  FACT_CHANGE_DECLINED_MESSAGE,
+  factChangeConfirmation,
   INTRO_VIDEO_PATH,
   MAIN_MENU,
   mainMenuChoiceFor,
@@ -8,6 +17,7 @@ import {
   screeningQuestionFor,
   WELCOME_MESSAGE,
 } from './interactive.js';
+import { validateReply } from './validate.js';
 
 const SCREENING_ACTIONS: TurnAction[] = [
   'ask_sell_intent',
@@ -126,5 +136,53 @@ describe('interactive content', () => {
         }
       }
     }
+  });
+});
+
+describe('the fixed closes and checks', () => {
+  it.each([
+    ['exclusivity question', EXCLUSIVITY_QUESTION],
+    ['disqualified', DISQUALIFIED_MESSAGE],
+    ['exclusive, follow-up', EXCLUSIVE_FOLLOWUP_MESSAGE],
+    ['exclusive, no follow-up', EXCLUSIVE_NO_FOLLOWUP_MESSAGE],
+    ['change applied', FACT_CHANGE_APPLIED_MESSAGE],
+    ['change declined', FACT_CHANGE_DECLINED_MESSAGE],
+  ])('%s passes the same validator as a model-written reply', (_name, text) => {
+    expect(validateReply(text).ok).toBe(true);
+  });
+
+  it('picks the close by reason and follow-up wish', () => {
+    expect(disqualificationClose('not_selling', undefined)).toBe(DISQUALIFIED_MESSAGE);
+    expect(disqualificationClose('exclusive_with_other_agent', undefined)).toBe(
+      EXCLUSIVE_FOLLOWUP_MESSAGE,
+    );
+    expect(disqualificationClose('exclusive_with_other_agent', true)).toBe(
+      EXCLUSIVE_FOLLOWUP_MESSAGE,
+    );
+    expect(disqualificationClose('exclusive_with_other_agent', false)).toBe(
+      EXCLUSIVE_NO_FOLLOWUP_MESSAGE,
+    );
+  });
+
+  it('the exclusivity question is canned, not model-written', () => {
+    expect(cannedReplyFor('ask_exclusivity')).toBe(EXCLUSIVITY_QUESTION);
+  });
+
+  it('the change check quotes both answers and asks exactly one question', () => {
+    const check = factChangeConfirmation(
+      { field: 'currentlyMarketed', value: 'with_agent' },
+      'no',
+    );
+    expect(check.body).toContain('הנכס משווק דרך מתווך אחר?');
+    expect(check.body).toContain('קודם ציינת: הנכס לא משווק כרגע.');
+    expect(validateReply(check.body, { requireQuestion: true }).ok).toBe(true);
+    expect(check.buttons).toHaveLength(2);
+
+    const place = factChangeConfirmation(
+      { field: 'neighborhood', value: 'נווה זאב' },
+      'רמות',
+    );
+    expect(place.body).toContain('הנכס בשכונת נווה זאב?');
+    expect(place.body).toContain('הנכס בשכונת רמות.');
   });
 });

@@ -1,0 +1,1 @@
+ALTER TABLE "conversations" ADD COLUMN "exclusivity_callback_item_id" text;

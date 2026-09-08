@@ -125,6 +125,47 @@ const conversation = (over = {}) =>
   }) as never;
 
 describe('leadColumnValues', () => {
+  it('tells Lidor when an exclusivity with another agent ends', () => {
+    // Before, the end date stayed in Postgres only; the one fact that says
+    // when a closed lead becomes worth a call never reached the board.
+    const values = leadColumnValues(
+      {
+        contact: contact(),
+        conversation: conversation(),
+        facts: {
+          currentlyMarketed: 'with_agent',
+          exclusivityEndsAt: 'מחר',
+          exclusivityEndsOn: '2026-09-09',
+          additionalNotes: '4 חדרים',
+        },
+      },
+      { includeStatus: false },
+    );
+
+    expect((values[LEAD_COLUMNS.propertyNotes] as { text: string }).text).toBe(
+      'בלעדיות עם מתווך אחר עד: מחר (2026-09-09) — לחזור אליו בסיום הבלעדיות\n4 חדרים',
+    );
+  });
+
+  it('records a declined follow-up so Lidor does not call anyway', () => {
+    const values = leadColumnValues(
+      {
+        contact: contact(),
+        conversation: conversation(),
+        facts: {
+          currentlyMarketed: 'with_agent',
+          exclusivityEndsAt: 'עוד חודשיים',
+          wantsExclusivityFollowup: false,
+        },
+      },
+      { includeStatus: false },
+    );
+
+    expect((values[LEAD_COLUMNS.propertyNotes] as { text: string }).text).toBe(
+      'בלעדיות עם מתווך אחר עד: עוד חודשיים — לא מעוניין שנחזור אליו',
+    );
+  });
+
   it('writes the phone without a plus, with the country', () => {
     const values = leadColumnValues(
       { contact: contact(), conversation: conversation(), facts: {} },

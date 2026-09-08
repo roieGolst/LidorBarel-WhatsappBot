@@ -54,6 +54,13 @@ export const extractedSchema = z.object({
   // Asked only when the property is marketed through another agent: when that
   // agent's exclusivity ends (free text), and whether they want a follow-up then.
   exclusivityEndsAt: z.string().min(1).optional(),
+  // The same, resolved to a calendar date (YYYY-MM-DD) when the words allow it —
+  // this is what puts a callback reminder into Lidor's calendar. Free text like
+  // "לא יודע" leaves it unset; nothing is invented.
+  exclusivityEndsOn: z
+    .string()
+    .regex(/^\d{4}-\d{2}-\d{2}$/)
+    .optional(),
   wantsExclusivityFollowup: z.boolean().optional(),
   // Any extra property details the person volunteers (rooms, size, floor,
   // condition, price expectation…) — a short note, appended to the lead.
@@ -86,6 +93,18 @@ export const extractedSchema = z.object({
   // Set once that clarification has been asked, so it is asked at most once. A
   // second unrecognised answer is then accepted verbatim rather than looping.
   neighborhoodClarified: z.boolean().optional(),
+  // A screening answer the person appears to have CHANGED after their details
+  // were already with Lidor, held here until they confirm it (see
+  // decide.ts `changedScreeningFact`). Nothing is overwritten on a maybe.
+  pendingFactChange: z
+    .object({
+      field: z.enum(['sellIntent', 'neighborhood', 'timeline', 'currentlyMarketed']),
+      value: z.string().min(1),
+    })
+    .optional(),
+  // Set once the intent check has been passed, so a lead who comes back (or
+  // re-answers one question) is not asked for their property details again.
+  intentAssessed: z.boolean().optional(),
 });
 
 /** Extraction fields owned by the workflow, never accepted from the model. */
@@ -96,6 +115,8 @@ export const WORKFLOW_OWNED_FIELDS = [
   'sentTestimonials',
   'neighborhoodCandidate',
   'neighborhoodClarified',
+  'pendingFactChange',
+  'intentAssessed',
 ] as const satisfies readonly (keyof z.infer<typeof extractedSchema>)[];
 
 export const analysisSchema = z.object({
@@ -122,6 +143,14 @@ export const analysisSchema = z.object({
    * whatever they asked (see `Decision.addressFirst`).
    */
   asksQuestion: z.boolean().default(false),
+  /**
+   * True when the bot has just offered meeting times and the LATEST message
+   * turns them down as a whole — none suits, "let Lidor call me instead", not
+   * picking a time now. A question about the times, or a request for a
+   * different one, is NOT a decline. Lets the booking stage end honestly
+   * instead of re-offering the same list to someone who said no.
+   */
+  declinesOfferedTimes: z.boolean().default(false),
 });
 
 export type Analysis = z.infer<typeof analysisSchema>;
@@ -141,6 +170,7 @@ export const UNCLEAR_ANALYSIS: Analysis = {
   wantsBuyerProof: false,
   wantsSocialProof: false,
   asksQuestion: false,
+  declinesOfferedTimes: false,
 };
 
 const SYSTEM_PROMPT = `You are the classification stage of an inbound WhatsApp bot for a real estate agent in Beer Sheva, Israel. Leads write in Hebrew, often informally, with typos, slang, or voice-to-text artifacts.
@@ -156,6 +186,7 @@ Return JSON with exactly these fields:
     - "timeline" (Q3 — "תוך כמה זמן תרצה למכור אם תקבל הצעה מתאימה?"): "immediate" (מיד) | "within_month" (בחודש הקרוב) | "still_checking" (בחודשים הקרובים) | "no_urgency" (אין דחיפות)
     - "currentlyMarketed" (Q4 — "האם הנכס משווק כרגע?"): "no" (לא) | "privately" (כן, באופן פרטי) | "with_agent" (כן, עם מתווך)
     - "exclusivityEndsAt": when the current agent's exclusivity ends, as free text (e.g. "עוד חודשיים", "בסוף מרץ", "לא יודע") — only when they say it
+    - "exclusivityEndsOn": the same end, as a calendar date "YYYY-MM-DD", ONLY when the words pin down a date given today's date (shown in the context line "(היום: …)"): "מחר" → tomorrow, "בעוד שבוע" → +7 days, "בסוף מרץ" → the last day of that March, "15.10" → that date (this year, or next if already past), "עוד חודשיים" → +2 months. Omit for anything vague ("בקרוב", "לא יודע", "עוד קצת"). Never guess.
     - "wantsExclusivityFollowup": true/false if they say whether they want us to follow up once the exclusivity ends
     - "additionalNotes": ONLY when THIS message adds or clarifies a NEW property detail (rooms, size/מ"ר, floor, condition/renovation, parking, price expectation, exact street/address, etc.), return the FULL consolidated Hebrew summary of ALL property details so far — merge any "פרטי הנכס עד כה" context shown to you with the new details, into ONE concise line with NO duplication and no repeated facts. CRITICAL: if this message adds NO new property detail (a question, a bare "כן"/"אוקיי", a request for testimonials, small talk), you MUST omit "additionalNotes" entirely — do NOT echo the consolidated notes just because context exists. Its presence must mean "this message added a detail".
     - "sellMotivation": a short Hebrew note of WHY they are (or are not) looking to sell, when they say it (e.g. "עוברים דירה", "צריך נזילות", "רק בודק מחיר").
@@ -163,6 +194,7 @@ Return JSON with exactly these fields:
     - "bookingIntent": true when they explicitly ask to schedule a meeting/call or to move forward with selling now (e.g. "תקבע לי פגישה", "אני רוצה למכור את הנכס", "בוא נתקדם", "מתי אפשר להיפגש?"). Omit otherwise.
 - "asksQuestion": true when the message contains a real QUESTION or a concern that deserves an answer, IN ADDITION to whatever else it does. Set it even when the message also answers the pending screening question — e.g. "בשכונת נווה זאב, לידור יודע למכור שם?" both answers the neighborhood question AND asks something, so extract the neighborhood AND set "asksQuestion": true. Judge the LATEST message's OWN WORDS only: it must itself contain the question or concern. Set it FALSE for a bare answer ("לא", "כן, רוצה למכור", "רמות"), a greeting, or small talk — do NOT set it true because an EARLIER message asked something that was already answered.
 - "needsEscalation": true if the message shows anger, frustration, or something a bot should not handle alone.
+- "declinesOfferedTimes": true ONLY when the bot's previous message offered meeting times (a list of days and hours) and the LATEST message turns them ALL down or does not want to pick one — e.g. "אף אחד לא מתאים", "שלידור יתקשר אליי", "לא רוצה לקבוע עכשיו", "אני אחזור אליכם". A question about the times ("אין מוקדם יותר?", "יש משהו בערב?") or a request for a different time is NOT a decline — false. Otherwise false.
 - "wantsBuyerProof": true if the seller is asking how the property will be marketed, whether there are ready/potential buyers, or what value/results the agent brings (e.g. "יש לך קונים?", "איך תשווק את הנכס?", "למה כדאי לעבוד איתך?", "מאיפה יגיעו הקונים?"). Otherwise false.
 - "wantsSocialProof": true ONLY if the LATEST message's OWN WORDS ask to see/hear testimonials, recommendations, reviews, or references from past clients (contains words like "ממליצים", "המלצות", "חוות דעת", "לקוחות מרוצים", "ביקורות", or asks to speak with someone who sold with him). Leads type fast on a phone, so ACCEPT obvious misspellings of these words — e.g. "המצלות", "המלצות?", "ממליצם" all mean "המלצות". A request scoped to a place ("יש המלצות מנווה זאב?") still counts. This is a per-message property of the latest message's text ALONE. Apply this hard rule: if the latest message contains an address, a room count, a floor, a size (מ"ר), or a price — and does NOT contain any testimonial/recommendation word — then wantsSocialProof MUST be false, no matter what earlier messages said. Likewise a bare "כן"/"אוקיי"/"טוב" with no testimonial word is false. Do NOT carry it over from earlier turns. Example: latest="רחוב רבין 12, 5 חדרים, קומה 2, 2.4 מיליון" → wantsSocialProof=false (it is property details). Example: latest="יש ממליצים?" → wantsSocialProof=true. Distinct from "wantsBuyerProof" (marketing/buyers). Otherwise false.
 
@@ -187,6 +219,12 @@ export interface ClassifyInput {
    * objection, or a validator rejection — never as the default (§7).
    */
   escalate?: boolean;
+  /**
+   * Today's date in the lead's timezone, e.g. `יום שלישי, 2026-09-08`. Given so
+   * a relative date ("מחר", "בעוד שבוע") can be resolved to a calendar date;
+   * without it the model has no idea what day it is.
+   */
+  today?: string | undefined;
 }
 
 export interface ClassifyResult {
@@ -208,6 +246,9 @@ export async function classifyAndExtract(
     input.priorNotes !== undefined && input.priorNotes.length > 0
       ? [{ role: 'user' as const, content: `(פרטי הנכס עד כה: ${input.priorNotes})` }]
       : [];
+  const todayContext = input.today
+    ? [{ role: 'user' as const, content: `(היום: ${input.today})` }]
+    : [];
 
   const { text, usage } = await llm.complete({
     model,
@@ -215,6 +256,7 @@ export async function classifyAndExtract(
     messages: [
       ...(input.history ?? []),
       ...priorNotesContext,
+      ...todayContext,
       { role: 'user', content: input.text },
     ],
     // Classification JSON is tiny; this is a generous ceiling, not a target.

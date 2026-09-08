@@ -7,7 +7,7 @@
 Requirement IDs refer to [PRODUCT-REQUIREMENTS.md](PRODUCT-REQUIREMENTS.md) §2
 (flow steps) and §3 (non-negotiables, `NN-*`).
 
-Last updated: 2026-08-23
+Last updated: 2026-09-08
 
 ---
 
@@ -44,6 +44,12 @@ Last updated: 2026-08-23
 | 4c | A projection deleted by hand is recreated | `monday/syncLead.ts` · `monday/client.ts` (`itemExists` checks `state`) | `client.test.ts` · `mondayProjection.test.ts` | ✅ |
 | 5 | Never double-book | availability re-read at booking time | `booking.test.ts` (slot taken) | ✅ |
 | 5 | Never offer outside meeting hours or on Shabbat | `appointments/availability.ts` | `availability.test.ts` | ✅ |
+| 5 | A question while times are offered is answered with the real times, not deflected | `workflow/decide.ts` (`appointment_proposed` routing) · `workflow/generate.ts` (`assist_booking`, `[CONTEXT]`) · `appointments/slotMessages.ts` | `decide.test.ts` · `changedAnswers.test.ts` · `generate.test.ts` | ✅ |
+| 5 | A meeting time tapped from a stale list is never read as a property answer | `appointments/slotMessages.ts` (`isSlotLabel`) · `workflow/conversationTurn.ts` | `slotMessages.test.ts` · `changedAnswers.test.ts` | ✅ |
+| 4 | A changed answer after qualification is confirmed before it is applied | `workflow/decide.ts` (`changedScreeningFact`) · `workflow/interactive.ts` (`factChangeConfirmation`) | `decide.test.ts` · `changedAnswers.test.ts` | ✅ |
+| 4 | A returning lead is not re-screened from the top | `db/repositories/conversations.ts` (`reopenedFacts`) · `workflow/decide.ts` (`intentAssessed`) | `ingest.test.ts` · `decide.test.ts` · `changedAnswers.test.ts` | ✅ |
+| 4 | The closes are fixed, validated Hebrew | `workflow/interactive.ts` (`disqualificationClose`, `EXCLUSIVITY_QUESTION`) | `interactive.test.ts` · `conversationTurn.test.ts` | ✅ |
+| 4 | An exclusivity end becomes a callback reminder in Lidor's calendar, once | `appointments/exclusivityCallback.ts` · `monday/syncLead.ts` · `workflow/classify.ts` (`exclusivityEndsOn`) | `exclusivityCallback.test.ts` · `mondayProjection.test.ts` · `classify.test.ts` · `localTime.test.ts` | ✅ |
 | 6 | A lead who cannot be messaged is parked, not retried every sweep | `outreach/firstContact.ts` · `outreach/followUp.ts` · `whatsapp/guardedSend.ts` (`isPermanentSendFailure`) | `firstContact.test.ts` · `followUp.test.ts` · `guardedSend.test.ts` · `cloudApiChannel.test.ts` | ✅ |
 | 6 | Follow-up outcomes are projected to the board | `outreach/followUp.ts` | `followUp.test.ts` | ✅ |
 | 6 | Stop conditions cancel follow-ups | `outreach/followUp.ts` · `db/repositories/conversations.ts` (`recordInboundActivity`) | `followUp.test.ts` (stop conditions) · `e2e/leadLifecycle.test.ts` | ✅ |

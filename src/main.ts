@@ -292,6 +292,7 @@ async function main(): Promise<void> {
     outboxWorker = startOutboxWorker({
       db,
       monday,
+      timeZone: config.timezone,
       // Form names make the board readable; an id tells Lidor nothing. Absent a
       // leads client the column is simply left empty.
       ...(leadsClient

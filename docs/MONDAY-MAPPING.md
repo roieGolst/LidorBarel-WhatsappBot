@@ -162,6 +162,24 @@ No schema changes needed.
 | `location_mkpchxzd` | location | מיקום | — |
 | `activity_owner` | people | Owner | — |
 
+### ⚠️ Deleting a `פעילות` item does NOT remove its Calendar event
+
+Verified 2026-09-08: two test items were deleted through the API (confirmed
+`state: "deleted"`) and both Google Calendar events stayed in Lidor's calendar.
+The integration is Monday's built-in one and cannot be changed.
+
+Consequences, stated as rules:
+
+- **The bot never deletes a `פעילות` item.** Booking only creates, which is
+  verified. A future cancel/reschedule flow must *update* the item (status, time)
+  rather than delete it — and must first verify that updates propagate at all,
+  because that was assumed in plan v5 alongside deletion, and deletion turned out
+  not to.
+- **Never make a real booking to test.** Every real booking is a real calendar
+  event that only a human can remove. The e2e test uses a fake Monday for this
+  reason; the one live verification is done and recorded, and does not need
+  repeating.
+
 ### Two API traps, both found by verifying a booking live
 
 - **Relation columns are unreadable through the generic query.** For

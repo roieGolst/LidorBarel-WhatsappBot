@@ -29,6 +29,7 @@ export type TurnAction =
   | 'show_main_menu' // spec §8 opening buttons
   | 'ask_sell_intent' // spec Q1 (direct-message leads only)
   | 'ask_neighborhood' // spec Q2
+  | 'clarify_neighborhood' // Q2 answer looked like an address → ask which neighbourhood
   | 'ask_timeline' // spec Q3 (direct-message leads only)
   | 'ask_currently_marketed' // spec Q4
   | 'ask_exclusivity' // Q4 = with another agent: capture exclusivity end + follow-up

@@ -129,6 +129,11 @@ export function statusLabelFor(
       return LEAD_STATUS.askedToStop;
     case 'closed_no_response':
       return LEAD_STATUS.noResponse;
+    case 'error':
+      // Parked because the number could not be messaged — undeliverable, or a
+      // recipient outside the allow-list. "Missing info" is the status Lidor
+      // already uses for a lead whose details need fixing.
+      return LEAD_STATUS.missingInfo;
     case 'qualified':
     case 'handed_off':
       return LEAD_STATUS.awaitingCall;
@@ -230,14 +235,21 @@ export function leadColumnValues(
       index: MARKETED_LABEL[facts.currentlyMarketed],
     };
   }
+  // A place we do not recognise never becomes a dropdown label — that is how a
+  // street address turns into a permanent board value. It is not dropped either:
+  // it goes into the notes verbatim, so Lidor still sees exactly what was said.
+  let unlistedPlace: string | undefined;
   if (facts.neighborhood) {
     const id = neighborhoodLabelId(facts.neighborhood);
-    // An unrecognised neighbourhood is left off rather than creating a label:
-    // that is how a street address becomes a permanent board value.
     if (id !== undefined) values[LEAD_COLUMNS.neighborhood] = { ids: [id] };
+    else unlistedPlace = facts.neighborhood;
   }
-  if (facts.additionalNotes) {
-    values[LEAD_COLUMNS.propertyNotes] = { text: facts.additionalNotes };
+  const notes = [
+    ...(unlistedPlace ? [`מיקום כפי שנמסר: ${unlistedPlace}`] : []),
+    ...(facts.additionalNotes ? [facts.additionalNotes] : []),
+  ];
+  if (notes.length > 0) {
+    values[LEAD_COLUMNS.propertyNotes] = { text: notes.join('\n') };
   }
 
   // The score is the point of the whole qualification: Lidor works a queue, and

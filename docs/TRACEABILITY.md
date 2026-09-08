@@ -31,6 +31,8 @@ Last updated: 2026-08-23
 | 3 | Never sends on Shabbat / outside business hours | `outreach/followUpPolicy.ts` | `followUpPolicy.test.ts` | ✅ |
 | 4a | Conversation turn, transcript, media | `workflow/conversationTurn.ts` | `conversationTurn.test.ts` | ✅ |
 | 4a | Answer validation and re-asking | `workflow/validateAnswer.ts` | `validateAnswer.test.ts` | ✅ |
+| 4a | An address given as the neighbourhood is checked once, never stored on faith | `workflow/conversationTurn.ts` · `workflow/validateAnswer.ts` | `neighborhoodClarification.test.ts` | ✅ |
+| 4c | An unlisted place still reaches Lidor (notes, not a bogus label) | `monday/leadMapping.ts` | `leadMapping.test.ts` | ✅ |
 | 4b | Screening and stage transitions | `workflow/decide.ts` | `decide.test.ts` | ✅ |
 | 4b | Intent / extraction classification | `workflow/classify.ts` | `classify.test.ts` | ✅ |
 | 4b | Priority score | `workflow/decide.ts` (`leadPriorityScore`) | `decide.test.ts` | ✅ |
@@ -41,6 +43,8 @@ Last updated: 2026-08-23
 | 5 | Book into Lidor's calendar | `appointments/booking.ts` (`פעילות` → Monday sync) | `booking.test.ts` · `e2e/leadLifecycle.test.ts` | ✅ |
 | 5 | Never double-book | availability re-read at booking time | `booking.test.ts` (slot taken) | ✅ |
 | 5 | Never offer outside meeting hours or on Shabbat | `appointments/availability.ts` | `availability.test.ts` | ✅ |
+| 6 | A lead who cannot be messaged is parked, not retried every sweep | `outreach/firstContact.ts` · `outreach/followUp.ts` · `whatsapp/guardedSend.ts` (`isPermanentSendFailure`) | `firstContact.test.ts` · `followUp.test.ts` · `guardedSend.test.ts` · `cloudApiChannel.test.ts` | ✅ |
+| 6 | Follow-up outcomes are projected to the board | `outreach/followUp.ts` | `followUp.test.ts` | ✅ |
 | 6 | Stop conditions cancel follow-ups | `outreach/followUp.ts` · `db/repositories/conversations.ts` (`recordInboundActivity`) | `followUp.test.ts` (stop conditions) · `e2e/leadLifecycle.test.ts` | ✅ |
 | 7 | No message after opt-out | `whatsapp/guardedSend.ts` | `guardedSend.test.ts` | ✅ |
 | — | Free-form refused outside the 24h window | `whatsapp/guardedSend.ts` · `whatsapp/window.ts` | `guardedSend.test.ts` (messaging window) | ✅ |

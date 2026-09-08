@@ -79,6 +79,13 @@ export const extractedSchema = z.object({
   // Testimonial clips already sent, so a repeat request gets a different one
   // rather than the same clip twice (or nothing at all).
   sentTestimonials: z.array(z.string()).optional(),
+  // A neighbourhood answer that read as a real place but is not one we know —
+  // typically a street address. Held here, unverified, while the person is asked
+  // which neighbourhood it is in; never written to `neighborhood` until then.
+  neighborhoodCandidate: z.string().min(1).optional(),
+  // Set once that clarification has been asked, so it is asked at most once. A
+  // second unrecognised answer is then accepted verbatim rather than looping.
+  neighborhoodClarified: z.boolean().optional(),
 });
 
 /** Extraction fields owned by the workflow, never accepted from the model. */
@@ -87,6 +94,8 @@ export const WORKFLOW_OWNED_FIELDS = [
   'awaitingRestartConfirm',
   'pendingRestartChoice',
   'sentTestimonials',
+  'neighborhoodCandidate',
+  'neighborhoodClarified',
 ] as const satisfies readonly (keyof z.infer<typeof extractedSchema>)[];
 
 export const analysisSchema = z.object({

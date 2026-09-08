@@ -14,7 +14,8 @@ Last reviewed: 2026-08-23
 An **AI-powered WhatsApp bot that proactively contacts people who submitted Lidor
 Barel's paid Meta campaign lead form and consented to be contacted on WhatsApp**,
 qualifies them against the Champions Chatbot Builder spec, projects them into
-Monday.com, and books consultation calls into Google Calendar.
+Monday.com, and books consultation calls into Lidor's calendar (through
+Monday's synced activity board).
 
 **Proactive, business-initiated outreach to consenting paid leads is the primary
 purpose of this system. It is not a future feature and not an optional flow.**

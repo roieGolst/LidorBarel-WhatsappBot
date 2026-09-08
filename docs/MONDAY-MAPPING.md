@@ -162,6 +162,16 @@ No schema changes needed.
 | `location_mkpchxzd` | location | מיקום | — |
 | `activity_owner` | people | Owner | — |
 
+### Two mappings added in the hardening audit
+
+- A conversation in stage `error` — parked because its number could not be
+  messaged (undeliverable, outside the test number's allow-list) — is written as
+  **`5` חסר מידע**, the status Lidor already uses for a lead whose details need
+  fixing. Its automation files it into `לידים בטיפול`.
+- A neighbourhood the dropdown does not list is never written as a label. It goes
+  into **`פרטי נכס`** as `מיקום כפי שנמסר: …`, ahead of any other notes, so Lidor
+  still sees exactly what the person said.
+
 ### ⚠️ Date columns: read `value`, never `text`
 
 Monday renders a date column's `text` in the **account's** timezone and holds

@@ -61,6 +61,9 @@ dangerous than plain gaps, because reviewers trust them.
 | ~~**D-1**~~ | ~~Consent gate is inert.~~ **Fixed in Phase 2.** `guardedSend` now takes an explicit send intent and checks `canReceiveProactiveMessage` for every proactive send. The type system makes a proactive send inexpressible without a contact to check. | `src/whatsapp/guardedSend.ts` | Resolved. **NN-2 enforced and tested.** |
 | ~~**D-2**~~ | ~~Send window never checked.~~ **Fixed in Phase 2.** Free-form sends are refused outside the 24-hour window; an approved template is the documented exception. | `src/whatsapp/guardedSend.ts` | Resolved. |
 | ~~**D-3**~~ | ~~`leadgen` payloads are silently discarded.~~ **Fixed in Phase 1.** The route now dispatches on `envelope.object`, and an unconfigured lead path fails closed with 503 rather than ACKing. | `src/whatsapp/routes.ts` · `src/leads/` | Resolved. |
+| ~~**D-5**~~ | **Permanent send failures retried for ever.** A first contact or follow-up refused at the choke point (opt-out, no consent) or rejected by Meta with a 4xx released its claim and was picked up again on the next sweep, every minute, indefinitely. The follow-up code's own comment claimed a cap would end it; the cap only counts *successful* sends. **Fixed in the hardening audit (2026-09-08):** failures are classified, permanent ones park the lead (`error` / `opted_out`) with the cause recorded and the board told, and the due-queries exclude anyone who cannot be messaged in the first place. | `outreach/firstContact.ts` · `outreach/followUp.ts` · `whatsapp/guardedSend.ts` | Resolved. |
+| ~~**D-6**~~ | **Follow-ups never reached the board.** Neither a sent nudge nor the sequence closing a lead as no-response queued a projection, so `ליד ללא מענה` — which exists on Lidor's status column for exactly that moment — was never set by the bot. **Fixed.** | `outreach/followUp.ts` | Resolved. |
+| ~~**D-7**~~ | **A street address was stored as the neighbourhood.** Q2 invites "a full address" and nothing mapped one, so "אהרון מסקין" (a street) was accepted verbatim and reached the board as where the property was. **Fixed:** an unrecognised place is checked with the person once, and if it stands it reaches Lidor in the notes rather than as a bogus dropdown label. | `workflow/conversationTurn.ts` · `workflow/validateAnswer.ts` · `monday/leadMapping.ts` | Resolved. |
 | **D-4** | **Unused scaffolding.** `outbox` table, `appointment_requests` table, all `appointment_*` stages, `messages.template_ref`, `campaign_referrals.form_id` / `.external_lead_id`, `setMondayItemId()` — all defined, none written or read by production code. | `src/db/schema.ts` | Not a bug; a reminder that schema presence ≠ implementation. |
 
 ---
@@ -108,6 +111,22 @@ retired seller forms. Exactly one form is live: `1746567036243410`.
 rest are recorded for attribution with no conversation opened. Replacing the form
 (for updated privacy wording, say) means a new id in both lists — Meta forms are
 immutable, so wording changes always produce a new form.
+
+### Hardening audit — 2026-09-08
+
+A deliberate pass over every flow before Phase 7, prompted by a real
+conversation in which a street address was accepted as the neighbourhood. It
+found that (D-7), and two things that would have hurt more in production:
+sweeper loops that retried a permanently refused send every minute for ever
+(D-5), and follow-ups that never told the board anything (D-6). All three are
+fixed and covered by tests; the earlier tests that encoded the "refuse and retry"
+behaviour were rewritten to assert the new contract while keeping the compliance
+property — nothing sent — intact.
+
+One rule fell out of it, now enforced at a single point
+(`isPermanentSendFailure`): a refusal from the choke point is permanent by
+construction, and the Cloud API says for itself whether its failure was
+transient. Every outreach loop routes on that one answer.
 
 ### What Phase 6 delivers
 
@@ -300,7 +319,7 @@ onward, so start them early.
 
 ## 6. Test coverage reality
 
-587 tests across 39 files, colocated, with integration tests running against a
+730 tests across 45 files, colocated, with integration tests running against a
 real PostgreSQL. Phase 4 added the stop-condition suite — every cap, stage, and
 refusal asserted separately — plus Shabbat and business-hours cases pinned to
 real Israeli local times in both DST states.

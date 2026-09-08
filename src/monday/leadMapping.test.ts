@@ -258,3 +258,55 @@ describe('leadColumnValues', () => {
     expect(values).not.toHaveProperty('date_mm6apc14');
   });
 });
+
+describe('a place the board does not list', () => {
+  it('still reaches Lidor, in the notes rather than as a bogus label', () => {
+    const values = leadColumnValues(
+      {
+        contact: contact(),
+        conversation: conversation(),
+        facts: { neighborhood: 'אהרון מסקין' },
+      },
+      { includeStatus: false },
+    );
+
+    expect(values).not.toHaveProperty(LEAD_COLUMNS.neighborhood);
+    expect(values[LEAD_COLUMNS.propertyNotes]).toEqual({
+      text: 'מיקום כפי שנמסר: אהרון מסקין',
+    });
+  });
+
+  it('sits alongside the property notes, not instead of them', () => {
+    const values = leadColumnValues(
+      {
+        contact: contact(),
+        conversation: conversation(),
+        facts: { neighborhood: 'אופקים', additionalNotes: '4 חדרים, קומה 2' },
+      },
+      { includeStatus: false },
+    );
+
+    expect((values[LEAD_COLUMNS.propertyNotes] as { text: string }).text).toBe(
+      'מיקום כפי שנמסר: אופקים\n4 חדרים, קומה 2',
+    );
+  });
+
+  it('does not add a note for a listed neighbourhood', () => {
+    const values = leadColumnValues(
+      {
+        contact: contact(),
+        conversation: conversation(),
+        facts: { neighborhood: 'רמות' },
+      },
+      { includeStatus: false },
+    );
+
+    expect(values).not.toHaveProperty(LEAD_COLUMNS.propertyNotes);
+  });
+});
+
+describe('a lead parked because it could not be messaged', () => {
+  it('shows as missing info, the status Lidor uses for details that need fixing', () => {
+    expect(statusLabelFor('error', null)).toBe(LEAD_STATUS.missingInfo);
+  });
+});

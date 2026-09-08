@@ -327,3 +327,17 @@ const CANNED_REPLIES: Partial<Record<TurnAction, string>> = {
 export function cannedReplyFor(action: TurnAction): string | undefined {
   return CANNED_REPLIES[action];
 }
+
+/**
+ * Asked once when a Q2 answer reads as a real place but is not a neighbourhood
+ * we recognise — almost always a street, since the question itself invites a
+ * full address. Names the person's own words back so they see what was
+ * misread, asks the one thing needed, and leaves room for "it isn't in Be'er
+ * Sheva at all" without a second question.
+ */
+export function neighborhoodClarification(candidate: string): string {
+  return (
+    `״${candidate}״ נשמע כמו רחוב ולא כמו שכונה 🙂 ` +
+    'באיזו שכונה בבאר שבע נמצא הנכס? ואם הוא לא בבאר שבע, פשוט כתוב לי איפה.'
+  );
+}

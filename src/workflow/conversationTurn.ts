@@ -56,6 +56,7 @@ import { generateValidatedReply } from './generate.js';
 import {
   BOOKING_LEADIN_MESSAGE,
   cannedReplyFor,
+  neighborhoodClarification,
   INTRO_VIDEO_PATH,
   MAIN_MENU,
   mainMenuChoiceFor,
@@ -1031,9 +1032,11 @@ export function createConversationWorkflow(
       // Answer validation (review req #1): drop an implausible free-text
       // neighborhood ("Opus 4.8") before it is trusted, so it is neither stored
       // nor advances the flow — the screening question is simply re-asked.
-      const { extracted: cleanExtracted, invalidNeighborhood } = sanitizeExtraction(
-        analysis.extracted,
-      );
+      const {
+        extracted: cleanExtracted,
+        invalidNeighborhood,
+        unknownNeighborhood,
+      } = sanitizeExtraction(analysis.extracted);
       if (invalidNeighborhood !== undefined) {
         logger.info(
           { conversationId, invalidNeighborhood },
@@ -1047,6 +1050,25 @@ export function createConversationWorkflow(
       // those fields is discarded so it can never write them.
       for (const field of WORKFLOW_OWNED_FIELDS) {
         delete validated.extracted[field];
+      }
+
+      // Q2 clarification. The neighbourhood question invites a full address, but
+      // nothing maps an address onto a neighbourhood — so a plausible place we do
+      // not recognise (a street, another city) is checked with the person once
+      // rather than stored on faith. It is held out of the facts until then.
+      let clarifyNeighborhood: string | undefined;
+      if (unknownNeighborhood !== undefined && ctx.known.neighborhoodClarified !== true) {
+        delete validated.extracted.neighborhood;
+        clarifyNeighborhood = unknownNeighborhood;
+      } else if (
+        ctx.known.neighborhoodCandidate !== undefined &&
+        validated.extracted.neighborhood === undefined &&
+        validated.intent === 'ANSWER'
+      ) {
+        // They answered the clarification without naming a different place, so
+        // their original words stand — accepted verbatim, never swapped for a
+        // nearest match (rule 1 in domain/neighborhoods.ts).
+        validated.extracted.neighborhood = ctx.known.neighborhoodCandidate;
       }
 
       // `seriousSeller` / `sellMotivation` are the answer to the intent question,
@@ -1105,6 +1127,31 @@ export function createConversationWorkflow(
           ctx.screenAll,
           Boolean(deps.appointments),
         );
+      }
+
+      // The address is checked only where the flow was actually asking Q2. If it
+      // arrived alongside something else — an FAQ, an objection — it is simply not
+      // stored, and Q2 collects it properly when its turn comes.
+      if (clarifyNeighborhood !== undefined && decision.action === 'ask_neighborhood') {
+        decision = { ...decision, action: 'clarify_neighborhood' };
+      } else {
+        clarifyNeighborhood = undefined;
+      }
+
+      // Bookkeeping for the clarification: remember what was asked about, and
+      // that it was asked, so it is asked at most once. Once a neighbourhood is
+      // finally stored the candidate has served its purpose and is dropped.
+      const neighborhoodBookkeeping: Partial<KnownFacts> =
+        clarifyNeighborhood !== undefined
+          ? { neighborhoodCandidate: clarifyNeighborhood, neighborhoodClarified: true }
+          : {};
+      const knownForPersist: KnownFacts = { ...ctx.known };
+      if (
+        clarifyNeighborhood === undefined &&
+        (validated.extracted.neighborhood !== undefined ||
+          ctx.known.neighborhood !== undefined)
+      ) {
+        delete knownForPersist.neighborhoodCandidate;
       }
 
       // Booking intent: the "קביעת פגישה" menu choice, or a message the classifier
@@ -1245,7 +1292,10 @@ export function createConversationWorkflow(
       let regenerated = false;
       let fellBack = false;
       const question = screeningQuestionFor(decision.action);
-      const canned = cannedReplyFor(decision.action);
+      const canned =
+        decision.action === 'clarify_neighborhood' && clarifyNeighborhood !== undefined
+          ? neighborhoodClarification(clarifyNeighborhood)
+          : cannedReplyFor(decision.action);
       // A qualified lead who asked for a meeting is offered Lidor's real free
       // times. If he has nothing free in the horizon the turn falls back to the
       // handoff — promising times that do not exist would be worse than saying
@@ -1374,8 +1424,9 @@ export function createConversationWorkflow(
         // none, and implies top urgency — timeline is taken as immediate (Q3 is
         // skipped) unless a timeline is already known.
         extracted: {
-          ...ctx.known,
+          ...knownForPersist,
           ...validated.extracted,
+          ...neighborhoodBookkeeping,
           ...(bookingIntent
             ? {
                 bookingIntent: true,

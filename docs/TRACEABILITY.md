@@ -40,7 +40,8 @@ Last updated: 2026-08-23
 | 4c | Outbox written in the state change's transaction | `workflow/persist.ts` · `leads/ingestLead.ts` · `outreach/firstContact.ts` | `e2e/leadLifecycle.test.ts` | ✅ |
 | NN-4 | A Monday outage cannot interrupt a conversation | delivery is out of the reply path | `mondayProjection.test.ts` (retry/park) | ✅ |
 | 5 | Offer real free times | `appointments/availability.ts` · `appointments/booking.ts` | `availability.test.ts` · `booking.test.ts` | ✅ |
-| 5 | Book into Lidor's calendar | `appointments/booking.ts` (`פעילות` → Monday sync) | `booking.test.ts` · `e2e/leadLifecycle.test.ts` | ✅ |
+| 5 | Book into Lidor's calendar | `appointments/booking.ts` (`פעילות` → Monday sync) | `booking.test.ts` · `e2e/leadLifecycle.test.ts` · **verified live 2026-09-08** (IMPLEMENTATION-STATUS §Phase 6) | ✅ |
+| 4c | A projection deleted by hand is recreated | `monday/syncLead.ts` · `monday/client.ts` (`itemExists` checks `state`) | `client.test.ts` · `mondayProjection.test.ts` | ✅ |
 | 5 | Never double-book | availability re-read at booking time | `booking.test.ts` (slot taken) | ✅ |
 | 5 | Never offer outside meeting hours or on Shabbat | `appointments/availability.ts` | `availability.test.ts` | ✅ |
 | 6 | A lead who cannot be messaged is parked, not retried every sweep | `outreach/firstContact.ts` · `outreach/followUp.ts` · `whatsapp/guardedSend.ts` (`isPermanentSendFailure`) | `firstContact.test.ts` · `followUp.test.ts` · `guardedSend.test.ts` · `cloudApiChannel.test.ts` | ✅ |

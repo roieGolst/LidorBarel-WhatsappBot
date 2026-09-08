@@ -162,6 +162,18 @@ No schema changes needed.
 | `location_mkpchxzd` | location | מיקום | — |
 | `activity_owner` | people | Owner | — |
 
+### Two API traps, both found by verifying a booking live
+
+- **Relation columns are unreadable through the generic query.** For
+  `board_relation` (`איש קשר`), both `text` and `value` come back `null` even
+  when the link is set. Read it through the typed fragment —
+  `... on BoardRelationValue { linked_item_ids display_value }` — or you will
+  conclude, wrongly, that nothing is linked. (This is how an earlier diagnostic
+  reported Lidor's real activities as unlinked.)
+- **`items(ids: …)` returns deleted items.** They come back with
+  `state: "deleted"` (likewise `archived`). Anything that asks "does this item
+  still exist" must check `state === "active"` — `MondayClient.itemExists` does.
+
 ### Two mappings added in the hardening audit
 
 - A conversation in stage `error` — parked because its number could not be

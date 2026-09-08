@@ -64,6 +64,7 @@ dangerous than plain gaps, because reviewers trust them.
 | ~~**D-5**~~ | **Permanent send failures retried for ever.** A first contact or follow-up refused at the choke point (opt-out, no consent) or rejected by Meta with a 4xx released its claim and was picked up again on the next sweep, every minute, indefinitely. The follow-up code's own comment claimed a cap would end it; the cap only counts *successful* sends. **Fixed in the hardening audit (2026-09-08):** failures are classified, permanent ones park the lead (`error` / `opted_out`) with the cause recorded and the board told, and the due-queries exclude anyone who cannot be messaged in the first place. | `outreach/firstContact.ts` · `outreach/followUp.ts` · `whatsapp/guardedSend.ts` | Resolved. |
 | ~~**D-6**~~ | **Follow-ups never reached the board.** Neither a sent nudge nor the sequence closing a lead as no-response queued a projection, so `ליד ללא מענה` — which exists on Lidor's status column for exactly that moment — was never set by the bot. **Fixed.** | `outreach/followUp.ts` | Resolved. |
 | ~~**D-7**~~ | **A street address was stored as the neighbourhood.** Q2 invites "a full address" and nothing mapped one, so "אהרון מסקין" (a street) was accepted verbatim and reached the board as where the property was. **Fixed:** an unrecognised place is checked with the person once, and if it stands it reaches Lidor in the notes rather than as a bogus dropdown label. | `workflow/conversationTurn.ts` · `workflow/validateAnswer.ts` · `monday/leadMapping.ts` | Resolved. |
+| ~~**D-8**~~ | **A deleted Monday item still counted as existing.** `items(ids: …)` returns deleted and archived items with `state` set; `itemExists` checked only the array length, so `syncLead`'s "recreate if deleted by hand" path was unreachable and its test passed only because the fake modelled semantics Monday does not have. Found by the live booking verification. **Fixed:** `state === 'active'` is required, with a test against Monday's real response shape. | `monday/client.ts` | Resolved. |
 | **D-4** | **Unused scaffolding.** `outbox` table, `appointment_requests` table, all `appointment_*` stages, `messages.template_ref`, `campaign_referrals.form_id` / `.external_lead_id`, `setMondayItemId()` — all defined, none written or read by production code. | `src/db/schema.ts` | Not a bug; a reminder that schema presence ≠ implementation. |
 
 ---
@@ -129,6 +130,21 @@ construction, and the Cloud API says for itself whether its failure was
 transient. Every outreach loop routes on that one answer.
 
 ### What Phase 6 delivers
+
+**Exit criterion (added 2026-09-08):** a real booking round-trip against the
+live Monday account — `פעילות` item created and linked to the lead, Google
+Calendar event written by Monday's sync, lead status projected — the same
+standard every earlier phase was closed to. The e2e test proves the flow against
+a fake Monday only.
+
+- [x] **Live booking verified — 2026-09-08.** Two real bookings against the live
+  account (items `3212538619`, `3212563443`, both deleted afterwards and confirmed
+  `state: deleted`). Each: three free slots read from the live `פעילות` board →
+  item created with type `פגישת ייעוץ`, 19:00–19:45 local, owner auto-set to
+  Lidor → **lead link present at creation** (`linked_item_ids`, read through the
+  `BoardRelationValue` fragment) → **Google Calendar event written by Monday
+  within 8 seconds** → outbox drained, lead status `ממתין לפגישה ייעוץ` /
+  `לידים בטיפול` → after cleanup, back to `ממתין לשיחה`.
 
 A qualified lead who asks for a meeting is offered Lidor's real free times in
 WhatsApp and books one — no Google credentials, because a booking is a `פעילות`
@@ -319,7 +335,7 @@ onward, so start them early.
 
 ## 6. Test coverage reality
 
-730 tests across 45 files, colocated, with integration tests running against a
+741 tests across 46 files, colocated, with integration tests running against a
 real PostgreSQL. Phase 4 added the stop-condition suite — every cap, stage, and
 refusal asserted separately — plus Shabbat and business-hours cases pinned to
 real Israeli local times in both DST states.

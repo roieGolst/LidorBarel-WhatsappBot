@@ -107,7 +107,14 @@ Meta webhook ─▶ signature verify (raw body) ─▶ idempotent ingestion (Pos
   non-2xx and Meta retries; ingestion is idempotent (unique `provider_message_id`), so
   retries are safe.
 - **Reply generation does NOT happen in the webhook** — an LLM call is too slow for a
-  webhook and belongs in the workflow/queue.
+  webhook and belongs in the workflow/queue. Turns are **debounced 3 s per
+  conversation** (`queue/conversationQueue.ts`) and a turn answers **every unanswered
+  message** since the bot last spoke, joined (`loadContext`), so a burst gets one
+  reply and no line is dropped.
+- **Stop `npm run dev` before `npm run check`.** The dev app shares the local Redis and
+  Postgres with the suite; its worker consumes queued test jobs and its outbox worker
+  drains test rows, which shows up as random failures in `mondayProjection`, `e2e` and
+  queue tests.
 - **LangGraph boundary:** the graph decides *what to say next within one
   conversation*; everything about *how to send it and who else to tell* (transport,
   Monday sync, follow-ups, opt-out enforcement) lives outside. `conversations.stage` is

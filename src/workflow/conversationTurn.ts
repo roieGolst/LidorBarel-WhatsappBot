@@ -10,7 +10,11 @@ import {
   type ConversationStage,
 } from '../db/repositories/conversations.js';
 import { getConfig } from '../config.js';
-import { countInboundMessages, recentMessages } from '../db/repositories/messages.js';
+import {
+  countInboundMessages,
+  recentMessages,
+  type Message,
+} from '../db/repositories/messages.js';
 import { isOptedOut } from '../db/repositories/optOuts.js';
 import { getLogger } from '../logger.js';
 import type { LlmClient, LlmMessage, LlmUsage } from '../llm/client.js';
@@ -208,6 +212,13 @@ export interface TurnContext {
    * Meta media id (the binary is fetched from the Graph API separately).
    */
   currentMedia?: { kind: string; id: string };
+  /**
+   * Property photos among the unanswered messages this turn covers. A burst
+   * of a photo and a line of text is one turn: the text is answered and the
+   * photo is counted, rather than the photo being acknowledged and the text
+   * lost (or the reverse).
+   */
+  batchPhotoCount: number;
   /** Turns before the current one, for classification context. */
   classifyHistory: LlmMessage[];
   /** The full recent transcript, for reply generation. */
@@ -267,10 +278,28 @@ export async function loadContext(
     return null;
   }
 
-  const currentText = latest.body ?? '';
+  // Everything the person sent since the bot last spoke is answered together.
+  // People type in bursts — "תקבע לי פגישה" then "נוווו" — and a turn that reads
+  // only the last line answers "נוווו". The lines are joined for the classifier
+  // and the reply-writer; the transcript keeps them as they were sent.
+  const unanswered: Message[] = [];
+  for (let i = messageRows.length - 1; i >= 0; i -= 1) {
+    const row = messageRows[i]!;
+    if (row.direction !== 'inbound') break;
+    unanswered.unshift(row);
+  }
+  const texts = unanswered.map((m) => m.body?.trim() ?? '').filter((t) => t.length > 0);
+  const currentText = texts.join('\n');
+  const batchPhotoCount = unanswered.filter(
+    (m) => m.mediaType === 'image' && m.mediaUrl,
+  ).length;
+  // With no text at all this is a media turn (a photo, a voice note): the last
+  // media message decides its kind. With text, the text is answered and any
+  // photos are counted.
+  const lastMedia = [...unanswered].reverse().find((m) => m.mediaType && m.mediaUrl);
   const currentMedia =
-    latest.mediaType && latest.mediaUrl
-      ? { kind: latest.mediaType, id: latest.mediaUrl }
+    texts.length === 0 && lastMedia
+      ? { kind: lastMedia.mediaType!, id: lastMedia.mediaUrl! }
       : undefined;
 
   // The text transcript for the LLM. Media-only messages (no caption) contribute
@@ -289,10 +318,10 @@ export async function loadContext(
     countInboundMessages(db, conversationId, new Date(now - RATE_WINDOW_MS)),
   ]);
 
-  // History for classification excludes the current message when it carried text
-  // (it is the last user turn); a media-only current message is not in `turns`.
-  const classifyHistory =
-    currentText.length > 0 && turns.at(-1)?.role === 'user' ? turns.slice(0, -1) : turns;
+  // History for classification excludes the current messages (the trailing user
+  // turns — they are sent joined, as the one message being classified); a
+  // media-only current message is not in `turns`.
+  const classifyHistory = turns.slice(0, turns.length - texts.length);
 
   // Earlier user turns, for the abuse strike.
   const priorMalicious = classifyHistory.some(
@@ -315,6 +344,7 @@ export async function loadContext(
     currentText,
     currentMessageId: latest.providerMessageId ?? '',
     ...(currentMedia ? { currentMedia } : {}),
+    batchPhotoCount,
     classifyHistory,
     turns,
     inboundCount,
@@ -901,7 +931,7 @@ export function createConversationWorkflow(
       // photo (empty text) is not mistaken for gibberish and redirected. On the very
       // first turn the opening sequence takes precedence (fall through).
       if (ctx.currentMedia?.kind === 'image' && !ctx.isFirstResponse) {
-        const photoCount = (ctx.known.photoCount ?? 0) + 1;
+        const photoCount = (ctx.known.photoCount ?? 0) + Math.max(1, ctx.batchPhotoCount);
         const extracted: KnownFacts = { ...ctx.known, photoCount };
         const alreadyAcked = ctx.lastOutboundText === PHOTO_ACK_MESSAGE;
         logger.info(
@@ -1750,6 +1780,10 @@ export function createConversationWorkflow(
             : {}),
           // The intent check, once passed, stays passed (see nextScreeningStep).
           ...(decision.qualified === true ? { intentAssessed: true } : {}),
+          // Photos sent alongside text in this burst.
+          ...(ctx.batchPhotoCount > 0
+            ? { photoCount: (ctx.known.photoCount ?? 0) + ctx.batchPhotoCount }
+            : {}),
           // Remember the clip that went out, so the next request brings another one.
           ...(sentTestimonial
             ? {

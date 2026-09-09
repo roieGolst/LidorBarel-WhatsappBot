@@ -188,6 +188,16 @@ in `decide.test.ts`).
   objection/FAQ handlers, and the classifier is told that a complaint about no
   meeting or a question about when the call will be is the same wish.
 
+- [x] **A burst of messages is answered once, and none of it is lost
+  (2026-09-09).** The queue keyed turns by conversation id, so every message a
+  person sent while the bot was composing a reply was silently discarded —
+  "תקבע לי פגישה" among them — and a turn read only the last line of a burst.
+  Turns are now debounced 3 s per conversation (BullMQ deduplication with
+  `extend`/`replace`/`keepLastIfActive`, semantics pinned in
+  `conversationQueue.test.ts` against real Redis), and a turn answers every
+  unanswered message together: the lines are joined for the classifier, photos
+  sent alongside text are counted.
+
 **Known limit:** a lead who confirms a disqualifying change *after* a meeting was
 booked is closed per the spec, and the meeting stays in Lidor's calendar (the bot
 never deletes a `פעילות` item — see MONDAY-MAPPING). Lidor sees both on the

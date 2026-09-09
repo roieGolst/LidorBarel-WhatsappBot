@@ -133,11 +133,13 @@ async function seed(options: {
 }
 
 async function reply(conversationId: string, text: string): Promise<void> {
+  // Dated now, never ahead: a message dated in the future would sort after the
+  // reply the turn persists, and read as unanswered on the next turn.
   await recordInboundMessage(db, {
     conversationId,
     providerMessageId: `in-${conversationId}-${text}`,
     body: text,
-    createdAt: new Date(Date.now() + 1000),
+    createdAt: new Date(),
   });
 }
 
@@ -515,5 +517,67 @@ describe('a meeting time tapped outside the booking stage', () => {
     expect(
       channel.sent.some((m) => m.kind === 'text' && /חדרים|קומה|כתובת/.test(m.text)),
     ).toBe(false);
+  });
+});
+
+describe('a burst of messages', () => {
+  it('is answered once, as one message — nothing in it is lost', async () => {
+    // Live: "תקבע לי פגישה" followed by "נוווו" a second later. The turn read
+    // only the last line and answered "נוווו"; the request in the line before
+    // it was never classified.
+    const deps = appointments();
+    const channel = new FakeChannel();
+    const conversationId = await seed({
+      stage: 'qualified',
+      priorReply: 'תודה על הפרטים!',
+      inbound: 'תקבע לי פגישה',
+    });
+    await reply(conversationId, 'נוווו');
+    const llm = new FakeLlmClient([
+      '{"intent":"ANSWER","confidence":0.9,"extracted":{"bookingIntent":true}}',
+    ]);
+
+    const result = await run({ db, llm, channel, appointments: deps }, conversationId);
+
+    // The classifier saw both lines as the message under classification…
+    const classified = llm.requests[0]!.messages.at(-1)!.content;
+    expect(classified).toBe('תקבע לי פגישה\nנוווו');
+    // …and neither line is also in the history it was given.
+    expect(
+      llm.requests[0]!.messages.slice(0, -1).some((m) => m.content === 'נוווו'),
+    ).toBe(false);
+    expect(result.action).toBe('offer_slots');
+    expect(channel.sent).toHaveLength(1);
+
+    // The surplus turn the second message scheduled finds nothing to answer.
+    const again = await run(
+      { db, llm: new FakeLlmClient([]), channel, appointments: deps },
+      conversationId,
+    );
+    expect(again.action).toBe('skipped_no_inbound');
+    expect(channel.sent).toHaveLength(1);
+  });
+
+  it('answers the text and counts the photo when both arrive together', async () => {
+    const conversationId = await seed({
+      stage: 'qualified',
+      priorReply: 'תודה על הפרטים!',
+      inbound: 'זה הבית',
+    });
+    await recordInboundMessage(db, {
+      conversationId,
+      providerMessageId: `photo-${conversationId}`,
+      mediaType: 'image',
+      mediaUrl: 'wamid-media-1',
+      createdAt: new Date(),
+    });
+    const llm = new FakeLlmClient([
+      '{"intent":"ANSWER","confidence":0.9,"extracted":{"additionalNotes":"בית פרטי"}}',
+    ]);
+
+    const result = await run({ db, llm, channel: new FakeChannel() }, conversationId);
+
+    expect(result.action).toBe('acknowledge_additional_info');
+    expect((await facts(conversationId)).photoCount).toBe(1);
   });
 });

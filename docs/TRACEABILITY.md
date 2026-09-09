@@ -30,6 +30,7 @@ Last updated: 2026-09-08
 | 3 | Nudge wording stays on-voice | `outreach/followUpMessages.ts` | `followUpMessages.test.ts` (same validator as generated replies) | ✅ |
 | 3 | Never sends on Shabbat / outside business hours | `outreach/followUpPolicy.ts` | `followUpPolicy.test.ts` | ✅ |
 | 4a | Conversation turn, transcript, media | `workflow/conversationTurn.ts` | `conversationTurn.test.ts` | ✅ |
+| 4a | A burst of messages is answered once, nothing dropped | `queue/conversationQueue.ts` (debounce) · `workflow/conversationTurn.ts` (`loadContext` batches unanswered) | `conversationQueue.test.ts` (real Redis) · `changedAnswers.test.ts` | ✅ |
 | 4a | Answer validation and re-asking | `workflow/validateAnswer.ts` | `validateAnswer.test.ts` | ✅ |
 | 4a | An address given as the neighbourhood is checked once, never stored on faith | `workflow/conversationTurn.ts` · `workflow/validateAnswer.ts` | `neighborhoodClarification.test.ts` | ✅ |
 | 4c | An unlisted place still reaches Lidor (notes, not a bogus label) | `monday/leadMapping.ts` | `leadMapping.test.ts` | ✅ |

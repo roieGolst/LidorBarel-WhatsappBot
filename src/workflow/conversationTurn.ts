@@ -32,16 +32,24 @@ import {
   NO_SLOTS_MESSAGE,
   SLOT_OFFER_BODY,
   SLOT_OFFER_BUTTON,
+  SLOT_REOFFER_BODY,
   SLOT_TAKEN_MESSAGE,
+  SLOTS_DECLINED_MESSAGE,
+  STALE_SLOT_MESSAGE,
+  alreadyBookedMessage,
   bookingConfirmation,
+  isSlotLabel,
   matchSlot,
+  offeredTimesContext,
   parseStoredSlots,
+  sameSlots,
   slotListRows,
 } from '../appointments/slotMessages.js';
+import { describeToday } from '../domain/localTime.js';
 import { scheduleNextFollowUp, type FollowUpLimits } from '../outreach/followUpPolicy.js';
 import { followUpAllowedFrom } from '../outreach/followUp.js';
 import type { Conversation } from '../db/repositories/conversations.js';
-import { classifyAndExtract, WORKFLOW_OWNED_FIELDS } from './classify.js';
+import { classifyAndExtract, WORKFLOW_OWNED_FIELDS, type Analysis } from './classify.js';
 import { isAffirmative, isNegative } from './confirmation.js';
 import {
   decideMainMenu,
@@ -56,6 +64,12 @@ import { generateValidatedReply } from './generate.js';
 import {
   BOOKING_LEADIN_MESSAGE,
   cannedReplyFor,
+  disqualificationClose,
+  FACT_CHANGE_DECLINED_MESSAGE,
+  FACT_CHANGE_NO,
+  FACT_CHANGE_YES,
+  factChangeConfirmation,
+  neighborhoodClarification,
   INTRO_VIDEO_PATH,
   MAIN_MENU,
   mainMenuChoiceFor,
@@ -121,6 +135,34 @@ export interface ConversationDeps {
    */
   appointments?: BookingDeps | undefined;
 }
+
+/**
+ * The read for a meeting time tapped outside the booking stage: unmistakably a
+ * wish to book, and nothing else — no model call, no chance of it being taken
+ * for a property answer.
+ */
+const STALE_SLOT_TAP_ANALYSIS: Analysis = {
+  intent: 'ANSWER',
+  confidence: 1,
+  extracted: { bookingIntent: true },
+  needsEscalation: false,
+  wantsBuyerProof: false,
+  wantsSocialProof: false,
+  asksQuestion: false,
+  declinesOfferedTimes: false,
+};
+
+/** A confirmed answer change carries no message of its own to interpret. */
+const CONFIRMED_CHANGE_ANALYSIS: Analysis = {
+  intent: 'ANSWER',
+  confidence: 1,
+  extracted: {},
+  needsEscalation: false,
+  wantsBuyerProof: false,
+  wantsSocialProof: false,
+  asksQuestion: false,
+  declinesOfferedTimes: false,
+};
 
 /** One message to send this turn, before it has a provider id. */
 export type OutboundPart =
@@ -406,15 +448,31 @@ export function createConversationWorkflow(
 
   const classify = task(
     'ct_classify',
-    (args: { text: string; history: LlmMessage[]; priorNotes?: string }) =>
-      classifyAndExtract(deps.llm, args),
+    (args: {
+      text: string;
+      history: LlmMessage[];
+      priorNotes?: string;
+      today?: string;
+    }) => classifyAndExtract(deps.llm, args),
   );
 
   const generate = task(
     'ct_generate',
-    (args: { action: TurnAction; escalate: boolean; history: LlmMessage[] }) =>
-      generateValidatedReply(deps.llm, args),
+    (args: {
+      action: TurnAction;
+      escalate: boolean;
+      history: LlmMessage[];
+      context?: string;
+    }) => generateValidatedReply(deps.llm, args),
   );
+
+  // Lidor's timezone, for dating things ("today", a callback date). Booking and
+  // follow-ups each carry it; without either, Israel is the only place this
+  // bot runs.
+  const timeZone =
+    deps.appointments?.slotOptions.timeZone ??
+    deps.followUp?.timeZone ??
+    'Asia/Jerusalem';
 
   // Every outbound message goes through guardedSend, so opt-out, consent, and
   // messaging-window enforcement cannot be bypassed by any send path (§6). One
@@ -679,17 +737,33 @@ export function createConversationWorkflow(
       //
       // A reply that matches nothing falls through to the normal flow: someone
       // offered three times may well ask a question instead of picking one.
+      // Turns that reach the model may still need the standing offer: the
+      // times a person is asking about are not in the transcript (a list stores
+      // only its body), so they are handed to the generator from here.
+      let currentOffer: Awaited<ReturnType<typeof latestOffer>>;
+      // A time tapped from a list that is no longer current: answered with a
+      // fresh offer, in the same list shape, never as a screening answer.
+      let staleSlotTap = false;
+
       if (ctx.stage === 'appointment_proposed' && deps.appointments) {
-        const timeZone = deps.appointments.slotOptions.timeZone;
-        const offer = await latestOffer(deps.db, conversationId);
-        const chosen = offer
-          ? matchSlot(ctx.currentText, parseStoredSlots(offer.proposedSlots), timeZone)
+        currentOffer = await latestOffer(deps.db, conversationId);
+        const chosen = currentOffer
+          ? matchSlot(
+              ctx.currentText,
+              parseStoredSlots(currentOffer.proposedSlots),
+              timeZone,
+            )
           : undefined;
+        // A slot label that is not in the current offer — an old list, or a
+        // re-offer that moved on. Same answer as a slot that was just taken.
+        const staleLabel = !chosen && isSlotLabel(ctx.currentText);
 
-        if (chosen) {
-          const outcome = await bookSlot(deps.appointments, conversationId, chosen);
+        if (chosen || staleLabel) {
+          const outcome = chosen
+            ? await bookSlot(deps.appointments, conversationId, chosen)
+            : undefined;
 
-          if (outcome.booked) {
+          if (chosen && outcome?.booked) {
             const text = bookingConfirmation(chosen, timeZone);
             const { providerMessageId } = await send({
               to: ctx.contactPhone,
@@ -714,19 +788,21 @@ export function createConversationWorkflow(
             };
           }
 
-          // Taken between the offer and the tap. Apologise and offer what is
-          // left rather than leaving them with a booking that silently failed.
+          // Taken between the offer and the tap (or tapped from a stale list).
+          // Apologise and offer what is left rather than leaving them with a
+          // booking that silently failed.
+          const body = chosen ? SLOT_TAKEN_MESSAGE : STALE_SLOT_MESSAGE;
           const fresh = await findSlotsToOffer(deps.appointments);
           const parts: { part: OutboundPart; storeBody: string }[] = fresh.length
             ? [
                 {
                   part: {
                     kind: 'list' as const,
-                    body: SLOT_TAKEN_MESSAGE,
+                    body,
                     buttonLabel: SLOT_OFFER_BUTTON,
                     rows: slotListRows(fresh, timeZone),
                   },
-                  storeBody: SLOT_TAKEN_MESSAGE,
+                  storeBody: body,
                 },
               ]
             : [
@@ -767,6 +843,53 @@ export function createConversationWorkflow(
             sent: true,
           };
         }
+      }
+
+      // A meeting time tapped OUTSIDE the booking stage — a row from an old list,
+      // after the meeting was booked, after a close, or once the offer lapsed. It
+      // is unmistakably "I want this time", so it never goes to the classifier
+      // (which read one as a fresh property answer and restarted the
+      // questionnaire). A booked lead is told the meeting is set; anyone else is
+      // treated as asking to book, which the flow honours with real times when
+      // their details are complete and with the one missing question when not.
+      if (
+        deps.appointments &&
+        ctx.stage !== 'appointment_proposed' &&
+        isSlotLabel(ctx.currentText) &&
+        !ctx.isFirstResponse
+      ) {
+        if (ctx.stage === 'appointment_confirmed') {
+          const booked = await latestOffer(deps.db, conversationId);
+          const start = booked?.selectedSlot ?? undefined;
+          const text = alreadyBookedMessage(
+            start
+              ? {
+                  start,
+                  end: new Date(
+                    start.getTime() + deps.appointments.slotOptions.durationMs,
+                  ),
+                }
+              : undefined,
+            timeZone,
+          );
+          const { providerMessageId } = await send({
+            to: ctx.contactPhone,
+            conversation: ctx,
+            part: { kind: 'text', text },
+          });
+          await persist({
+            conversationId,
+            contactId: ctx.contactId,
+            contactPhone: ctx.contactPhone,
+            fromStage: ctx.stage,
+            toStage: ctx.stage,
+            action: 'already_booked',
+            extracted: ctx.known,
+            outbound: [{ body: text, providerMessageId }],
+          });
+          return { stage: ctx.stage, action: 'already_booked', text, sent: true };
+        }
+        staleSlotTap = true;
       }
 
       // Property photo: the lead attached an image. Record it on the lead (a
@@ -943,6 +1066,104 @@ export function createConversationWorkflow(
         logger.info({ conversationId }, 'restart not confirmed — continuing as normal');
       }
 
+      // A changed screening answer awaiting confirmation. Yes applies it and
+      // acts on whatever follows from it (the exclusivity question, a close);
+      // no keeps the earlier answer; anything else lets the check lapse — the
+      // message is handled normally and the unconfirmed value is NOT applied.
+      // The same person is asked at most once per change, never in a loop.
+      let lapsedChange: KnownFacts['pendingFactChange'];
+      if (ctx.known.pendingFactChange) {
+        const change = ctx.known.pendingFactChange;
+        delete ctx.known.pendingFactChange;
+        const answer = ctx.currentText.trim();
+
+        if (answer === FACT_CHANGE_YES || isAffirmative(answer)) {
+          const updated: KnownFacts = { ...ctx.known, [change.field]: change.value };
+          const consequence = decideTransition(
+            ctx.stage,
+            CONFIRMED_CHANGE_ANALYSIS,
+            updated,
+            ctx.screenAll,
+            Boolean(deps.appointments),
+          );
+          // Only what the change itself entails is acted on — a close, or the
+          // exclusivity question that precedes one. Anything else is a plain
+          // acknowledgement: the stage holds and the details go to Lidor.
+          const decision: Decision =
+            consequence.action === 'ask_exclusivity' ||
+            consequence.action === 'send_disqualification'
+              ? consequence
+              : { nextStage: ctx.stage, action: 'fact_change_applied', escalate: false };
+          const text =
+            decision.action === 'send_disqualification'
+              ? disqualificationClose(
+                  decision.disqualificationReason,
+                  updated.wantsExclusivityFollowup,
+                )
+              : cannedReplyFor(decision.action)!;
+          logger.info(
+            { conversationId, field: change.field, action: decision.action },
+            'changed answer confirmed by the lead',
+          );
+          const { providerMessageId } = await send({
+            to: ctx.contactPhone,
+            conversation: ctx,
+            part: { kind: 'text', text },
+          });
+          await persist({
+            conversationId,
+            contactId: ctx.contactId,
+            contactPhone: ctx.contactPhone,
+            fromStage: ctx.stage,
+            toStage: decision.nextStage,
+            action: decision.action,
+            extracted: updated,
+            ...(decision.qualified !== undefined
+              ? { qualified: decision.qualified }
+              : {}),
+            ...(decision.disqualificationReason !== undefined
+              ? { disqualificationReason: decision.disqualificationReason }
+              : {}),
+            outbound: [{ body: text, providerMessageId }],
+          });
+          return { stage: decision.nextStage, action: decision.action, text, sent: true };
+        }
+
+        if (answer === FACT_CHANGE_NO || isNegative(answer)) {
+          logger.info(
+            { conversationId, field: change.field },
+            'changed answer withdrawn',
+          );
+          const { providerMessageId } = await send({
+            to: ctx.contactPhone,
+            conversation: ctx,
+            part: { kind: 'text', text: FACT_CHANGE_DECLINED_MESSAGE },
+          });
+          await persist({
+            conversationId,
+            contactId: ctx.contactId,
+            contactPhone: ctx.contactPhone,
+            fromStage: ctx.stage,
+            toStage: ctx.stage,
+            action: 'fact_change_declined',
+            extracted: ctx.known,
+            outbound: [{ body: FACT_CHANGE_DECLINED_MESSAGE, providerMessageId }],
+          });
+          return {
+            stage: ctx.stage,
+            action: 'fact_change_declined',
+            text: FACT_CHANGE_DECLINED_MESSAGE,
+            sent: true,
+          };
+        }
+
+        lapsedChange = change;
+        logger.info(
+          { conversationId, field: change.field },
+          'change not confirmed — lapsed',
+        );
+      }
+
       // Hebrew-only gate (review req #4): a predominantly-English message is
       // unsupported input — a fixed Hebrew reply, no classification, no fact
       // change, no flow advance. An explicit opt-out (even in English, e.g.
@@ -1022,18 +1243,27 @@ export function createConversationWorkflow(
         }
       }
 
-      const { analysis } = await classify({
-        text: ctx.currentText,
-        history: ctx.classifyHistory,
-        ...(ctx.known.additionalNotes ? { priorNotes: ctx.known.additionalNotes } : {}),
-      });
+      const analysis: Analysis = staleSlotTap
+        ? STALE_SLOT_TAP_ANALYSIS
+        : (
+            await classify({
+              text: ctx.currentText,
+              history: ctx.classifyHistory,
+              ...(ctx.known.additionalNotes
+                ? { priorNotes: ctx.known.additionalNotes }
+                : {}),
+              today: describeToday(new Date(), timeZone),
+            })
+          ).analysis;
 
       // Answer validation (review req #1): drop an implausible free-text
       // neighborhood ("Opus 4.8") before it is trusted, so it is neither stored
       // nor advances the flow — the screening question is simply re-asked.
-      const { extracted: cleanExtracted, invalidNeighborhood } = sanitizeExtraction(
-        analysis.extracted,
-      );
+      const {
+        extracted: cleanExtracted,
+        invalidNeighborhood,
+        unknownNeighborhood,
+      } = sanitizeExtraction(analysis.extracted);
       if (invalidNeighborhood !== undefined) {
         logger.info(
           { conversationId, invalidNeighborhood },
@@ -1047,6 +1277,33 @@ export function createConversationWorkflow(
       // those fields is discarded so it can never write them.
       for (const field of WORKFLOW_OWNED_FIELDS) {
         delete validated.extracted[field];
+      }
+      // A change the person was asked about and did not confirm is not applied
+      // on the strength of this message either.
+      if (
+        lapsedChange &&
+        validated.extracted[lapsedChange.field] === lapsedChange.value
+      ) {
+        delete validated.extracted[lapsedChange.field];
+      }
+
+      // Q2 clarification. The neighbourhood question invites a full address, but
+      // nothing maps an address onto a neighbourhood — so a plausible place we do
+      // not recognise (a street, another city) is checked with the person once
+      // rather than stored on faith. It is held out of the facts until then.
+      let clarifyNeighborhood: string | undefined;
+      if (unknownNeighborhood !== undefined && ctx.known.neighborhoodClarified !== true) {
+        delete validated.extracted.neighborhood;
+        clarifyNeighborhood = unknownNeighborhood;
+      } else if (
+        ctx.known.neighborhoodCandidate !== undefined &&
+        validated.extracted.neighborhood === undefined &&
+        validated.intent === 'ANSWER'
+      ) {
+        // They answered the clarification without naming a different place, so
+        // their original words stand — accepted verbatim, never swapped for a
+        // nearest match (rule 1 in domain/neighborhoods.ts).
+        validated.extracted.neighborhood = ctx.known.neighborhoodCandidate;
       }
 
       // `seriousSeller` / `sellMotivation` are the answer to the intent question,
@@ -1105,6 +1362,37 @@ export function createConversationWorkflow(
           ctx.screenAll,
           Boolean(deps.appointments),
         );
+      }
+
+      // A changed answer is being checked with the person: it is held aside,
+      // never merged, until they confirm it.
+      if (decision.pendingChange) {
+        delete validated.extracted[decision.pendingChange.field];
+      }
+
+      // The address is checked only where the flow was actually asking Q2. If it
+      // arrived alongside something else — an FAQ, an objection — it is simply not
+      // stored, and Q2 collects it properly when its turn comes.
+      if (clarifyNeighborhood !== undefined && decision.action === 'ask_neighborhood') {
+        decision = { ...decision, action: 'clarify_neighborhood' };
+      } else {
+        clarifyNeighborhood = undefined;
+      }
+
+      // Bookkeeping for the clarification: remember what was asked about, and
+      // that it was asked, so it is asked at most once. Once a neighbourhood is
+      // finally stored the candidate has served its purpose and is dropped.
+      const neighborhoodBookkeeping: Partial<KnownFacts> =
+        clarifyNeighborhood !== undefined
+          ? { neighborhoodCandidate: clarifyNeighborhood, neighborhoodClarified: true }
+          : {};
+      const knownForPersist: KnownFacts = { ...ctx.known };
+      if (
+        clarifyNeighborhood === undefined &&
+        (validated.extracted.neighborhood !== undefined ||
+          ctx.known.neighborhood !== undefined)
+      ) {
+        delete knownForPersist.neighborhoodCandidate;
       }
 
       // Booking intent: the "קביעת פגישה" menu choice, or a message the classifier
@@ -1245,13 +1533,23 @@ export function createConversationWorkflow(
       let regenerated = false;
       let fellBack = false;
       const question = screeningQuestionFor(decision.action);
-      const canned = cannedReplyFor(decision.action);
+      const canned =
+        decision.action === 'clarify_neighborhood' && clarifyNeighborhood !== undefined
+          ? neighborhoodClarification(clarifyNeighborhood)
+          : decision.action === 'send_disqualification'
+            ? disqualificationClose(
+                decision.disqualificationReason,
+                validated.extracted.wantsExclusivityFollowup ??
+                  ctx.known.wantsExclusivityFollowup,
+              )
+            : decision.action === 'decline_slots'
+              ? SLOTS_DECLINED_MESSAGE
+              : cannedReplyFor(decision.action);
       // A qualified lead who asked for a meeting is offered Lidor's real free
       // times. If he has nothing free in the horizon the turn falls back to the
       // handoff — promising times that do not exist would be worse than saying
       // he will call.
       if (decision.action === 'offer_slots' && deps.appointments) {
-        const timeZone = deps.appointments.slotOptions.timeZone;
         const offeredSlots = await findSlotsToOffer(deps.appointments);
 
         if (offeredSlots.length > 0) {
@@ -1261,14 +1559,15 @@ export function createConversationWorkflow(
             offeredSlots,
             OFFER_HOLD_MS,
           );
+          const body = staleSlotTap ? STALE_SLOT_MESSAGE : SLOT_OFFER_BODY;
           plan.push({
             part: {
               kind: 'list',
-              body: SLOT_OFFER_BODY,
+              body,
               buttonLabel: SLOT_OFFER_BUTTON,
               rows: slotListRows(offeredSlots, timeZone),
             },
-            storeBody: SLOT_OFFER_BODY,
+            storeBody: body,
           });
         } else {
           plan.push({
@@ -1278,6 +1577,59 @@ export function createConversationWorkflow(
           // Nothing was offered, so the conversation is not waiting on a choice.
           decision = { ...decision, nextStage: 'qualified' };
         }
+      } else if (decision.action === 'assist_booking' && deps.appointments) {
+        // A question or aside while times are on the table. The reply is written
+        // with the real times in view — the transcript does not hold them — and
+        // the list is sent again only when the standing offer has lapsed or the
+        // calendar moved, so the person can always still tap a row.
+        const fresh = await findSlotsToOffer(deps.appointments);
+        if (fresh.length === 0) {
+          plan.push({
+            part: { kind: 'text', text: NO_SLOTS_MESSAGE },
+            storeBody: NO_SLOTS_MESSAGE,
+          });
+          decision = { ...decision, nextStage: 'qualified' };
+        } else {
+          const reply = await generate({
+            action: decision.action,
+            escalate: decision.escalate,
+            history: ctx.turns,
+            context: offeredTimesContext(fresh, timeZone, new Date()),
+          });
+          regenerated = reply.regenerated;
+          fellBack = reply.fellBack;
+          plan.push({
+            part: { kind: 'text', text: reply.text },
+            storeBody: reply.text,
+            usage: reply.usage,
+          });
+
+          const standing = currentOffer
+            ? parseStoredSlots(currentOffer.proposedSlots)
+            : [];
+          const holdLapsed =
+            !currentOffer?.holdExpiresAt ||
+            currentOffer.holdExpiresAt.getTime() <= Date.now();
+          if (holdLapsed || !sameSlots(fresh, standing)) {
+            await recordOffer(deps.appointments, conversationId, fresh, OFFER_HOLD_MS);
+            plan.push({
+              part: {
+                kind: 'list',
+                body: SLOT_REOFFER_BODY,
+                buttonLabel: SLOT_OFFER_BUTTON,
+                rows: slotListRows(fresh, timeZone),
+              },
+              storeBody: SLOT_REOFFER_BODY,
+            });
+          }
+        }
+      } else if (decision.action === 'confirm_fact_change' && decision.pendingChange) {
+        const previous = ctx.known[decision.pendingChange.field];
+        const check = factChangeConfirmation(decision.pendingChange, String(previous));
+        plan.push({
+          part: { kind: 'buttons', body: check.body, buttons: check.buttons },
+          storeBody: check.body,
+        });
       } else if (decision.action === 'show_main_menu') {
         plan.push({
           part: {
@@ -1374,8 +1726,9 @@ export function createConversationWorkflow(
         // none, and implies top urgency — timeline is taken as immediate (Q3 is
         // skipped) unless a timeline is already known.
         extracted: {
-          ...ctx.known,
+          ...knownForPersist,
           ...validated.extracted,
+          ...neighborhoodBookkeeping,
           ...(bookingIntent
             ? {
                 bookingIntent: true,
@@ -1391,6 +1744,12 @@ export function createConversationWorkflow(
                 pendingRestartChoice: menuChoice as 'check_fit' | 'book_meeting',
               }
             : {}),
+          // Likewise the changed answer awaiting confirmation.
+          ...(decision.pendingChange
+            ? { pendingFactChange: decision.pendingChange }
+            : {}),
+          // The intent check, once passed, stays passed (see nextScreeningStep).
+          ...(decision.qualified === true ? { intentAssessed: true } : {}),
           // Remember the clip that went out, so the next request brings another one.
           ...(sentTestimonial
             ? {

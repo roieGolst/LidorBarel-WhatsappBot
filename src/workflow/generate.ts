@@ -18,9 +18,9 @@ import { validateReply, type ValidateOptions } from './validate.js';
 const ENGAGING_ACTIONS: ReadonlySet<TurnAction> = new Set([
   'answer_faq',
   'handle_objection',
-  'ask_exclusivity',
   'ask_intent',
   'assist_qualified',
+  'assist_booking',
 ]);
 
 /**
@@ -57,9 +57,9 @@ Hard rules:
 - Write in natural, colloquial Israeli Hebrew — the way a sharp Beer Sheva agent actually texts on WhatsApp. It must read as written by a native speaker, NEVER as translated from English: no "אוקיי", no "ברמה גבוהה", no calqued idioms or stiff phrasing. Be brief and precise — one or two short lines, one idea. No small talk or tangents; steer politely back to the property and the next step. Keep a professional distance — helpful, not a buddy.
 - End with exactly ONE question or a clear next step that moves toward the call. Never leave the lead without a next move, and never ask more than one question at a time. Build trust; never pressure.
 - Never promise what you cannot guarantee, and never use pressure or over-certainty words: בטוח, בוודאות, מאה אחוז, אין סיכוי, חייב, דחוף, רק היום, מבצע, מציאה, זול, "יקר מדי" (about the property), אי אפשר, אין מה לעשות, נסגור, תתחייב, "מקסימום מחיר", "אני מבטיח". Prefer instead: אבדוק, אעריך, על סמך הנתונים, לפי מצב השוק, המטרה היא, אסטרטגיית מכירה, חשיפה רחבה, הערכת שווי, "המחיר הגבוה ביותר שהשוק מאפשר".
-- Never promise a specific time for Lidor's reply — no "בדקות הקרובות", no specific minutes/hours/times. Say only that the details were forwarded to Lidor and that he will handle it and get back to them בהקדם / as soon as he can.
+- Never promise a specific time for Lidor's reply — no "בדקות הקרובות", no specific minutes/hours/times. Say only that the details were forwarded to Lidor and that he will handle it and get back to them בהקדם / as soon as he can. (A meeting time the system offered or booked is not such a promise — refer to it freely.)
 - NEVER quote a specific fee, commission rate, price, or any such number (no "2%", no "אחוז וחצי", no ₪ figure). Fees, commission, and pricing are set directly with Lidor, tailored to the property — say exactly that, WITHOUT a number. (The marketing stats in the KNOWLEDGE — e.g. 124 נכסים, 82% — are the only numbers you may use.)
-- NEVER propose or ask for a specific time, day, or hour for the call, and never ask "בוקר או אחר הצהריים" or "מתי נוח לך". Do not try to schedule a slot — just say you are passing the details to Lidor and he will reach out to coordinate.
+- Meeting times come ONLY from the system, never from you: NEVER invent, propose or ask for a specific time, day, or hour yourself, and never ask "בוקר או אחר הצהריים" or "מתי נוח לך". When the [CONTEXT] lists times that were offered or a meeting that was booked, those are Lidor's REAL calendar — treat them as real and standing, and never say you have no calendar or cannot schedule. Without such context, do not try to schedule — say you are passing the details to Lidor and he will reach out to coordinate.
 - Open gender-neutral; do not assume the lead's gender.
 - Proofread before sending: correct Hebrew spelling, grammar, and especially verb tense and person (e.g. "נתקשר אליך" — future — not "התקשרנו אליך" — past). Do not mix past and future. Do not read back details the person already gave; just acknowledge them.
 - Output ONLY the message text to send. No quotes, no preamble, no explanation.
@@ -90,10 +90,6 @@ The conversation so far is below. The final turn is a bracketed instruction tell
  * the intent check) are fixed content sent verbatim, so they never reach here.
  */
 const DIRECTIVES: Partial<Record<TurnAction, string>> = {
-  ask_exclusivity:
-    'They said the property is marketed through another agent. In one message, ask when that agent’s exclusivity ends AND whether they would like a follow-up when it does. End with a single question mark.',
-  send_disqualification:
-    'Politely close: thank them, leave the door open for the future, no pressure. If they are exclusive with another agent and asked for a follow-up, add that you will reach out when the exclusivity ends. Do not ask a question.',
   acknowledge_opt_out:
     'Acknowledge their request to stop, once and politely, and confirm they will not be contacted again. Do not ask a question.',
   answer_faq:
@@ -109,7 +105,9 @@ const DIRECTIVES: Partial<Record<TurnAction, string>> = {
   about_lidor:
     'They tapped "about me" — they want to know who Lidor is. Introduce him warmly and briefly using the KNOWLEDGE: a Beer Sheva real-estate specialist who guides sellers from the valuation through to signing, with focused marketing and an active buyer/investor pool. Two or three short lines. Do NOT ask them anything — no screening question, no follow-up question, no request for property details; this is information only. Never quote a fee/commission/price number.',
   assist_qualified:
-    'The lead is already qualified and their details are on the way to Lidor. Respond to their LATEST message like a real, attentive assistant — READ THE CONVERSATION ABOVE and answer what they actually said: if they asked a question or seem confused (e.g. "את מה?"), clarify plainly what you meant; if it is a comment, respond briefly and warmly. Reassure that Lidor has their details and will follow up. Do NOT re-run the screening questions, do NOT repeat the handoff line, do NOT quote a fee/price number, and do NOT promise a callback time. End with ONE light, optional question or offer (e.g. whether there is anything else they would like Lidor to know).',
+    'The lead is already qualified and their details are on the way to Lidor. Respond to their LATEST message like a real, attentive assistant — READ THE CONVERSATION ABOVE and answer what they actually said: if they asked a question or seem confused (e.g. "את מה?"), clarify plainly what you meant; if it is a comment, respond briefly and warmly. If the conversation shows a meeting was already booked (a confirmation with a day and time), refer to that meeting as set — never say Lidor will call to coordinate. Otherwise reassure that Lidor has their details and will follow up. Do NOT re-run the screening questions, do NOT repeat the handoff line, do NOT quote a fee/price number, and do NOT promise a callback time. End with ONE light, optional question or offer (e.g. whether there is anything else they would like Lidor to know).',
+  assist_booking:
+    'The lead was just offered Lidor’s real free meeting times — they are listed in the [CONTEXT], earliest first — and replied with something other than picking one. Answer their LATEST message directly and briefly, in Lidor’s voice. If they ask for an earlier or different time: say honestly that the first listed time is the earliest Lidor has free, and that the options are the listed ones — never invent another time, never say you have no calendar, never say Lidor will call to coordinate (the times are right here). If they ask a question, answer it from the KNOWLEDGE (never a fee/price number). End with ONE question inviting them to pick one of the offered times.',
 };
 
 /**
@@ -118,10 +116,6 @@ const DIRECTIVES: Partial<Record<TurnAction, string>> = {
  * every one passes {@link validateReply} (asserted in the tests).
  */
 export const SAFE_VARIANTS: Partial<Record<TurnAction, string>> = {
-  ask_exclusivity:
-    'מתי מסתיימת הבלעדיות עם המתווך הנוכחי, ותרצה שנחזור אליך כשהיא מסתיימת?',
-  send_disqualification:
-    'תודה רבה על הזמן שלך. אם בעתיד תחליט שהגיע הזמן למכור, או שתרצה להתייעץ, הדלת שלנו תמיד פתוחה ונשמח לעזור. בהצלחה ויום נפלא 😊',
   acknowledge_opt_out: 'קיבלתי, לא נפנה אליך יותר. תודה.',
   answer_faq: 'אשמח לעזור. מה תרצה לדעת?',
   handle_objection: 'בטח, זה לגמרי מובן. מה ההתלבטות העיקרית שלך כרגע?',
@@ -131,6 +125,7 @@ export const SAFE_VARIANTS: Partial<Record<TurnAction, string>> = {
     'אשמח לכמה פרטים אחרונים שיעזרו ללידור להתכונן לשיחה — מה הכתובת המדויקת, כמה חדרים ובאיזו קומה?',
   assist_qualified:
     'הפרטים שלך אצל לידור והוא יחזור אליך בהקדם. יש עוד משהו שחשוב שיידע לפני השיחה?',
+  assist_booking: 'אלה המועדים הפנויים הקרובים ביותר אצל לידור. איזה מהם מתאים לך?',
   answer_aside: 'שאלה טובה — לידור יסביר לך את זה לעומק בשיחה איתו.',
   about_lidor:
     'לידור בראל הוא מתווך נדל"ן שמתמחה בשוק של באר שבע, ומלווה מוכרים מהערכת השווי ועד החתימה. הוא עובד עם שיווק ממוקד, פרסום ממומן ומאגר קונים ומשקיעים פעיל, כדי למכור במחיר הטוב ביותר שהשוק מאפשר ובזמן סביר.',
@@ -142,6 +137,12 @@ export interface GenerateInput {
   escalate: boolean;
   /** Prior turns, oldest first. */
   history?: LlmMessage[];
+  /**
+   * Facts the reply must rest on that are not in the transcript — the meeting
+   * times currently offered, say (a list message stores only its body, so the
+   * model never sees the rows). Appended to the instruction as [CONTEXT].
+   */
+  context?: string | undefined;
 }
 
 export interface GeneratedReply {
@@ -160,14 +161,17 @@ export interface ValidatedReply {
 }
 
 /** The bracketed director turn for an action. Only model-written actions reach here. */
-function instruction(action: TurnAction): LlmMessage {
+function instruction(action: TurnAction, context?: string): LlmMessage {
   const directive = DIRECTIVES[action];
   if (!directive) {
     throw new Error(
       `generate: no directive for action "${action}" — it is not model-written`,
     );
   }
-  return { role: 'user', content: `[INSTRUCTION] ${directive}` };
+  const content = context
+    ? `[INSTRUCTION] ${directive}\n\n[CONTEXT] ${context}`
+    : `[INSTRUCTION] ${directive}`;
+  return { role: 'user', content };
 }
 
 /** The pre-written safe reply for a model-written action. */
@@ -205,7 +209,10 @@ export function generateReply(
   input: GenerateInput,
 ): Promise<GeneratedReply> {
   const model = input.escalate ? ESCALATION_MODEL : CLASSIFIER_MODEL;
-  return draft(llm, model, [...(input.history ?? []), instruction(input.action)]);
+  return draft(llm, model, [
+    ...(input.history ?? []),
+    instruction(input.action, input.context),
+  ]);
 }
 
 /**
@@ -218,7 +225,7 @@ export async function generateValidatedReply(
 ): Promise<ValidatedReply> {
   const baseMessages: LlmMessage[] = [
     ...(input.history ?? []),
-    instruction(input.action),
+    instruction(input.action, input.context),
   ];
   const checkOptions: ValidateOptions = {
     requireQuestion: ENGAGING_ACTIONS.has(input.action),

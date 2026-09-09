@@ -111,16 +111,20 @@ export async function findOrCreateConversation(
   }
 
   // Reopen a non-ban terminal end in place, so a returning contact continues in
-  // the same record with a clean slate rather than a stale outcome.
+  // the same record rather than with a stale outcome. Their answers are KEPT:
+  // wiping them made the bot re-run the whole questionnaire on someone who had
+  // finished it minutes earlier — a lead who tapped a stale meeting time after
+  // being closed was asked "are you selling?" from scratch. Only the answer that
+  // closed the door is cleared, so the flow re-asks exactly that question and
+  // nothing else.
   if ((REOPENABLE_STAGES as readonly string[]).includes(latest.stage)) {
     const [reopened] = await db
       .update(conversations)
       .set({
         stage: 'engaged',
-        extracted: {},
+        extracted: reopenedFacts(latest.extracted, latest.disqualificationReason),
         qualified: null,
         disqualificationReason: null,
-        priorityScore: null,
         updatedAt: new Date(),
       })
       .where(eq(conversations.id, latest.id))
@@ -130,6 +134,27 @@ export async function findOrCreateConversation(
 
   // Open, or a ban/opt-out end: reuse untouched.
   return { conversation: latest, created: false };
+}
+
+/**
+ * The facts a reopened conversation resumes with: everything the person said,
+ * minus the answer that disqualified them — being back is the signal that it
+ * may have changed, and re-asking that one question is how it is re-checked.
+ * The exclusivity details go with the marketed answer they qualify.
+ */
+export function reopenedFacts(
+  extracted: unknown,
+  reason: Conversation['disqualificationReason'],
+): Record<string, unknown> {
+  const facts = { ...((extracted ?? {}) as Record<string, unknown>) };
+  if (reason === 'not_selling') delete facts.sellIntent;
+  if (reason === 'exclusive_with_other_agent') {
+    delete facts.currentlyMarketed;
+    delete facts.exclusivityEndsAt;
+    delete facts.exclusivityEndsOn;
+    delete facts.wantsExclusivityFollowup;
+  }
+  return facts;
 }
 
 /**
@@ -173,6 +198,18 @@ export function isWithinServiceWindow(
 }
 
 /** Attaches the Monday item id once the projection has been created. */
+/** Records the callback reminder created for a lead's exclusivity end. */
+export async function setExclusivityCallbackItemId(
+  db: DbClient,
+  conversationId: string,
+  itemId: string,
+): Promise<void> {
+  await db
+    .update(conversations)
+    .set({ exclusivityCallbackItemId: itemId, updatedAt: new Date() })
+    .where(eq(conversations.id, conversationId));
+}
+
 export async function setMondayItemId(
   db: DbClient,
   conversationId: string,

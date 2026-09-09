@@ -1,12 +1,16 @@
 import { and, eq, isNull, lte, sql } from 'drizzle-orm';
 import type { Database } from '../db/client.js';
 import { findContactById } from '../db/repositories/contacts.js';
-import { conversations, events, messages } from '../db/schema.js';
+import { contacts, conversations, events, messages } from '../db/schema.js';
 import { getLogger } from '../logger.js';
 import { enqueueOutboxEvent } from '../outbox/outbox.js';
 import { WELCOME_MESSAGE } from '../workflow/interactive.js';
 import type { OutboundTemplate, WhatsAppChannel } from '../whatsapp/channel.js';
-import { guardedSend } from '../whatsapp/guardedSend.js';
+import {
+  guardedSend,
+  isPermanentSendFailure,
+  OptedOutError,
+} from '../whatsapp/guardedSend.js';
 import { scheduleNextFollowUp, type FollowUpLimits } from './followUpPolicy.js';
 
 /**
@@ -33,7 +37,9 @@ export type FirstContactSkip =
   /** The lead messaged us before the grace period elapsed — they own the opening. */
   | 'lead_already_messaged'
   /** The contact record vanished (deleted between claim and send). */
-  | 'contact_missing';
+  | 'contact_missing'
+  /** The send can never succeed as things stand; the lead was parked, not retried. */
+  | 'send_refused';
 
 export interface FirstContactDeps {
   db: Database;
@@ -116,8 +122,20 @@ export async function sendFirstContact(
     );
     providerMessageId = result.providerMessageId;
   } catch (error) {
-    // Release the claim so a refused or failed send can be retried once the cause
-    // is fixed — a missing consent record, an expired token, a Meta outage.
+    if (isPermanentSendFailure(error)) {
+      // This send fails the same way on every sweep, so the lead leaves the pool
+      // instead of being picked up every minute indefinitely. An opt-out is its
+      // own stage; anything else is parked as an error with the cause recorded,
+      // where it is visible on the board and can be revisited once fixed.
+      await parkPermanently(deps.db, conversationId, error);
+      logger.warn(
+        { conversationId, reason: failureName(error) },
+        'first contact refused permanently — lead parked',
+      );
+      return { sent: false, reason: 'send_refused' };
+    }
+    // Transient — a Meta outage, a rate limit. Release the claim so the next
+    // sweep retries.
     await releaseClaim(deps.db, conversationId);
     throw error;
   }
@@ -183,6 +201,54 @@ export async function sendFirstContact(
   return { sent: true, providerMessageId };
 }
 
+/** The error's class and HTTP status only — never its message, which may quote Meta's response. */
+function failureName(error: unknown): string {
+  if (!(error instanceof Error)) return 'unknown';
+  const status = (error as { status?: number }).status;
+  return status === undefined ? error.name : `${error.name} ${status}`;
+}
+
+/**
+ * Takes a lead out of the outreach pool after a send that can never succeed.
+ *
+ * Done in one transaction with the audit event and the board projection: the
+ * stage change is what stops the retries, the event is how a human finds out
+ * why, and the projection is how Lidor sees it without being told.
+ */
+async function parkPermanently(
+  db: Database,
+  conversationId: string,
+  error: unknown,
+): Promise<void> {
+  const stage = error instanceof OptedOutError ? 'opted_out' : 'error';
+  const reason = failureName(error);
+  const now = new Date();
+
+  await db.transaction(async (tx) => {
+    await tx
+      .update(conversations)
+      .set({
+        stage,
+        errorState: stage === 'error' ? `first_contact: ${reason}` : null,
+        nextFollowupAt: null,
+        updatedAt: now,
+      })
+      .where(eq(conversations.id, conversationId));
+
+    await tx.insert(events).values({
+      aggregateType: 'conversation',
+      aggregateId: conversationId,
+      eventType: 'stage_transition',
+      fromStage: 'awaiting_first_contact',
+      toStage: stage,
+      actor: 'system',
+      metadata: { action: 'first_contact_refused', reason },
+    });
+
+    await enqueueOutboxEvent(tx, conversationId);
+  });
+}
+
 /** Returns a claimed conversation to the pool after a failed send. */
 async function releaseClaim(db: Database, conversationId: string): Promise<void> {
   await db
@@ -217,11 +283,17 @@ export async function findLeadsAwaitingFirstContact(
   const rows = await db
     .select({ id: conversations.id })
     .from(conversations)
+    .innerJoin(contacts, eq(contacts.id, conversations.contactId))
     .where(
       and(
         eq(conversations.stage, 'awaiting_first_contact'),
         isNull(conversations.lastInboundAt),
         lte(conversations.createdAt, cutoff),
+        // Only people who may actually be messaged. Anyone else stays captured
+        // but is never picked — the alternative is refusing them on every sweep
+        // for as long as the process runs.
+        eq(contacts.consentStatus, 'whatsapp_opt_in'),
+        eq(contacts.doNotContact, false),
       ),
     )
     .orderBy(sql`${conversations.createdAt} asc`)

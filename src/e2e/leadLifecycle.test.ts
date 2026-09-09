@@ -342,9 +342,11 @@ describe('lead lifecycle: form submission to qualification', () => {
     );
 
     expect(ingested.consentStatus).toBe('privacy_policy_only');
-    await expect(
-      sendFirstContact({ db, channel, template: TEMPLATE }, ingested.conversationId!),
-    ).rejects.toThrow();
+    const outcome = await sendFirstContact(
+      { db, channel, template: TEMPLATE },
+      ingested.conversationId!,
+    );
+    expect(outcome).toEqual({ sent: false, reason: 'send_refused' });
     expect(channel.sent).toHaveLength(0);
 
     // The lead is still on record — it was paid for.

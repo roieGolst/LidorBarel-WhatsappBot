@@ -24,8 +24,10 @@ rules.
 ### What this bot is
 
 An **AI WhatsApp bot that proactively contacts people who submitted Lidor Barel's
-paid Meta lead form and consented to WhatsApp contact**, qualifies them, projects
-them into Monday.com, and books consultation calls into Google Calendar.
+paid Meta lead form and consented to WhatsApp contact**, qualifies and scores
+them, projects them into Monday.com, and books consultation calls into Lidor's
+calendar — through Monday's synced activity board, so no Google credentials are
+involved.
 
 **Proactive, business-initiated outreach to consenting paid leads is the primary
 purpose.** It is not a future feature.
@@ -78,7 +80,8 @@ LangGraph checkpoints: disposable execution state, rebuildable from `messages` +
 
 Two entry paths lead into the same conversation engine.
 
-**(a) Business-initiated — the primary flow.** Not yet implemented; see phases 1–3.
+**(a) Business-initiated — the primary flow.** Implemented (phases 1–4); ships
+off until `OUTREACH_ENABLED=true`.
 
 ```
 Meta Instant Form ─▶ leadgen webhook ─▶ retrieve lead by leadgen_id
@@ -90,7 +93,7 @@ Meta Instant Form ─▶ leadgen webhook ─▶ retrieve lead by leadgen_id
 
 ```
 Meta webhook ─▶ signature verify (raw body) ─▶ idempotent ingestion (Postgres)
-             ─▶ LangGraph workflow ─▶ transactional outbox ─▶ Monday / Calendar / notify
+             ─▶ LangGraph workflow ─▶ transactional outbox ─▶ Monday (לידים / פעילות)
 ```
 
 - **Webhook signature** (`src/whatsapp/signature.ts`): Meta signs the *exact bytes* of

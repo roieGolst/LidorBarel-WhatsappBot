@@ -4,11 +4,12 @@ import type { Database } from '../db/client.js';
 import { upsertContactByPhone, type Contact } from '../db/repositories/contacts.js';
 import { findOrCreateConversation } from '../db/repositories/conversations.js';
 import { recordOptOut } from '../db/repositories/optOuts.js';
-import { conversations, events, messages } from '../db/schema.js';
+import { conversations, events, messages, outbox } from '../db/schema.js';
+import { CloudApiError } from '../whatsapp/cloudApiChannel.js';
 import { setupTestDatabase, truncateAll } from '../db/testing.js';
 import type { OutboundTemplate } from '../whatsapp/channel.js';
 import { FakeChannel } from '../whatsapp/fakeChannel.js';
-import { ConsentRequiredError, OptedOutError } from '../whatsapp/guardedSend.js';
+import { ConsentRequiredError } from '../whatsapp/guardedSend.js';
 import { WELCOME_MESSAGE } from '../workflow/interactive.js';
 import { findLeadsAwaitingFirstContact, sendFirstContact } from './firstContact.js';
 
@@ -183,33 +184,91 @@ describe('sendFirstContact', () => {
   });
 
   describe('refusals', () => {
-    it('refuses a lead without WhatsApp consent (NN-2)', async () => {
+    it('refuses a lead without WhatsApp consent (NN-2), and does not retry', async () => {
+      // A refusal is permanent by construction: the same person will be refused
+      // on the next sweep too. Before this was handled, a refused lead was
+      // released back to the pool and picked up again every minute, for ever.
       const channel = new FakeChannel();
       const { conversationId } = await seedLead({
         consentStatus: 'privacy_policy_only',
       });
 
-      await expect(
-        sendFirstContact(deps(channel), conversationId),
-      ).rejects.toBeInstanceOf(ConsentRequiredError);
+      const outcome = await sendFirstContact(deps(channel), conversationId);
+
+      expect(outcome).toEqual({ sent: false, reason: 'send_refused' });
       expect(channel.sent).toHaveLength(0);
+
+      const [conversation] = await db
+        .select()
+        .from(conversations)
+        .where(eq(conversations.id, conversationId));
+      expect(conversation?.stage).toBe('error');
+      expect(conversation?.errorState).toContain(ConsentRequiredError.name);
+      // Nothing about the person's identity leaks into the recorded cause.
+      expect(conversation?.errorState).not.toMatch(/\+?972/);
     });
 
-    it('refuses a lead who opted out', async () => {
+    it('parks an opted-out lead as opted out', async () => {
       const channel = new FakeChannel();
       const { conversationId, contact } = await seedLead();
       await recordOptOut(db, contact.phone, 'keyword', 'stop');
 
-      await expect(
-        sendFirstContact(deps(channel), conversationId),
-      ).rejects.toBeInstanceOf(OptedOutError);
+      const outcome = await sendFirstContact(deps(channel), conversationId);
+
+      expect(outcome).toEqual({ sent: false, reason: 'send_refused' });
+      expect(channel.sent).toHaveLength(0);
+      const [conversation] = await db
+        .select()
+        .from(conversations)
+        .where(eq(conversations.id, conversationId));
+      expect(conversation?.stage).toBe('opted_out');
     });
 
-    it('releases the claim so a refused lead can be retried', async () => {
-      // A refusal is usually fixable — a consent record that arrives late, an
-      // expired token. Leaving the lead claimed would abandon it silently.
+    it('leaves a parked lead out of the pool, and tells the board why', async () => {
       const channel = new FakeChannel();
       const { conversationId } = await seedLead({ consentStatus: 'none' });
+      await sendFirstContact(deps(channel), conversationId);
+
+      // A second sweep finds nothing to claim.
+      const again = await sendFirstContact(deps(channel), conversationId);
+      expect(again).toEqual({ sent: false, reason: 'claimed_elsewhere' });
+      expect(channel.sent).toHaveLength(0);
+
+      // Audited, and projected so it shows on Lidor's board rather than silently
+      // vanishing from the queue.
+      const [event] = await db
+        .select()
+        .from(events)
+        .where(eq(events.aggregateId, conversationId));
+      expect(event).toMatchObject({ toStage: 'error' });
+      const queued = await db.select().from(outbox);
+      expect(queued.some((row) => row.aggregateId === conversationId)).toBe(true);
+    });
+
+    it('parks a lead whose number Meta reports as undeliverable', async () => {
+      // A 4xx from the Cloud API for this recipient will not change on retry.
+      const channel = new FakeChannel();
+      channel.sendTemplate = () =>
+        Promise.reject(new CloudApiError('send failed: 400 undeliverable', false, 400));
+      const { conversationId } = await seedLead();
+
+      const outcome = await sendFirstContact(deps(channel), conversationId);
+
+      expect(outcome).toEqual({ sent: false, reason: 'send_refused' });
+      const [conversation] = await db
+        .select()
+        .from(conversations)
+        .where(eq(conversations.id, conversationId));
+      expect(conversation?.stage).toBe('error');
+      expect(conversation?.errorState).toContain('CloudApiError 400');
+    });
+
+    it('retries a lead when the Cloud API failure was transient', async () => {
+      // A 5xx or a rate limit is Meta's problem, not this lead's.
+      const channel = new FakeChannel();
+      channel.sendTemplate = () =>
+        Promise.reject(new CloudApiError('send failed: 503', true, 503));
+      const { conversationId } = await seedLead();
 
       await expect(sendFirstContact(deps(channel), conversationId)).rejects.toThrow();
 

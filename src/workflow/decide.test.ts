@@ -19,6 +19,7 @@ function analysis(overrides: Partial<Analysis> = {}): Analysis {
     wantsBuyerProof: false,
     wantsSocialProof: false,
     asksQuestion: false,
+    declinesOfferedTimes: false,
     ...overrides,
   };
 }
@@ -566,19 +567,54 @@ describe('decideTransition', () => {
     });
 
     describe('after the lead has already completed the flow', () => {
-      it('confirms before redoing the flow instead of restarting it', () => {
-        const answered: KnownFacts = {
-          sellIntent: 'ready',
-          neighborhood: 'רמות',
-          currentlyMarketed: 'no',
-        };
-        for (const choice of ['check_fit', 'book_meeting'] as const) {
-          const decision = decideMainMenu(choice, 'qualified', answered);
-          expect(decision.action).toBe('confirm_restart');
-          // Nothing moves until they say yes — no question is re-asked.
-          expect(decision.nextStage).toBe('qualified');
-          expect(decision.qualified).toBeUndefined();
-        }
+      const answered: KnownFacts = {
+        sellIntent: 'ready',
+        neighborhood: 'רמות',
+        currentlyMarketed: 'no',
+      };
+
+      it('confirms before redoing the fit check instead of restarting it', () => {
+        const decision = decideMainMenu('check_fit', 'qualified', answered);
+        expect(decision.action).toBe('confirm_restart');
+        // Nothing moves until they say yes — no question is re-asked.
+        expect(decision.nextStage).toBe('qualified');
+        expect(decision.qualified).toBeUndefined();
+      });
+
+      it('honours a meeting request with real times — no questionnaire', () => {
+        const decision = decideMainMenu(
+          'book_meeting',
+          'qualified',
+          answered,
+          false,
+          true,
+        );
+        expect(decision.action).toBe('offer_slots');
+        expect(decision.nextStage).toBe('appointment_proposed');
+      });
+
+      it('answers a meeting request as an assistant when booking is not wired', () => {
+        const decision = decideMainMenu(
+          'book_meeting',
+          'qualified',
+          answered,
+          false,
+          false,
+        );
+        expect(decision.action).toBe('assist_qualified');
+        expect(decision.nextStage).toBe('qualified');
+      });
+
+      it('does not offer times to a lead whose meeting is already booked', () => {
+        const decision = decideMainMenu(
+          'book_meeting',
+          'appointment_confirmed',
+          answered,
+          false,
+          true,
+        );
+        expect(decision.action).toBe('assist_qualified');
+        expect(decision.nextStage).toBe('appointment_confirmed');
       });
 
       it('still answers "about me" and testimonials without touching the flow', () => {
@@ -645,5 +681,219 @@ describe('decideTransition', () => {
       expect(screensAllQuestions(null)).toBe(true);
       expect(screensAllQuestions(undefined)).toBe(true);
     });
+  });
+});
+
+describe('a changed answer after the details are with Lidor', () => {
+  const complete: KnownFacts = {
+    sellIntent: 'ready',
+    neighborhood: 'רמות',
+    timeline: 'immediate',
+    currentlyMarketed: 'no',
+    intentAssessed: true,
+  };
+
+  it('is checked with the person before anything acts on it', () => {
+    // The live case: a stray "כן, עם מתווך" after the meeting was booked closed
+    // the lead as exclusive. Now it is a question, not a fact.
+    const decision = decideTransition(
+      'appointment_confirmed',
+      analysis({ extracted: { currentlyMarketed: 'with_agent' } }),
+      complete,
+    );
+    expect(decision.action).toBe('confirm_fact_change');
+    expect(decision.nextStage).toBe('appointment_confirmed');
+    expect(decision.pendingChange).toEqual({
+      field: 'currentlyMarketed',
+      value: 'with_agent',
+    });
+    expect(decision.disqualificationReason).toBeUndefined();
+  });
+
+  it.each(['qualified', 'handed_off', 'appointment_proposed'] as const)(
+    'applies from %s too',
+    (stage) => {
+      const decision = decideTransition(
+        stage,
+        analysis({ extracted: { neighborhood: 'נווה זאב' } }),
+        complete,
+        false,
+        true,
+      );
+      expect(decision.action).toBe('confirm_fact_change');
+      expect(decision.pendingChange).toEqual({
+        field: 'neighborhood',
+        value: 'נווה זאב',
+      });
+    },
+  );
+
+  it('ignores the classifier re-emitting what is already known', () => {
+    const decision = decideTransition(
+      'qualified',
+      analysis({ extracted: { currentlyMarketed: 'no', neighborhood: 'רמות' } }),
+      complete,
+    );
+    expect(decision.action).toBe('assist_qualified');
+  });
+
+  it('is not a check for a shaky read', () => {
+    const decision = decideTransition(
+      'qualified',
+      analysis({ confidence: 0.2, extracted: { currentlyMarketed: 'with_agent' } }),
+      complete,
+    );
+    expect(decision.action).not.toBe('confirm_fact_change');
+    expect(decision.disqualificationReason).toBeUndefined();
+  });
+
+  it('is applied directly while screening is still in progress', () => {
+    // Mid-flow a person corrects themselves all the time ("סליחה, רמות"). Only
+    // after their details are with Lidor does a change need a confirmation.
+    const decision = decideTransition(
+      'screening_currently_marketed',
+      analysis({ extracted: { neighborhood: 'נווה זאב' } }),
+      { neighborhood: 'רמות' },
+    );
+    expect(decision.action).not.toBe('confirm_fact_change');
+  });
+
+  it('once confirmed, the change runs its course', () => {
+    // The turn applies the value to the known facts and re-decides with no
+    // message of its own: exclusivity is now asked about, as in screening.
+    const decision = decideTransition(
+      'appointment_confirmed',
+      analysis({ extracted: {} }),
+      { ...complete, currentlyMarketed: 'with_agent' },
+    );
+    expect(decision.action).toBe('ask_exclusivity');
+    expect(decision.nextStage).toBe('screening_exclusivity');
+  });
+});
+
+describe('past screening, a message is answered — never re-screened', () => {
+  const complete: KnownFacts = {
+    sellIntent: 'ready',
+    neighborhood: 'רמות',
+    timeline: 'immediate',
+    currentlyMarketed: 'no',
+    intentAssessed: true,
+  };
+
+  it('answers a booked lead as an assistant rather than re-asking for details', () => {
+    // Before: appointment_confirmed fell through to the screening flow, which
+    // re-ran the intent question on someone whose meeting was already set.
+    const decision = decideTransition('appointment_confirmed', analysis(), complete);
+    expect(decision.action).toBe('assist_qualified');
+    expect(decision.nextStage).toBe('appointment_confirmed');
+  });
+
+  it('offers real times to a qualified lead who asks for a meeting later', () => {
+    const decision = decideTransition(
+      'qualified',
+      analysis({ extracted: { bookingIntent: true } }),
+      complete,
+      false,
+      true,
+    );
+    expect(decision.action).toBe('offer_slots');
+    expect(decision.nextStage).toBe('appointment_proposed');
+  });
+
+  it('does not re-offer times to a lead whose meeting is booked', () => {
+    const decision = decideTransition(
+      'appointment_confirmed',
+      analysis({ extracted: { bookingIntent: true } }),
+      complete,
+      false,
+      true,
+    );
+    expect(decision.action).toBe('assist_qualified');
+  });
+
+  it('skips the intent check for a lead who already passed it', () => {
+    // A returning lead re-answers the one question that closed the door (Q4,
+    // cleared on reopen) and goes straight to the outcome — not through the
+    // property-details question a second time.
+    const decision = decideTransition(
+      'screening_currently_marketed',
+      analysis({ extracted: { currentlyMarketed: 'no', bookingIntent: true } }),
+      { ...complete, currentlyMarketed: undefined },
+      false,
+      true,
+    );
+    expect(decision.action).toBe('offer_slots');
+  });
+
+  it('still asks the intent check when it was never passed', () => {
+    const decision = decideTransition(
+      'screening_currently_marketed',
+      analysis({ extracted: { currentlyMarketed: 'no' } }),
+      { ...complete, currentlyMarketed: undefined, intentAssessed: undefined },
+    );
+    expect(decision.action).toBe('ask_intent');
+  });
+});
+
+describe('with meeting times on the table (appointment_proposed)', () => {
+  const complete: KnownFacts = {
+    sellIntent: 'ready',
+    neighborhood: 'רמות',
+    timeline: 'immediate',
+    currentlyMarketed: 'no',
+    bookingIntent: true,
+    intentAssessed: true,
+  };
+
+  it('answers a question about the times with the times in view', () => {
+    // "אין מוקדם יותר היום?" — the live conversation replied "I have no
+    // calendar to schedule with" and then re-asked the intent question.
+    const decision = decideTransition(
+      'appointment_proposed',
+      analysis({ intent: 'FAQ', asksQuestion: true }),
+      complete,
+      false,
+      true,
+    );
+    expect(decision.action).toBe('assist_booking');
+    expect(decision.nextStage).toBe('appointment_proposed');
+    expect(decision.addressFirst).toBeUndefined();
+  });
+
+  it('answers a plain comment the same way', () => {
+    const decision = decideTransition(
+      'appointment_proposed',
+      analysis(),
+      complete,
+      false,
+      true,
+    );
+    expect(decision.action).toBe('assist_booking');
+  });
+
+  it('ends the booking honestly when the times are turned down', () => {
+    const decision = decideTransition(
+      'appointment_proposed',
+      analysis({ declinesOfferedTimes: true }),
+      complete,
+      false,
+      true,
+    );
+    expect(decision.action).toBe('decline_slots');
+    expect(decision.nextStage).toBe('qualified');
+  });
+
+  it('still honours an opt-out and an off-topic redirect', () => {
+    expect(
+      decideTransition('appointment_proposed', analysis({ intent: 'OPT_OUT' }), complete)
+        .nextStage,
+    ).toBe('opted_out');
+    expect(
+      decideTransition(
+        'appointment_proposed',
+        analysis({ intent: 'OFF_TOPIC' }),
+        complete,
+      ).action,
+    ).toBe('stay_on_topic');
   });
 });

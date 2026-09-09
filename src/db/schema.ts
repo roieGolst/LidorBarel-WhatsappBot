@@ -303,6 +303,12 @@ export const conversations = pgTable(
 
     /** Monday item id, stored so sync is idempotent across retries. */
     mondayItemId: text('monday_item_id'),
+    /**
+     * The `פעילות` item reminding Lidor to call back when a lead's exclusivity
+     * with another agent ends. Stored so the reminder is created exactly once,
+     * however many times the lead is projected afterwards.
+     */
+    exclusivityCallbackItemId: text('exclusivity_callback_item_id'),
 
     lastInboundAt: timestamp('last_inbound_at', { withTimezone: true }),
     lastOutboundAt: timestamp('last_outbound_at', { withTimezone: true }),

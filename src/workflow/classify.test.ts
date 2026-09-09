@@ -22,6 +22,7 @@ describe('parseAnalysis', () => {
       wantsBuyerProof: false,
       wantsSocialProof: false,
       asksQuestion: false,
+      declinesOfferedTimes: false,
     });
   });
 
@@ -35,7 +36,29 @@ describe('parseAnalysis', () => {
       wantsBuyerProof: false,
       wantsSocialProof: false,
       asksQuestion: false,
+      declinesOfferedTimes: false,
     });
+  });
+
+  it('accepts an exclusivity end date only in calendar form', () => {
+    const dated = parseAnalysis(
+      '{"intent":"ANSWER","confidence":0.9,"extracted":{"exclusivityEndsAt":"מחר","exclusivityEndsOn":"2026-09-09"}}',
+    );
+    expect(dated?.extracted.exclusivityEndsOn).toBe('2026-09-09');
+
+    // Free text in the date field is a malformed analysis, not a date: a vague
+    // answer must never become a calendar entry.
+    const vague = parseAnalysis(
+      '{"intent":"ANSWER","confidence":0.9,"extracted":{"exclusivityEndsOn":"בקרוב"}}',
+    );
+    expect(vague).toBeUndefined();
+  });
+
+  it('reads a decline of the offered times', () => {
+    const analysis = parseAnalysis(
+      '{"intent":"ANSWER","confidence":0.9,"declinesOfferedTimes":true}',
+    );
+    expect(analysis?.declinesOfferedTimes).toBe(true);
   });
 
   it('tolerates a code fence and surrounding prose', () => {

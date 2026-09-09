@@ -8,10 +8,9 @@ import {
   type ConversationStage,
 } from '../db/repositories/conversations.js';
 import { recordOptOut } from '../db/repositories/optOuts.js';
-import { conversations, messages } from '../db/schema.js';
+import { conversations, messages, outbox } from '../db/schema.js';
 import { setupTestDatabase, truncateAll } from '../db/testing.js';
 import { FakeChannel } from '../whatsapp/fakeChannel.js';
-import { ConsentRequiredError, OptedOutError } from '../whatsapp/guardedSend.js';
 import { findConversationsDueForFollowUp, sendFollowUp } from './followUp.js';
 import { FOLLOW_UP_MESSAGES } from './followUpMessages.js';
 import type { FollowUpLimits } from './followUpPolicy.js';
@@ -293,27 +292,64 @@ describe('sendFollowUp', () => {
       expect(channel.sent).toHaveLength(0);
     });
 
-    it('never messages someone who opted out', async () => {
+    it('never messages someone who opted out — and stops the sequence for good', async () => {
+      // Before this was handled, a refused nudge restored its schedule to "now"
+      // and was retried on every sweep, indefinitely. The cap never helped: it
+      // only counts nudges that were actually sent.
       const channel = new FakeChannel();
       const { conversationId, contact } = await seed({ windowOpen: true });
       await recordOptOut(db, contact.phone, 'keyword', 'stop');
 
-      await expect(
-        sendFollowUp(deps(channel), conversationId, NOW),
-      ).rejects.toBeInstanceOf(OptedOutError);
+      const outcome = await sendFollowUp(deps(channel), conversationId, NOW);
+
+      expect(outcome).toEqual({ sent: false, reason: 'send_refused' });
       expect(channel.sent).toHaveLength(0);
+
+      const [conversation] = await db
+        .select()
+        .from(conversations)
+        .where(eq(conversations.id, conversationId));
+      expect(conversation?.stage).toBe('opted_out');
+      expect(conversation?.nextFollowupAt).toBeNull();
+
+      // Nothing left to claim on the next sweep.
+      expect(await sendFollowUp(deps(channel), conversationId, NOW)).toEqual({
+        sent: false,
+        reason: 'not_due',
+      });
+      // And the board is told.
+      const queued = await db.select().from(outbox);
+      expect(queued.some((row) => row.aggregateId === conversationId)).toBe(true);
     });
 
-    it('never sends a template nudge without consent', async () => {
+    it('never sends a template nudge without consent — and does not retry it', async () => {
       const channel = new FakeChannel();
       const { conversationId } = await seed({
         windowOpen: false,
         consentStatus: 'privacy_policy_only',
       });
 
-      await expect(
-        sendFollowUp(deps(channel, TEMPLATE), conversationId, NOW),
-      ).rejects.toBeInstanceOf(ConsentRequiredError);
+      const outcome = await sendFollowUp(deps(channel, TEMPLATE), conversationId, NOW);
+
+      expect(outcome).toEqual({ sent: false, reason: 'send_refused' });
+      expect(channel.sent).toHaveLength(0);
+      const [conversation] = await db
+        .select()
+        .from(conversations)
+        .where(eq(conversations.id, conversationId));
+      expect(conversation?.nextFollowupAt).toBeNull();
+    });
+
+    it('closes an exhausted sequence on the board too', async () => {
+      // ליד ללא מענה exists on Lidor's status column for exactly this moment.
+      // Without the projection the lead read as still-active indefinitely.
+      const channel = new FakeChannel();
+      const { conversationId } = await seed({ windowOpen: true, followupCount: 5 });
+
+      await sendFollowUp(deps(channel), conversationId, NOW);
+
+      const queued = await db.select().from(outbox);
+      expect(queued.some((row) => row.aggregateId === conversationId)).toBe(true);
     });
 
     it('clears the schedule on every stop, so nothing stays due', async () => {
@@ -355,7 +391,7 @@ describe('sendFollowUp', () => {
       expect(channel.sent).toHaveLength(1);
     });
 
-    it('restores the schedule when the send fails, so it retries', async () => {
+    it('restores the schedule when the send fails transiently, after a pause', async () => {
       const channel = new FakeChannel();
       channel.failNext(1);
       const { conversationId } = await seed({ windowOpen: true });
@@ -367,6 +403,18 @@ describe('sendFollowUp', () => {
         .from(conversations)
         .where(eq(conversations.id, conversationId));
       expect(conversation?.nextFollowupAt).not.toBeNull();
+      // Not on the very next sweep — an outage is not hammered once a minute.
+      expect(conversation!.nextFollowupAt!.getTime()).toBeGreaterThan(NOW.getTime());
+    });
+
+    it('tells the board about a nudge that was sent', async () => {
+      const channel = new FakeChannel();
+      const { conversationId } = await seed({ windowOpen: true });
+
+      await sendFollowUp(deps(channel), conversationId, NOW);
+
+      const queued = await db.select().from(outbox);
+      expect(queued.some((row) => row.aggregateId === conversationId)).toBe(true);
     });
   });
 });
@@ -380,6 +428,17 @@ describe('findConversationsDueForFollowUp', () => {
 
   it('ignores one scheduled for later', async () => {
     const { conversationId } = await seed({ dueAt: new Date(NOW.getTime() + DAY) });
+
+    expect(await findConversationsDueForFollowUp(db, 10, NOW)).not.toContain(
+      conversationId,
+    );
+  });
+
+  it('never lists someone who opted out, even with a nudge due', async () => {
+    const { conversationId, contact } = await seed({
+      dueAt: new Date(NOW.getTime() - 1000),
+    });
+    await recordOptOut(db, contact.phone, 'keyword', 'stop');
 
     expect(await findConversationsDueForFollowUp(db, 10, NOW)).not.toContain(
       conversationId,

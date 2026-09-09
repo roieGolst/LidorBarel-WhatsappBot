@@ -800,6 +800,33 @@ describe('past screening, a message is answered — never re-screened', () => {
     expect(decision.nextStage).toBe('appointment_proposed');
   });
 
+  it('honours a booking request even when it is phrased as a complaint or a question', () => {
+    // Live: "למה אתה לא קובע לי פגישה?" read as an OBJECTION and drew an apology
+    // that Lidor would call — the booking wish inside it was never acted on.
+    for (const intent of ['OBJECTION', 'FAQ'] as const) {
+      const decision = decideTransition(
+        'qualified',
+        analysis({ intent, asksQuestion: true, extracted: { bookingIntent: true } }),
+        complete,
+        false,
+        true,
+      );
+      expect(decision.action).toBe('offer_slots');
+      expect(decision.nextStage).toBe('appointment_proposed');
+    }
+  });
+
+  it('answers the same objection as an objection when booking is not wired', () => {
+    const decision = decideTransition(
+      'qualified',
+      analysis({ intent: 'OBJECTION', extracted: { bookingIntent: true } }),
+      complete,
+      false,
+      false,
+    );
+    expect(decision.action).toBe('handle_objection');
+  });
+
   it('does not re-offer times to a lead whose meeting is booked', () => {
     const decision = decideTransition(
       'appointment_confirmed',

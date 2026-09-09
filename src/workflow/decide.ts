@@ -262,6 +262,22 @@ export function decideTransition(
     };
   }
 
+  // 2d. Past screening, a wish to book is honoured before anything else is
+  //     read into the message. "למה אתה לא קובע לי פגישה?" is an objection in
+  //     form and a booking request in substance; routed by its form it drew an
+  //     apology that Lidor would call — from a bot that could have offered his
+  //     real times. Only when booking is wired, and never to a lead whose
+  //     meeting is already set.
+  if (
+    canBook &&
+    confident &&
+    analysis.extracted.bookingIntent === true &&
+    POST_SCREENING_STAGES.includes(current) &&
+    current !== 'appointment_confirmed'
+  ) {
+    return { nextStage: 'appointment_proposed', action: 'offer_slots', escalate };
+  }
+
   // 3. A confident objection or FAQ gets a bespoke reply, without advancing
   //    screening. An objection reaches for the stronger model to handle it.
   if (confident && analysis.intent === 'OBJECTION') {
@@ -281,23 +297,15 @@ export function decideTransition(
   }
 
   // 4. Past screening (qualified, handed off, or a meeting booked): the
-  //    conversation stays OPEN and behaves like a real assistant. A request to
-  //    book — from a lead whose meeting is not yet set — gets real times. New
-  //    property details volunteered are appended to the lead with a brief ack;
+  //    conversation stays OPEN and behaves like a real assistant (a request to
+  //    book was already honoured in 2d). New property details volunteered are
+  //    appended to the lead with a brief ack;
   //    ANYTHING ELSE — a question, a clarification ("את מה?"), a comment — is
   //    answered by the model, not brushed off with the same canned ack. Never
   //    re-run screening or re-send the handoff. (The dismissive "I already have
   //    everything, no more needed" line is reserved for the rate-limit window; see
   //    THROTTLE_MESSAGE — it must not be how the bot replies to a normal message.)
   if (POST_SCREENING_STAGES.includes(current)) {
-    if (
-      canBook &&
-      confident &&
-      analysis.extracted.bookingIntent === true &&
-      current !== 'appointment_confirmed'
-    ) {
-      return { nextStage: 'appointment_proposed', action: 'offer_slots', escalate };
-    }
     if (confident && analysis.extracted.additionalNotes !== undefined) {
       return { nextStage: current, action: 'acknowledge_additional_info', escalate };
     }

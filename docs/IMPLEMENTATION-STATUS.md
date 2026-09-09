@@ -180,6 +180,14 @@ in `decide.test.ts`).
   the meeting is set, a complete lead gets fresh times, an incomplete one gets
   the single missing question and then the times.
 
+- [x] **A booking wish is honoured however it is phrased (2026-09-09).** A
+  qualified lead asked "למה אתה לא קובע לי פגישה?"; the classifier read an
+  objection, the objection rule ran before the booking rule, and the bot
+  apologised that Lidor would call — while able to offer his real times. Past
+  screening, `bookingIntent` now routes to `offer_slots` ahead of the
+  objection/FAQ handlers, and the classifier is told that a complaint about no
+  meeting or a question about when the call will be is the same wish.
+
 **Known limit:** a lead who confirms a disqualifying change *after* a meeting was
 booked is closed per the spec, and the meeting stays in Lidor's calendar (the bot
 never deletes a `פעילות` item — see MONDAY-MAPPING). Lidor sees both on the

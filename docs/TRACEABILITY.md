@@ -32,6 +32,7 @@ Last updated: 2026-09-08
 | 4a | Conversation turn, transcript, media | `workflow/conversationTurn.ts` | `conversationTurn.test.ts` | ✅ |
 | 4a | A burst of messages is answered once, nothing dropped | `queue/conversationQueue.ts` (debounce) · `workflow/conversationTurn.ts` (`loadContext` batches unanswered) | `conversationQueue.test.ts` (real Redis) · `changedAnswers.test.ts` | ✅ |
 | 4a | Answer validation and re-asking | `workflow/validateAnswer.ts` | `validateAnswer.test.ts` | ✅ |
+| 4a | A bare yes, a repeated re-ask, an address the classifier cannot place — none dead-ends the flow | `workflow/interactive.ts` (`screeningAnswerFor`, `MARKETED_YES_QUESTION`, `retryQuestion`) · `workflow/conversationTurn.ts` | `interactive.test.ts` · `changedAnswers.test.ts` | ✅ |
 | 4a | An address given as the neighbourhood is checked once, never stored on faith | `workflow/conversationTurn.ts` · `workflow/validateAnswer.ts` | `neighborhoodClarification.test.ts` | ✅ |
 | 4c | An unlisted place still reaches Lidor (notes, not a bogus label) | `monday/leadMapping.ts` | `leadMapping.test.ts` | ✅ |
 | 4b | Screening and stage transitions | `workflow/decide.ts` | `decide.test.ts` | ✅ |

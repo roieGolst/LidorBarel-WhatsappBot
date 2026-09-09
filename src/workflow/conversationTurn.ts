@@ -56,6 +56,7 @@ import type { Conversation } from '../db/repositories/conversations.js';
 import { classifyAndExtract, WORKFLOW_OWNED_FIELDS, type Analysis } from './classify.js';
 import { isAffirmative, isNegative } from './confirmation.js';
 import {
+  CONFIDENCE_THRESHOLD,
   decideMainMenu,
   decideTransition,
   screensAllQuestions,
@@ -73,7 +74,9 @@ import {
   FACT_CHANGE_NO,
   FACT_CHANGE_YES,
   factChangeConfirmation,
+  MARKETED_YES_QUESTION,
   neighborhoodClarification,
+  retryQuestion,
   INTRO_VIDEO_PATH,
   MAIN_MENU,
   mainMenuChoiceFor,
@@ -93,7 +96,7 @@ import {
   type PersistTurnInput,
 } from './persist.js';
 import { selectVideo } from './testimonial.js';
-import { sanitizeExtraction } from './validateAnswer.js';
+import { isPlausibleNeighborhood, sanitizeExtraction } from './validateAnswer.js';
 
 /**
  * The conversation workflow — one turn, per the plan's §5.1 shape.
@@ -353,6 +356,21 @@ export async function loadContext(
     priorMalicious,
     ...(lastOutboundText !== undefined ? { lastOutboundText } : {}),
   };
+}
+
+/**
+ * Whether a Q2 answer reads as a place rather than filler: Hebrew, at least two
+ * words (a one-word real neighbourhood is extracted by the classifier; a
+ * one-word non-answer is "כן"), and not a yes/no.
+ */
+function looksLikeAPlace(text: string): boolean {
+  const trimmed = text.trim();
+  return (
+    isPlausibleNeighborhood(trimmed) &&
+    trimmed.split(/\s+/).length >= 2 &&
+    !isAffirmative(trimmed) &&
+    !isNegative(trimmed)
+  );
 }
 
 /** Dispatches an outbound part to the right channel method. */
@@ -1194,6 +1212,37 @@ export function createConversationWorkflow(
         );
       }
 
+      // A bare "כן" to Q4 ("is the property marketed?"): yes — but privately or
+      // through an agent? The two are different outcomes (one continues, one
+      // asks about exclusivity), so the answer is narrowed with two buttons
+      // rather than the whole question asked again. Deterministic, no model.
+      if (
+        ctx.stage === 'screening_currently_marketed' &&
+        isAffirmative(ctx.currentText)
+      ) {
+        const { providerMessageId } = await send({
+          to: ctx.contactPhone,
+          conversation: ctx,
+          part: questionPart(MARKETED_YES_QUESTION),
+        });
+        await persist({
+          conversationId,
+          contactId: ctx.contactId,
+          contactPhone: ctx.contactPhone,
+          fromStage: ctx.stage,
+          toStage: ctx.stage,
+          action: 'ask_currently_marketed',
+          extracted: ctx.known,
+          outbound: [{ body: MARKETED_YES_QUESTION.body, providerMessageId }],
+        });
+        return {
+          stage: ctx.stage,
+          action: 'ask_currently_marketed',
+          text: MARKETED_YES_QUESTION.body,
+          sent: true,
+        };
+      }
+
       // Hebrew-only gate (review req #4): a predominantly-English message is
       // unsupported input — a fixed Hebrew reply, no classification, no fact
       // change, no flow advance. An explicit opt-out (even in English, e.g.
@@ -1334,6 +1383,22 @@ export function createConversationWorkflow(
         // their original words stand — accepted verbatim, never swapped for a
         // nearest match (rule 1 in domain/neighborhoods.ts).
         validated.extracted.neighborhood = ctx.known.neighborhoodCandidate;
+      } else if (
+        ctx.stage === 'screening_neighborhood' &&
+        validated.intent === 'ANSWER' &&
+        validated.confidence >= CONFIDENCE_THRESHOLD &&
+        validated.extracted.neighborhood === undefined &&
+        ctx.known.neighborhoodCandidate === undefined &&
+        ctx.known.neighborhoodClarified !== true &&
+        looksLikeAPlace(ctx.currentText)
+      ) {
+        // A real answer to Q2 from which the classifier could name no Beer Sheva
+        // neighbourhood — a full address elsewhere ("התימנים 18, תל אביב"). Not
+        // an unknown place it *did* extract (the branch above), so it fell
+        // through to a plain re-ask, forever. It gets the same one-time
+        // clarification; a second answer without a known name is then accepted
+        // verbatim and reaches Lidor as "מיקום כפי שנמסר".
+        clarifyNeighborhood = ctx.currentText.trim();
       }
 
       // `seriousSeller` / `sellMotivation` are the answer to the intent question,
@@ -1675,7 +1740,13 @@ export function createConversationWorkflow(
         // "no callback-time promise" rule can never drift.
         plan.push({ part: { kind: 'text', text: canned }, storeBody: canned });
       } else if (question) {
-        plan.push({ part: questionPart(question), storeBody: question.body });
+        // Asking the same question the bot just asked: say so, rather than
+        // repeat it word for word as if nothing had been said.
+        const retry = retryQuestion(question);
+        const repeated =
+          ctx.lastOutboundText === question.body || ctx.lastOutboundText === retry.body;
+        const asked = repeated ? retry : question;
+        plan.push({ part: questionPart(asked), storeBody: asked.body });
       } else {
         const reply = await generate({
           action: decision.action,

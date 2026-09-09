@@ -33,6 +33,9 @@ import {
   FACT_CHANGE_NO,
   FACT_CHANGE_YES,
   FACT_CHANGE_APPLIED_MESSAGE,
+  MARKETED_YES_QUESTION,
+  RETRY_PREFIX,
+  neighborhoodClarification,
   screeningQuestionFor,
 } from './interactive.js';
 
@@ -104,10 +107,12 @@ async function seed(options: {
   known?: KnownFacts;
   priorReply: string;
   inbound: string;
+  /** A direct-message lead is asked all four questions; a form lead Q2 + Q4. */
+  entryPoint?: 'meta_lead_form' | 'direct_message';
 }): Promise<string> {
   const contact = await upsertContactByPhone(db, {
     phone: `+9725044444${String(phoneCounter++).padStart(2, '0')}`,
-    entryPoint: 'meta_lead_form',
+    entryPoint: options.entryPoint ?? 'meta_lead_form',
     consentStatus: 'whatsapp_opt_in',
   });
   const { conversation } = await findOrCreateConversation(db, contact.id);
@@ -579,5 +584,110 @@ describe('a burst of messages', () => {
 
     expect(result.action).toBe('acknowledge_additional_info');
     expect((await facts(conversationId)).photoCount).toBe(1);
+  });
+});
+
+describe('answers the script did not anticipate', () => {
+  const Q1 = screeningQuestionFor('ask_sell_intent')!.body;
+  const Q2 = screeningQuestionFor('ask_neighborhood')!.body;
+  const Q4 = screeningQuestionFor('ask_currently_marketed')!.body;
+
+  it('takes a bare "כן" to Q1 as the wish to sell and moves on', async () => {
+    // Live: five identical re-asks of Q1 to a lead who kept saying כן.
+    const conversationId = await seed({
+      stage: 'screening_sell_intent',
+      known: {},
+      priorReply: Q1,
+      inbound: 'כן',
+      entryPoint: 'direct_message',
+    });
+    const llm = new FakeLlmClient([
+      '{"intent":"UNCLEAR","confidence":0.2,"extracted":{}}',
+    ]);
+
+    const result = await run({ db, llm, channel: new FakeChannel() }, conversationId);
+
+    expect(result.action).toBe('ask_neighborhood');
+    expect((await facts(conversationId)).sellIntent).toBe('ready');
+  });
+
+  it('narrows a bare "כן" to Q4 instead of asking Q4 again', async () => {
+    const channel = new FakeChannel();
+    const conversationId = await seed({
+      stage: 'screening_currently_marketed',
+      known: { sellIntent: 'ready', neighborhood: 'רמות', timeline: 'immediate' },
+      priorReply: Q4,
+      inbound: 'כן',
+    });
+    const llm = new FakeLlmClient([]); // deterministic — no model call
+
+    const result = await run({ db, llm, channel }, conversationId);
+
+    expect(result.stage).toBe('screening_currently_marketed');
+    expect(result.text).toBe(MARKETED_YES_QUESTION.body);
+    expect(channel.sent[0]!.kind).toBe('buttons');
+    expect(llm.requests).toHaveLength(0);
+    expect((await facts(conversationId)).currentlyMarketed).toBeUndefined();
+  });
+
+  it('says it did not understand before asking the same question again', async () => {
+    const conversationId = await seed({
+      stage: 'screening_sell_intent',
+      known: {},
+      priorReply: Q1,
+      inbound: '🥹',
+      entryPoint: 'direct_message',
+    });
+    const llm = new FakeLlmClient([
+      '{"intent":"UNCLEAR","confidence":0.1,"extracted":{}}',
+    ]);
+
+    const result = await run({ db, llm, channel: new FakeChannel() }, conversationId);
+
+    expect(result.action).toBe('ask_sell_intent');
+    expect(result.text).toBe(RETRY_PREFIX + Q1);
+  });
+
+  it('checks an address the classifier could not place, once, then accepts the answer', async () => {
+    // Live: a Tel Aviv address at Q2 drew the identical Q2 again, and would
+    // have forever — the one-time clarification only fired for a place the
+    // classifier *had* extracted.
+    const channel = new FakeChannel();
+    const conversationId = await seed({
+      stage: 'screening_neighborhood',
+      known: { sellIntent: 'ready', timeline: 'immediate' },
+      priorReply: Q2,
+      inbound: 'התימנים 18 בכרם התימנים בתל אביב',
+    });
+
+    const first = await run(
+      {
+        db,
+        llm: new FakeLlmClient([
+          '{"intent":"ANSWER","confidence":0.9,"extracted":{"additionalNotes":"התימנים 18, תל אביב"}}',
+        ]),
+        channel,
+      },
+      conversationId,
+    );
+    expect(first.action).toBe('clarify_neighborhood');
+    expect(first.text).toBe(
+      neighborhoodClarification('התימנים 18 בכרם התימנים בתל אביב'),
+    );
+
+    await reply(conversationId, 'זה לא בבאר שבע, זה בתל אביב');
+    const second = await run(
+      {
+        db,
+        llm: new FakeLlmClient(['{"intent":"ANSWER","confidence":0.9,"extracted":{}}']),
+        channel,
+      },
+      conversationId,
+    );
+    // The flow moves on (a form lead's next question is Q4) with their words kept.
+    expect(second.action).toBe('ask_currently_marketed');
+    expect((await facts(conversationId)).neighborhood).toBe(
+      'התימנים 18 בכרם התימנים בתל אביב',
+    );
   });
 });

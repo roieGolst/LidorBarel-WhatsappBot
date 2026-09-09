@@ -198,6 +198,15 @@ in `decide.test.ts`).
   unanswered message together: the lines are joined for the classifier, photos
   sent alongside text are counted.
 
+- [x] **Answers the script did not anticipate (2026-09-09).** A bare "כן" to
+  Q1 was "unclear" to the classifier and the identical question was sent five
+  times; a Tel Aviv address at Q2 drew the identical Q2 forever. Now a yes to
+  Q1 maps to "wants to sell" deterministically (like a button tap); a yes to
+  Q4 is narrowed with two buttons (privately / with an agent) rather than
+  re-asked; a question asked twice in a row says "לא הצלחתי להבין" first; and a
+  real Q2 answer the classifier cannot place gets the same one-time
+  clarification as an unknown place, after which the person's words are kept.
+
 **Known limit:** a lead who confirms a disqualifying change *after* a meeting was
 booked is closed per the spec, and the meeting stays in Lidor's calendar (the bot
 never deletes a `פעילות` item — see MONDAY-MAPPING). Lidor sees both on the

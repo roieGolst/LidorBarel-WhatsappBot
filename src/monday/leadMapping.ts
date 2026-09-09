@@ -161,6 +161,22 @@ export function neighborhoodLabelId(name: string): number | undefined {
   return index === -1 ? undefined : index + 1;
 }
 
+/** פעילות — the activity board Monday keeps in sync with Lidor's calendar. */
+export const ACTIVITY_COLUMNS = {
+  type: 'color_mkpc9t27',
+  start: 'activity_start_time',
+  end: 'activity_end_time',
+  status: 'activity_status',
+  contact: 'board_relation_mkpcs6ky',
+  location: 'location_mkpchxzd',
+} as const;
+
+/** `סוג פעילות` label ids. The bot only ever books a consultation. */
+export const ACTIVITY_TYPE = { consultation: 0 } as const;
+
+/** `סטטוס` on פעילות. */
+export const ACTIVITY_STATUS = { open: 3, done: 4 } as const;
+
 export interface LeadProjection {
   contact: Contact;
   conversation: Conversation;

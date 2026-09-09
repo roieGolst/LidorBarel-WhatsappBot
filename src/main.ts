@@ -5,7 +5,8 @@ import { refreshMediaCatalog } from './whatsapp/mediaCatalog.js';
 import { closeDatabase, getDatabase } from './db/client.js';
 import { getFreshMediaId, saveMediaId } from './db/repositories/mediaUploads.js';
 import { createGraphLeadsClient } from './leads/graphLeads.js';
-import { createMondayClient } from './monday/client.js';
+import { createMondayClient, type MondayClient } from './monday/client.js';
+import { DEFAULT_SLOT_OPTIONS } from './appointments/availability.js';
 import { startOutboxWorker, type OutboxWorker } from './outbox/outboxWorker.js';
 import {
   startOutreachSweeper,
@@ -73,6 +74,7 @@ async function buildConversationPipeline(
   config: Config,
   db: ReturnType<typeof getDatabase>,
   log: ReturnType<typeof getLogger>,
+  mondayForBooking: MondayClient | undefined,
 ): Promise<ConversationPipeline | undefined> {
   // The reply worker needs a transport to send through and a model to think
   // with. Meta credentials supply the first; the Anthropic key supplies the
@@ -110,6 +112,18 @@ async function buildConversationPipeline(
         db,
         llm,
         channel,
+        // Booking needs the CRM: a consultation is a פעילות item, and Monday's
+        // calendar sync turns it into a real event. Without a Monday client the
+        // bot hands a booking request to Lidor instead of offering times.
+        ...(mondayForBooking
+          ? {
+              appointments: {
+                db,
+                monday: mondayForBooking,
+                slotOptions: { ...DEFAULT_SLOT_OPTIONS, timeZone: config.timezone },
+              },
+            }
+          : {}),
         // Scheduling is gated on outreach being enabled: the sweeper is what
         // sends these, so scheduling without it would only accumulate due rows
         // that nothing ever picks up.
@@ -146,7 +160,11 @@ async function main(): Promise<void> {
   const log = getLogger();
   const db = getDatabase();
 
-  const pipeline = await buildConversationPipeline(config, db, log);
+  // Built before the pipeline because the conversation workflow needs it for
+  // booking, and the outbox worker needs it for the projection.
+  const monday = createMondayClient();
+
+  const pipeline = await buildConversationPipeline(config, db, log, monday);
 
   // Meta Lead Ads intake. Needs a Page access token with `leads_retrieval`,
   // which is a different credential from the WhatsApp one — so it is built
@@ -268,7 +286,6 @@ async function main(): Promise<void> {
   // the outbox simply accumulates, and nothing is lost because Postgres is the
   // source of truth and the board is rebuilt from it (NN-4).
   let outboxWorker: OutboxWorker | undefined;
-  const monday = createMondayClient();
   if (!monday) {
     log.warn('Monday projection disabled: MONDAY_API_TOKEN is unset — events will queue');
   } else {

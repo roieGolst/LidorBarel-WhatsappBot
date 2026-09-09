@@ -79,8 +79,15 @@ There is one automation the bot has to accommodate rather than fight:
 > `When an item is created → set סטטוס to ליד חדש, set אינטרקציה אחרונה to today`
 
 So an item is **created first and its status set afterwards**, in a second call.
-Setting status inside the create mutation races the automation, and the
-automation wins about as often as it loses.
+
+That is still not enough on its own. The automation fires *asynchronously*, so it
+can land after the follow-up call and overwrite the status back to `ליד חדש` —
+observed live: a `qualified` lead was created, set to `ממתין לשיחה`, and found as
+`ליד חדש` moments later.
+
+What makes it correct is that **creation queues a second projection**. By the time
+that runs the automation has certainly fired, the item exists, and the update path
+sets the status unopposed. Only creation queues it, so it cannot loop.
 
 | Our stage | `lead_status` the bot writes | Group (by automation) |
 |---|---|---|
@@ -154,6 +161,21 @@ No schema changes needed.
 | `integration_mkpcssjf` | integration | Google Calendar event | ❌ written by Monday |
 | `location_mkpchxzd` | location | מיקום | — |
 | `activity_owner` | people | Owner | — |
+
+### ⚠️ Date columns: read `value`, never `text`
+
+Monday renders a date column's `text` in the **account's** timezone and holds
+UTC in its `value`. Verified on the live board:
+
+```
+text : "2026-07-27 08:30"     ← Asia/Jerusalem
+value: {"date":"2026-07-27","time":"05:30:00"}   ← UTC
+```
+
+Parsing `text` on a UTC server shifts every date by the offset — three hours for
+this account. For a calendar that means reading Lidor's commitments in the wrong
+place and booking on top of real meetings. `MondayClient.listItems` therefore
+returns both, and anything time-sensitive uses `value`.
 
 ### The Calendar integration changes Phase 6
 

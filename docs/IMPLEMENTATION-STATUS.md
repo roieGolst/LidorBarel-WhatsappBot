@@ -26,7 +26,7 @@ Requirements are numbered per [PRODUCT-REQUIREMENTS.md](PRODUCT-REQUIREMENTS.md)
 | 4a | Continue conversation, collect information | ✅ | The mature part of the system. |
 | 4b | Evaluate lead quality and readiness | ✅ | Four-factor 0–100 score, approved by Lidor and projected to `ציון רצינות`. |
 | 4c | Sync to Monday CRM | ✅ | `src/monday/` + `src/outbox/`. Verified against the live board. `ציון רצינות` awaits approved weights. |
-| 5 | Schedule consultation call | ❌ | No module, no dependency. |
+| 5 | Schedule consultation call | ✅ | `src/appointments/`. Booked as a `פעילות` item; Monday writes the Calendar event. |
 | 6 | Follow-up stop conditions | ✅ | Reply, terminal stage, qualification complete, both caps, opt-out, consent. Each covered by a test. |
 | 7 | Never message after opt-out | ✅ | Enforced at `guardedSend`, the single choke point every send passes through. |
 
@@ -79,8 +79,8 @@ purpose — precedes the projection and booking layers**. The original ordering
 | **3** | Approved-template first contact + grace period | 2, E-1 | ✅ Built (go-live waits on E-1) |
 | **4** | Follow-up scheduler with all stop conditions | 3 | ✅ Done |
 | **5** | Monday sync via transactional outbox | 4 | ✅ Done |
-| **6** | Appointments via פעילות (Monday writes the Calendar event) | 5 | ⏭ Next — much smaller than planned |
-| **7** | Admin panel, simulation, production readiness | 6 | Not started |
+| **6** | Appointments via פעילות (Monday writes the Calendar event) | 5 | ✅ Done |
+| **7** | Admin panel, simulation, production readiness | 6 | ⏭ Next |
 
 Phase 1 required **no migration** — `campaign_referrals.form_id` and
 `.external_lead_id` already existed with a unique index.
@@ -108,6 +108,38 @@ retired seller forms. Exactly one form is live: `1746567036243410`.
 rest are recorded for attribution with no conversation opened. Replacing the form
 (for updated privacy wording, say) means a new id in both lists — Meta forms are
 immutable, so wording changes always produce a new form.
+
+### What Phase 6 delivers
+
+A qualified lead who asks for a meeting is offered Lidor's real free times in
+WhatsApp and books one — no Google credentials, because a booking is a `פעילות`
+item and Monday's sync turns it into a calendar event.
+
+**Meeting hours are not messaging hours.** A follow-up at 08:00 is fine; putting a
+client in his diary at 08:00 is not, and he asked for 08:30. Two tables, sharing
+only the timezone arithmetic so a DST fix cannot land in one and miss the other.
+Friday keeps its early close regardless — a 20:00 finish runs into Shabbat.
+
+**Availability is re-read at booking time**, never trusted from when the slots
+were offered. Between offering and choosing, an event can land in Google and
+reach the board; booking over it would put Lidor in two places at once. A taken
+slot is reported and fresh times offered rather than forced.
+
+Offers are spread one per day: three consecutive hours on one afternoon is a
+worse offer than three mornings, because if that afternoon does not suit there is
+nothing left to choose.
+
+When nothing is free in the horizon the turn falls back to the handoff. Promising
+times that do not exist is worse than saying Lidor will call.
+
+**A timezone bug the tests caught, and the dangerous kind.** Monday renders a date
+column's `text` in the account's timezone but holds UTC in its `value` — `08:30`
+against `05:30`. Reading the text on a UTC server would have shifted every one of
+Lidor's commitments by three hours and booked straight through them. Verified
+against the live board; anything time-sensitive now reads `value`.
+
+Booking stays off unless a Monday client is configured, in which case a booking
+request is handed to Lidor as before.
 
 ### What Phase 5 delivers
 

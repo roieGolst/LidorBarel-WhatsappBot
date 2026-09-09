@@ -37,7 +37,10 @@ Last updated: 2026-08-23
 | 4c | Monday projection via outbox | `monday/syncLead.ts` · `outbox/outbox.ts` · `outbox/outboxWorker.ts` | `mondayProjection.test.ts` · `leadMapping.test.ts` | ✅ |
 | 4c | Outbox written in the state change's transaction | `workflow/persist.ts` · `leads/ingestLead.ts` · `outreach/firstContact.ts` | `e2e/leadLifecycle.test.ts` | ✅ |
 | NN-4 | A Monday outage cannot interrupt a conversation | delivery is out of the reply path | `mondayProjection.test.ts` (retry/park) | ✅ |
-| 5 | Appointment offer, hold, approval, Calendar write | *(none — tables unused)* | *(none)* | ❌ |
+| 5 | Offer real free times | `appointments/availability.ts` · `appointments/booking.ts` | `availability.test.ts` · `booking.test.ts` | ✅ |
+| 5 | Book into Lidor's calendar | `appointments/booking.ts` (`פעילות` → Monday sync) | `booking.test.ts` · `e2e/leadLifecycle.test.ts` | ✅ |
+| 5 | Never double-book | availability re-read at booking time | `booking.test.ts` (slot taken) | ✅ |
+| 5 | Never offer outside meeting hours or on Shabbat | `appointments/availability.ts` | `availability.test.ts` | ✅ |
 | 6 | Stop conditions cancel follow-ups | `outreach/followUp.ts` · `db/repositories/conversations.ts` (`recordInboundActivity`) | `followUp.test.ts` (stop conditions) · `e2e/leadLifecycle.test.ts` | ✅ |
 | 7 | No message after opt-out | `whatsapp/guardedSend.ts` | `guardedSend.test.ts` | ✅ |
 | — | Free-form refused outside the 24h window | `whatsapp/guardedSend.ts` · `whatsapp/window.ts` | `guardedSend.test.ts` (messaging window) | ✅ |
@@ -89,5 +92,5 @@ The lifecycle test also covers the nudge sequence: a silent lead is contacted,
 nudged, and then replies — after which the schedule is cleared and the counter
 reset.
 
-**Not yet covered** — the steps that do not exist: Monday projection (Phase 5)
-and Calendar booking (Phase 6).
+The lifecycle test now runs the full funnel: form submission → template → reply →
+qualification → Monday projection → a booked consultation in Lidor's calendar.

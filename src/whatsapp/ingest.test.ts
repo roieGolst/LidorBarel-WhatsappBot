@@ -117,7 +117,18 @@ describe('ingestMessage', () => {
 
     await db
       .update(conversations)
-      .set({ stage: 'disqualified', qualified: false })
+      .set({
+        stage: 'disqualified',
+        qualified: false,
+        disqualificationReason: 'exclusive_with_other_agent',
+        extracted: {
+          sellIntent: 'ready',
+          neighborhood: 'רמות',
+          currentlyMarketed: 'with_agent',
+          exclusivityEndsAt: 'מחר',
+          intentAssessed: true,
+        },
+      })
       .where(eq(conversations.id, first.conversationId!));
 
     const second = await ingestMessage(
@@ -136,6 +147,14 @@ describe('ingestMessage', () => {
       .where(eq(conversations.id, first.conversationId!));
     expect(reopened?.stage).toBe('engaged');
     expect(reopened?.qualified).toBeNull();
+    expect(reopened?.disqualificationReason).toBeNull();
+    // Their answers survive — only the one that closed the door is cleared, so
+    // the flow re-asks exactly that question rather than the whole script.
+    expect(reopened?.extracted).toEqual({
+      sellIntent: 'ready',
+      neighborhood: 'רמות',
+      intentAssessed: true,
+    });
   });
 
   // A banned / opted-out contact must never get a duplicate record or a fresh

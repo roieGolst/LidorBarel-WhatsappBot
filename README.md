@@ -26,20 +26,21 @@ The **inbound conversation engine is mature and well covered by tests**. The
 |---|---|---|
 | 0 | Alignment documents | Done |
 | 1 | `leadgen` intake (receives leads, sends nothing) | Done |
-| 2 | Consent gate + send-window enforcement | Next |
-| 3 | Approved-template first contact | Not started |
-| 4 | Follow-up scheduler (≤ 5 days) | Not started |
-| 5 | Monday.com sync | Not started |
-| 6 | Appointments and Calendar | Not started |
+| 2 | Consent gate + send-window enforcement | Done |
+| 3 | Approved-template first contact | Done — verified live |
+| 4 | Follow-up scheduler (≤ 5 days) | Done |
+| 5 | Monday.com sync + lead scoring | Done — verified live |
+| 6 | Appointments (booked through Monday's synced activity board) | Done |
 | 7 | Admin panel, simulation, hardening | Not started |
 
-Already delivered: repo foundations, data layer, inbound WhatsApp channel with
-idempotent ingestion, the LangGraph conversation workflow, opt-out enforcement,
-the spec's opening sequence with interactive buttons and lists, and Meta Lead Ads
-intake (leads are captured; nothing is sent yet).
+The whole funnel is built and covered by an end-to-end test: form submission →
+approved-template first contact → reply → qualification → a scored lead on
+Lidor's Monday board → a consultation booked into his calendar. Lead intake, the
+Monday projection, and a template send have each been verified against the live
+Meta and Monday accounts.
 
-Phases 3 onward depend on external items — Meta Business verification, lead-form
-consent wording, and approved message templates. See
+Proactive outreach ships **off** (`OUTREACH_ENABLED=false`). Turning it on is a
+deliberate act gated on Meta Business verification (external item E-1). See
 [IMPLEMENTATION-STATUS.md](docs/IMPLEMENTATION-STATUS.md) §5.
 
 ## Requirements

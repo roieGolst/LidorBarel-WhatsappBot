@@ -89,12 +89,13 @@ describe('outreach sweeper', () => {
     expect(channel.sent).toHaveLength(1);
   });
 
-  it('keeps going when one lead fails', async () => {
-    // A lead without consent throws. The rest of the sweep must still run —
-    // otherwise one bad row stalls every lead behind it, indefinitely.
-    await seedDueLead('privacy_policy_only');
+  it('keeps going when one lead fails transiently', async () => {
+    // The first send hits a transient error. The rest of the sweep must still
+    // run — otherwise one bad row stalls every lead behind it, indefinitely.
+    await seedDueLead();
     await seedDueLead();
     const channel = new FakeChannel();
+    channel.failNext(1);
     const sweep = sweeper(channel);
 
     const result = await sweep.runOnce();
@@ -104,9 +105,29 @@ describe('outreach sweeper', () => {
     expect(result.sent).toBe(1);
   });
 
-  it('leaves a failed lead claimable for the next sweep', async () => {
+  it('never picks a lead who cannot be messaged', async () => {
+    // Filtered at the query, not refused at the send: refusing them would put
+    // the same lead back in front of the sweeper every minute.
     const conversationId = await seedDueLead('privacy_policy_only');
     const channel = new FakeChannel();
+    const sweep = sweeper(channel);
+
+    const result = await sweep.runOnce();
+    sweep.stop();
+
+    expect(result).toMatchObject({ sent: 0, failed: 0 });
+    expect(channel.sent).toHaveLength(0);
+    const [conversation] = await db
+      .select()
+      .from(conversations)
+      .where(eq(conversations.id, conversationId));
+    expect(conversation?.stage).toBe('awaiting_first_contact');
+  });
+
+  it('leaves a transiently failed lead claimable for the next sweep', async () => {
+    const conversationId = await seedDueLead();
+    const channel = new FakeChannel();
+    channel.failNext(1);
     const sweep = sweeper(channel);
 
     await sweep.runOnce();

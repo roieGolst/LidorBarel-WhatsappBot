@@ -2,7 +2,7 @@ import { writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { CloudApiChannel } from './cloudApiChannel.js';
+import { CloudApiChannel, CloudApiError } from './cloudApiChannel.js';
 
 const CREDENTIALS = {
   accessToken: 'test-token-SECRET',
@@ -321,5 +321,34 @@ describe('CloudApiChannel.sendTemplate', () => {
     });
 
     expect(result.providerMessageId).toBe('wamid.TPL');
+  });
+});
+
+describe('failure classification', () => {
+  // The outreach loops route on this. Mislabelling a permanent failure as
+  // transient retries an undeliverable number every minute for ever; the reverse
+  // drops a lead on a momentary outage.
+  it.each([500, 502, 503, 429])('treats %i as transient', async (status) => {
+    fetchMock.mockResolvedValue(jsonResponse({ error: {} }, { status }));
+
+    await expect(
+      new CloudApiChannel(CREDENTIALS).sendText('+972521234501', 'שלום'),
+    ).rejects.toMatchObject({ retryable: true, status });
+  });
+
+  it.each([400, 401, 403, 404])('treats %i as permanent', async (status) => {
+    fetchMock.mockResolvedValue(jsonResponse({ error: {} }, { status }));
+
+    await expect(
+      new CloudApiChannel(CREDENTIALS).sendText('+972521234501', 'שלום'),
+    ).rejects.toMatchObject({ retryable: false, status });
+  });
+
+  it('raises a CloudApiError, not a bare Error', async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ error: {} }, { status: 400 }));
+
+    await expect(
+      new CloudApiChannel(CREDENTIALS).sendText('+972521234501', 'שלום'),
+    ).rejects.toBeInstanceOf(CloudApiError);
   });
 });

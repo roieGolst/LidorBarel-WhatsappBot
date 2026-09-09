@@ -1,13 +1,24 @@
 import { describe, expect, it } from 'vitest';
 import {
+  alreadyBookedMessage,
   bookingConfirmation,
   formatSlot,
+  isSlotLabel,
   matchSlot,
+  offeredTimesContext,
   parseStoredSlots,
+  sameSlots,
   slotListRows,
 } from './slotMessages.js';
 import { findBannedTerms } from '../workflow/validate.js';
-import { NO_SLOTS_MESSAGE, SLOT_OFFER_BODY, SLOT_TAKEN_MESSAGE } from './slotMessages.js';
+import {
+  NO_SLOTS_MESSAGE,
+  SLOT_OFFER_BODY,
+  SLOT_REOFFER_BODY,
+  SLOT_TAKEN_MESSAGE,
+  SLOTS_DECLINED_MESSAGE,
+  STALE_SLOT_MESSAGE,
+} from './slotMessages.js';
 
 const TZ = 'Asia/Jerusalem';
 const slot = (startIso: string, endIso: string) => ({
@@ -96,5 +107,58 @@ describe('wording', () => {
 
     expect(confirmation).toContain('יום ראשון 10:00');
     expect(findBannedTerms(confirmation)).toEqual([]);
+  });
+});
+
+describe('isSlotLabel', () => {
+  it('recognises the text a tapped time row echoes back', () => {
+    expect(isSlotLabel('יום ראשון 10:00')).toBe(true);
+    expect(isSlotLabel(formatSlot(MONDAY_14, TZ))).toBe(true);
+    expect(isSlotLabel(' יום חמישי 09:00 ')).toBe(true);
+  });
+
+  it('does not mistake a sentence about a day for a tap', () => {
+    expect(isSlotLabel('יום ראשון לא מתאים לי')).toBe(false);
+    expect(isSlotLabel('אין מוקדם יותר היום?')).toBe(false);
+    expect(isSlotLabel('10:00')).toBe(false);
+  });
+});
+
+describe('sameSlots', () => {
+  it('compares the times offered, in order', () => {
+    expect(sameSlots([SUNDAY_10, MONDAY_14], [SUNDAY_10, MONDAY_14])).toBe(true);
+    expect(sameSlots([SUNDAY_10, MONDAY_14], [MONDAY_14, SUNDAY_10])).toBe(false);
+    expect(sameSlots([SUNDAY_10], [SUNDAY_10, MONDAY_14])).toBe(false);
+  });
+});
+
+describe('offeredTimesContext', () => {
+  it('tells the reply-writer the times in the words the person saw, and the date', () => {
+    const context = offeredTimesContext(
+      [SUNDAY_10, MONDAY_14],
+      TZ,
+      new Date('2026-08-22T10:00:00Z'), // Saturday
+    );
+    expect(context).toContain('Today is יום שבת, 2026-08-22');
+    expect(context).toContain('1) יום ראשון 10:00 (23 באוגוסט)');
+    expect(context).toContain('2) יום שני 14:00 (24 באוגוסט)');
+    expect(context).toContain('nothing earlier is available');
+  });
+});
+
+describe('the booking-stage lines', () => {
+  it.each([
+    ['re-offer', SLOT_REOFFER_BODY],
+    ['stale slot', STALE_SLOT_MESSAGE],
+    ['declined', SLOTS_DECLINED_MESSAGE],
+    ['already booked', alreadyBookedMessage(SUNDAY_10, TZ)],
+    ['already booked, time unknown', alreadyBookedMessage(undefined, TZ)],
+  ])('%s passes the voice rules', (_name, text) => {
+    expect(findBannedTerms(text)).toEqual([]);
+    expect((text.match(/\?/g) ?? []).length).toBeLessThanOrEqual(1);
+  });
+
+  it('names the booked time back', () => {
+    expect(alreadyBookedMessage(SUNDAY_10, TZ)).toContain('יום ראשון 10:00');
   });
 });

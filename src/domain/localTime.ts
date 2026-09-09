@@ -71,3 +71,67 @@ export function isWithinHours(
 
 /** Convenience for writing hour tables readably. */
 export const hm = (hour: number, minute = 0): number => hour * 60 + minute;
+
+/** The local calendar date (`YYYY-MM-DD`) of an instant in the given timezone. */
+export function localDate(at: Date, timeZone: string): string {
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(at);
+}
+
+const HEBREW_WEEKDAYS = [
+  'ראשון',
+  'שני',
+  'שלישי',
+  'רביעי',
+  'חמישי',
+  'שישי',
+  'שבת',
+] as const;
+
+/** `יום שלישי, 2026-09-08` — today, as a line the classifier can date things from. */
+export function describeToday(at: Date, timeZone: string): string {
+  const { weekday } = localParts(at, timeZone);
+  return `יום ${HEBREW_WEEKDAYS[weekday] ?? 'ראשון'}, ${localDate(at, timeZone)}`;
+}
+
+/**
+ * The instant at which a local date reaches a wall-clock time in a timezone.
+ *
+ * Two passes: read the zone's offset at a first guess, correct by it, then read
+ * again — so a date on which the offset changes (a DST switch) still lands on
+ * the requested wall-clock time rather than an hour off.
+ */
+export function atLocalTime(date: string, minutesOfDay: number, timeZone: string): Date {
+  const [year, month, day] = date.split('-').map(Number) as [number, number, number];
+  const wanted = Date.UTC(year, month - 1, day, 0, minutesOfDay);
+
+  const offsetAt = (instant: Date): number => {
+    const parts = new Intl.DateTimeFormat('en-US', {
+      timeZone,
+      year: 'numeric',
+      month: 'numeric',
+      day: 'numeric',
+      hour: 'numeric',
+      minute: 'numeric',
+      hour12: false,
+    }).formatToParts(instant);
+    const value = (type: string): number =>
+      Number(parts.find((p) => p.type === type)?.value);
+    const hour = value('hour') === 24 ? 0 : value('hour');
+    const asUtc = Date.UTC(
+      value('year'),
+      value('month') - 1,
+      value('day'),
+      hour,
+      value('minute'),
+    );
+    return asUtc - instant.getTime();
+  };
+
+  const first = new Date(wanted - offsetAt(new Date(wanted)));
+  return new Date(wanted - offsetAt(first));
+}

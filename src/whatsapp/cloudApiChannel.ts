@@ -40,6 +40,25 @@ const sendResponseSchema = z.object({
   messages: z.array(z.object({ id: z.string().min(1) })).min(1),
 });
 
+/**
+ * A failed Cloud API call, carrying whether a retry could ever help.
+ *
+ * The outreach loops need this distinction. A rate limit or a Meta outage is
+ * worth another sweep; an undeliverable number, a recipient outside a test
+ * number's allow-list, or a rejected template will fail identically forever, and
+ * retrying it every minute is both noise and a slow burn of the API budget.
+ */
+export class CloudApiError extends Error {
+  constructor(
+    message: string,
+    readonly retryable: boolean,
+    readonly status: number,
+  ) {
+    super(message);
+    this.name = 'CloudApiError';
+  }
+}
+
 /** Meta's `POST /media` upload response: the reusable media id. */
 const uploadResponseSchema = z.object({ id: z.string().min(1) });
 
@@ -279,8 +298,12 @@ export class CloudApiChannel implements WhatsAppChannel {
       { status: response.status, phoneNumberId: this.credentials.phoneNumberId, op },
       'WhatsApp Cloud API request failed',
     );
-    throw new Error(
+    throw new CloudApiError(
       `WhatsApp Cloud API ${op} failed: ${response.status} ${response.statusText} — ${detail}`,
+      // 429 and 5xx are transient. Every other 4xx is a request that will never
+      // succeed as sent.
+      response.status === 429 || response.status >= 500,
+      response.status,
     );
   }
 }

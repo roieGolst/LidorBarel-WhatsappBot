@@ -1,7 +1,7 @@
 import { resolve } from 'node:path';
 import type { ConversationStage } from '../db/repositories/conversations.js';
 import type { ListRow, ReplyButton } from '../whatsapp/channel.js';
-import type { KnownFacts, TurnAction } from './decide.js';
+import type { DisqualificationReason, KnownFacts, TurnAction } from './decide.js';
 
 /**
  * The spec's opening sequence (§2) and buttons-first screening (§8), as data.
@@ -111,6 +111,100 @@ export const RESTART_CONFIRM_MESSAGE =
 /** Sent when the person declines the restart — nothing changes, no pressure. */
 export const RESTART_DECLINED_MESSAGE =
   'מעולה, אז משאיר הכול כמו שהוא. הפרטים אצל לידור והוא יחזור אליך בהקדם 🙏';
+
+/**
+ * Asked when the property is marketed through another agent, before closing.
+ * Canned: the model-written version asked only half of it, and the wording of
+ * a question that decides whether a lead is nurtured or dropped must not vary.
+ */
+export const EXCLUSIVITY_QUESTION =
+  'הבנתי, תודה 🙏 עד מתי הבלעדיות עם המתווך הנוכחי? אם תרצה, נחזור אליך כשהיא מסתיימת.';
+
+/**
+ * The polite closes. Canned, not model-written: a live disqualification came
+ * out as "תודה על ההתנגדות הגדולה", which is not Hebrew anyone would send. A
+ * close is the last thing the lead reads from us; it is fixed text.
+ */
+export const DISQUALIFIED_MESSAGE =
+  'תודה רבה על הזמן שלך 🙏 אם בעתיד תחליט שהגיע הזמן למכור, או שתרצה להתייעץ, הדלת שלנו תמיד פתוחה ונשמח לעזור. בהצלחה ויום נפלא 😊';
+export const EXCLUSIVE_FOLLOWUP_MESSAGE =
+  'תודה רבה על הזמן והכנות 🙏 כל עוד הנכס בבלעדיות אצל מתווך אחר לא נוכל ללוות אותך, אבל נשמח לחזור אליך כשהיא מסתיימת. אם משהו ישתנה לפני כן — אפשר לכתוב כאן בכל שלב. בהצלחה!';
+export const EXCLUSIVE_NO_FOLLOWUP_MESSAGE =
+  'תודה רבה על הזמן והכנות 🙏 כל עוד הנכס בבלעדיות אצל מתווך אחר לא נוכל ללוות אותך. אם משהו ישתנה — הדלת שלנו תמיד פתוחה. בהצלחה!';
+
+/** The close for a disqualification, by reason and follow-up wish. */
+export function disqualificationClose(
+  reason: DisqualificationReason | undefined,
+  wantsFollowup: boolean | undefined,
+): string {
+  if (reason !== 'exclusive_with_other_agent') return DISQUALIFIED_MESSAGE;
+  return wantsFollowup === false
+    ? EXCLUSIVE_NO_FOLLOWUP_MESSAGE
+    : EXCLUSIVE_FOLLOWUP_MESSAGE;
+}
+
+/** Sent when the person confirms a changed answer — it is applied and passed on. */
+export const FACT_CHANGE_APPLIED_MESSAGE =
+  'עדכנתי, תודה 👍 אעביר את זה ללידור יחד עם שאר הפרטים.';
+
+/** Sent when the person says the earlier answer still stands. */
+export const FACT_CHANGE_DECLINED_MESSAGE = 'בסדר גמור, משאיר את הפרטים כמו שהיו 🙂';
+
+export const FACT_CHANGE_YES = 'כן, נכון';
+export const FACT_CHANGE_NO = 'לא, להשאיר';
+
+/** A changed screening answer, held until the person confirms it. */
+export interface PendingFactChange {
+  field: 'sellIntent' | 'neighborhood' | 'timeline' | 'currentlyMarketed';
+  value: string;
+}
+
+/** How each answer reads back to the person, so the check is in their words. */
+const FACT_LABELS: Record<PendingFactChange['field'], Record<string, string>> = {
+  sellIntent: {
+    ready: 'רוצה למכור',
+    not_sure: 'מתלבט ורוצה הערכת מחיר',
+    not_selling: 'לא מעוניין למכור',
+  },
+  neighborhood: {},
+  timeline: {
+    immediate: 'למכור מיד',
+    within_month: 'למכור בחודש הקרוב',
+    still_checking: 'למכור בחודשים הקרובים',
+    no_urgency: 'אין דחיפות למכור',
+  },
+  currentlyMarketed: {
+    no: 'הנכס לא משווק כרגע',
+    privately: 'הנכס משווק באופן פרטי',
+    with_agent: 'הנכס משווק דרך מתווך אחר',
+  },
+};
+
+function factLabel(field: PendingFactChange['field'], value: string): string {
+  if (field === 'neighborhood') return `הנכס בשכונת ${value}`;
+  return FACT_LABELS[field][value] ?? value;
+}
+
+/**
+ * The check sent when a lead whose details are already with Lidor gives a
+ * DIFFERENT answer to a screening question. Their earlier answer is quoted so
+ * they see exactly what would change; nothing is overwritten until they say so.
+ * A live lead was closed as "exclusive with another agent" off one stray tap.
+ */
+export function factChangeConfirmation(
+  change: PendingFactChange,
+  previous: string,
+): { body: string; buttons: ReplyButton[] } {
+  return {
+    body:
+      `רק מוודא שהבנתי נכון 🙂 ${factLabel(change.field, change.value)}? ` +
+      `קודם ציינת: ${factLabel(change.field, previous)}.`,
+    buttons: [
+      { id: 'fact_change:yes', title: FACT_CHANGE_YES },
+      { id: 'fact_change:no', title: FACT_CHANGE_NO },
+    ],
+  };
+}
 
 /**
  * A lead who is mainly price-checking, not seriously selling. We do NOT forward
@@ -311,6 +405,8 @@ export function screeningBody(question: ScreeningQuestion): string {
  * by the model.
  */
 const CANNED_REPLIES: Partial<Record<TurnAction, string>> = {
+  ask_exclusivity: EXCLUSIVITY_QUESTION,
+  fact_change_applied: FACT_CHANGE_APPLIED_MESSAGE,
   proceed_qualified: QUALIFIED_HANDOFF_MESSAGE,
   handoff_to_human: HANDOFF_TO_HUMAN_MESSAGE,
   acknowledge_additional_info: ADDITIONAL_INFO_ACK_MESSAGE,
@@ -326,4 +422,18 @@ const CANNED_REPLIES: Partial<Record<TurnAction, string>> = {
 /** The canned reply for an action, or `undefined` if the action is model-written. */
 export function cannedReplyFor(action: TurnAction): string | undefined {
   return CANNED_REPLIES[action];
+}
+
+/**
+ * Asked once when a Q2 answer reads as a real place but is not a neighbourhood
+ * we recognise — almost always a street, since the question itself invites a
+ * full address. Names the person's own words back so they see what was
+ * misread, asks the one thing needed, and leaves room for "it isn't in Be'er
+ * Sheva at all" without a second question.
+ */
+export function neighborhoodClarification(candidate: string): string {
+  return (
+    `״${candidate}״ נשמע כמו רחוב ולא כמו שכונה 🙂 ` +
+    'באיזו שכונה בבאר שבע נמצא הנכס? ואם הוא לא בבאר שבע, פשוט כתוב לי איפה.'
+  );
 }

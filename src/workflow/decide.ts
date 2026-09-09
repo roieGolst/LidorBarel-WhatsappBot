@@ -3,7 +3,7 @@ import type {
   ConversationStage,
 } from '../db/repositories/conversations.js';
 import type { Analysis } from './classify.js';
-import type { MainMenuChoice } from './interactive.js';
+import type { MainMenuChoice, PendingFactChange } from './interactive.js';
 
 /**
  * `decideTransition` — turns a classification into the next stage (§5.1).
@@ -29,6 +29,7 @@ export type TurnAction =
   | 'show_main_menu' // spec §8 opening buttons
   | 'ask_sell_intent' // spec Q1 (direct-message leads only)
   | 'ask_neighborhood' // spec Q2
+  | 'clarify_neighborhood' // Q2 answer looked like an address → ask which neighbourhood
   | 'ask_timeline' // spec Q3 (direct-message leads only)
   | 'ask_currently_marketed' // spec Q4
   | 'ask_exclusivity' // Q4 = with another agent: capture exclusivity end + follow-up
@@ -36,6 +37,10 @@ export type TurnAction =
   | 'low_intent_hold' // just price-checking → don't forward to Lidor
   | 'proceed_qualified'
   | 'offer_slots' // qualified AND asked to book → offer real free times
+  | 'assist_booking' // a question/comment instead of a pick → answered with the real times in view
+  | 'decline_slots' // the offered times turned down → honest handoff, no re-offer
+  | 'confirm_fact_change' // a changed answer after the details are with Lidor → check first
+  | 'fact_change_applied' // …confirmed, and nothing else follows from it
   | 'send_disqualification'
   | 'acknowledge_opt_out'
   | 'answer_faq'
@@ -64,6 +69,54 @@ export interface Decision {
    * moves on. With it the turn answers them first, then continues the flow.
    */
   addressFirst?: 'answer_aside' | 'handle_objection';
+  /** Set with `confirm_fact_change`: the answer awaiting the person's yes. */
+  pendingChange?: PendingFactChange;
+}
+
+/**
+ * Stages past screening: the answers are complete and with Lidor (or a meeting
+ * is being arranged on their strength). From here a screening answer is never
+ * silently replaced — see {@link changedScreeningFact} — and a message is
+ * answered as an assistant would, never by re-running the questionnaire.
+ */
+export const POST_SCREENING_STAGES: readonly ConversationStage[] = [
+  'qualified',
+  'handed_off',
+  'appointment_proposed',
+  'appointment_confirmed',
+];
+
+const SCREENING_FIELDS = [
+  'sellIntent',
+  'neighborhood',
+  'timeline',
+  'currentlyMarketed',
+] as const;
+
+/**
+ * A screening answer this message would CHANGE — a value that differs from the
+ * one already known. Only a confident read counts, and only a real difference:
+ * the classifier re-emits known facts every turn, which is not a change.
+ *
+ * Why it exists: after a meeting was booked, one stray "כן, עם מתווך" tap was
+ * taken at face value and closed the lead as exclusive with another agent. A
+ * changed answer after qualification is a decision the person makes, so they
+ * are asked — once — before it is applied.
+ */
+export function changedScreeningFact(
+  known: KnownFacts,
+  extracted: KnownFacts,
+  confident: boolean,
+): PendingFactChange | undefined {
+  if (!confident) return undefined;
+  for (const field of SCREENING_FIELDS) {
+    const before = known[field];
+    const after = extracted[field];
+    if (before !== undefined && after !== undefined && after !== before) {
+      return { field, value: after };
+    }
+  }
+  return undefined;
 }
 
 /**
@@ -111,6 +164,22 @@ export function decideTransition(
   // FAQ/objection.
   const confident =
     analysis.intent !== 'UNCLEAR' && analysis.confidence >= CONFIDENCE_THRESHOLD;
+
+  // 1b. Past screening, a DIFFERENT answer to a screening question is checked
+  //     with the person before anything acts on it — before the disqualifiers
+  //     below get to see it. The stage holds; nothing is merged.
+  if (POST_SCREENING_STAGES.includes(current)) {
+    const change = changedScreeningFact(known, analysis.extracted, confident);
+    if (change) {
+      return {
+        nextStage: current,
+        action: 'confirm_fact_change',
+        escalate: false,
+        pendingChange: change,
+      };
+    }
+  }
+
   const facts: KnownFacts = confident ? { ...known, ...analysis.extracted } : known;
 
   // Whether THIS message actually carried NEW intent/detail — used at the
@@ -134,6 +203,26 @@ export function decideTransition(
   const blocked = exclusivityOrDisqualification(facts, escalate);
   if (blocked) return blocked;
 
+  // 2a. Waiting on a choice of meeting time. A tapped time never reaches here —
+  //     the turn books it before classifying — so this is everything else a
+  //     person says with a list of times in front of them: a question about
+  //     them ("אין מוקדם יותר?"), an aside, or a no. It is answered WITH the
+  //     times in view, never by the generic flow, which once replied "I have no
+  //     calendar to schedule with" seconds after offering three slots and then
+  //     re-asked the intent question.
+  if (current === 'appointment_proposed') {
+    if (confident && analysis.declinesOfferedTimes) {
+      return { nextStage: 'qualified', action: 'decline_slots', escalate: false };
+    }
+    if (confident && analysis.intent === 'OFF_TOPIC') {
+      return { nextStage: current, action: 'stay_on_topic', escalate: false };
+    }
+    if (confident && analysis.wantsSocialProof) {
+      return { nextStage: current, action: 'send_social_proof', escalate: false };
+    }
+    return { nextStage: current, action: 'assist_booking', escalate: true };
+  }
+
   // 2b. Explicit intent to book a meeting / proceed with selling runs the same
   //     screening flow (a call is booked only after a few quick details), even if
   //     the message reads like an FAQ. Booking intent also boosts the weighted
@@ -145,7 +234,11 @@ export function decideTransition(
   //     questions, objections and requests for testimonials were silently ignored
   //     for the rest of the conversation. Screening answers from a booking lead
   //     still continue the flow — they fall through to the screening rule below.
-  if (confident && analysis.extracted.bookingIntent === true && current !== 'qualified') {
+  if (
+    confident &&
+    analysis.extracted.bookingIntent === true &&
+    !POST_SCREENING_STAGES.includes(current)
+  ) {
     return alsoAnswering(
       nextScreeningStep(current, bookingFacts(facts), screenAll, escalate, true, canBook),
       analysis,
@@ -187,18 +280,28 @@ export function decideTransition(
     return { nextStage: holdStage(current), action: 'stay_on_topic', escalate: false };
   }
 
-  // 4. Already qualified: the conversation stays OPEN and behaves like a real
-  //    assistant. New property details volunteered are appended to the lead with a
-  //    brief ack; ANYTHING ELSE — a question, a clarification ("את מה?"), a comment
-  //    — is answered by the model, not brushed off with the same canned ack. Never
+  // 4. Past screening (qualified, handed off, or a meeting booked): the
+  //    conversation stays OPEN and behaves like a real assistant. A request to
+  //    book — from a lead whose meeting is not yet set — gets real times. New
+  //    property details volunteered are appended to the lead with a brief ack;
+  //    ANYTHING ELSE — a question, a clarification ("את מה?"), a comment — is
+  //    answered by the model, not brushed off with the same canned ack. Never
   //    re-run screening or re-send the handoff. (The dismissive "I already have
   //    everything, no more needed" line is reserved for the rate-limit window; see
   //    THROTTLE_MESSAGE — it must not be how the bot replies to a normal message.)
-  if (current === 'qualified') {
-    if (confident && analysis.extracted.additionalNotes !== undefined) {
-      return { nextStage: 'qualified', action: 'acknowledge_additional_info', escalate };
+  if (POST_SCREENING_STAGES.includes(current)) {
+    if (
+      canBook &&
+      confident &&
+      analysis.extracted.bookingIntent === true &&
+      current !== 'appointment_confirmed'
+    ) {
+      return { nextStage: 'appointment_proposed', action: 'offer_slots', escalate };
     }
-    return { nextStage: 'qualified', action: 'assist_qualified', escalate: true };
+    if (confident && analysis.extracted.additionalNotes !== undefined) {
+      return { nextStage: current, action: 'acknowledge_additional_info', escalate };
+    }
+    return { nextStage: current, action: 'assist_qualified', escalate: true };
   }
 
   // 5. Screening flow — the default. A greeting, filler ("יאללה"), an unclear or
@@ -234,7 +337,7 @@ function alsoAnswering(decision: Decision, analysis: Analysis): Decision {
  * details are with Lidor. Re-opening a screening flow from here would re-ask
  * everything, so it is confirmed first (see {@link decideMainMenu}).
  */
-const COMPLETED_STAGES: readonly ConversationStage[] = ['qualified', 'handed_off'];
+const COMPLETED_STAGES = POST_SCREENING_STAGES;
 
 /**
  * Routes a main-menu selection (spec §8) — deterministic, no model call, since
@@ -261,9 +364,21 @@ export function decideMainMenu(
   switch (choice) {
     case 'check_fit':
     case 'book_meeting': {
-      // Already done: confirm before redoing anything. The workflow records which
+      // Already done. A meeting request from a lead whose details are complete
+      // is simply honoured — real times, no questionnaire — and one from a lead
+      // whose meeting is already set is answered as such. A fit check would
+      // redo everything, so it is confirmed first; the workflow records which
       // flow was asked for, so an explicit yes resumes exactly this choice.
       if (COMPLETED_STAGES.includes(current)) {
+        if (choice === 'book_meeting') {
+          return canBook && current !== 'appointment_confirmed'
+            ? {
+                nextStage: 'appointment_proposed',
+                action: 'offer_slots',
+                escalate: false,
+              }
+            : { nextStage: current, action: 'assist_qualified', escalate: true };
+        }
         return { nextStage: current, action: 'confirm_restart', escalate: false };
       }
       const blocked = exclusivityOrDisqualification(known, false);
@@ -337,20 +452,27 @@ function nextScreeningStep(
   // before the question is even asked. Escalated to the stronger model so the
   // question is context-aware — it acknowledges what the seller already shared and
   // only asks for what is genuinely missing, rather than a blind fixed script.
+  //
+  // Once passed it stays passed (`intentAssessed`): a lead who comes back, or
+  // re-answers one screening question, is not asked for their property details
+  // a second time.
   if (current !== 'assessing_intent') {
-    return { nextStage: 'assessing_intent', action: 'ask_intent', escalate: true };
-  }
-  // Evaluating the intent-check answer. Clearly just price-checking → do not
-  // forward to Lidor; leave the door open.
-  if (facts.seriousSeller === false) {
-    return { nextStage: 'engaged', action: 'low_intent_hold', escalate };
-  }
-  // The answer carried no real detail or intent (a bare "כן", filler, an
-  // acknowledgement) — do NOT forward an empty "got your details" handoff. Ask
-  // once more for the specifics that help Lidor prepare; the model-written
-  // question is context-aware, so this is a fresh, natural nudge, not a repeat.
-  if (!intentHasSubstance) {
-    return { nextStage: 'assessing_intent', action: 'ask_intent', escalate: true };
+    if (facts.intentAssessed !== true) {
+      return { nextStage: 'assessing_intent', action: 'ask_intent', escalate: true };
+    }
+  } else {
+    // Evaluating the intent-check answer. Clearly just price-checking → do not
+    // forward to Lidor; leave the door open.
+    if (facts.seriousSeller === false) {
+      return { nextStage: 'engaged', action: 'low_intent_hold', escalate };
+    }
+    // The answer carried no real detail or intent (a bare "כן", filler, an
+    // acknowledgement) — do NOT forward an empty "got your details" handoff. Ask
+    // once more for the specifics that help Lidor prepare; the model-written
+    // question is context-aware, so this is a fresh, natural nudge, not a repeat.
+    if (!intentHasSubstance) {
+      return { nextStage: 'assessing_intent', action: 'ask_intent', escalate: true };
+    }
   }
   // A qualified lead who asked for a meeting is offered real times rather than a
   // promise that Lidor will call: they have already said yes, and making them

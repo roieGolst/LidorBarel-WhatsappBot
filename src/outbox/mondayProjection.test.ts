@@ -6,7 +6,12 @@ import { findOrCreateConversation } from '../db/repositories/conversations.js';
 import { conversations, outbox } from '../db/schema.js';
 import { setupTestDatabase, truncateAll } from '../db/testing.js';
 import { MondayError, type MondayClient } from '../monday/client.js';
-import { LEAD_STATUS, UNSUITABLE_GROUP_ID } from '../monday/leadMapping.js';
+import { CALLBACK_ITEM_NAME } from '../appointments/exclusivityCallback.js';
+import {
+  ACTIVITY_COLUMNS,
+  LEAD_STATUS,
+  UNSUITABLE_GROUP_ID,
+} from '../monday/leadMapping.js';
 import { syncLead } from '../monday/syncLead.js';
 import { claimOutboxBatch, enqueueOutboxEvent, markFailed } from './outbox.js';
 import { startOutboxWorker } from './outboxWorker.js';
@@ -303,5 +308,76 @@ describe('outbox worker', () => {
 
     const [row] = await db.select().from(outbox);
     expect(row?.status).toBe('delivered');
+  });
+});
+
+describe('the exclusivity callback reminder', () => {
+  const exclusive = {
+    sellIntent: 'ready',
+    neighborhood: 'רמות',
+    currentlyMarketed: 'with_agent',
+    exclusivityEndsAt: 'מחר',
+    exclusivityEndsOn: '2026-09-09',
+  };
+
+  it('is filed in the calendar, linked to the lead, when the lead is projected', async () => {
+    const fake = new FakeMonday();
+    const { conversationId } = await seedLead({
+      stage: 'disqualified',
+      extracted: exclusive,
+    });
+
+    await syncLead(
+      { db, monday: monday(fake), timeZone: 'Asia/Jerusalem' },
+      conversationId,
+    );
+
+    const reminder = fake.created.find((item) => item.name === CALLBACK_ITEM_NAME);
+    expect(reminder).toBeDefined();
+    // Linked to the lead item created moments before, in the same pass, and
+    // remembered on the conversation so it is never filed twice.
+    expect(reminder!.values).toHaveProperty(ACTIVITY_COLUMNS.contact);
+    const [row] = await db
+      .select({ id: conversations.exclusivityCallbackItemId })
+      .from(conversations)
+      .where(eq(conversations.id, conversationId));
+    expect(row?.id).toBe('item-2');
+    expect(reminder!.values[ACTIVITY_COLUMNS.start]).toEqual({
+      date: '2026-09-09',
+      time: '07:00:00',
+    });
+  });
+
+  it('is filed exactly once, however often the lead is projected', async () => {
+    const fake = new FakeMonday();
+    const { conversationId } = await seedLead({
+      stage: 'disqualified',
+      extracted: exclusive,
+    });
+
+    await syncLead({ db, monday: monday(fake) }, conversationId);
+    await syncLead({ db, monday: monday(fake) }, conversationId);
+    await syncLead({ db, monday: monday(fake) }, conversationId);
+
+    expect(fake.created.filter((item) => item.name === CALLBACK_ITEM_NAME)).toHaveLength(
+      1,
+    );
+  });
+
+  it('is not filed when the end is unknown or the lead declined a follow-up', async () => {
+    const fake = new FakeMonday();
+    const vague = await seedLead({
+      stage: 'disqualified',
+      extracted: { ...exclusive, exclusivityEndsOn: undefined },
+    });
+    const declined = await seedLead({
+      stage: 'disqualified',
+      extracted: { ...exclusive, wantsExclusivityFollowup: false },
+    });
+
+    await syncLead({ db, monday: monday(fake) }, vague.conversationId);
+    await syncLead({ db, monday: monday(fake) }, declined.conversationId);
+
+    expect(fake.created.some((item) => item.name === CALLBACK_ITEM_NAME)).toBe(false);
   });
 });

@@ -46,6 +46,13 @@ export interface SanitizedExtraction {
   extracted: KnownFacts;
   /** The rejected neighborhood value, when one failed validation. */
   invalidNeighborhood?: string;
+  /**
+   * A plausible Hebrew place that is not a neighbourhood we know — most often a
+   * street address, since the question invites one. Kept in `extracted` verbatim
+   * (rule 1: the customer is never restricted to the list), and reported here so
+   * the conversation can check it with the person before trusting it.
+   */
+  unknownNeighborhood?: string;
 }
 
 /**
@@ -65,5 +72,9 @@ export function sanitizeExtraction(extracted: KnownFacts): SanitizedExtraction {
 
   // Plausible: keep the customer's exact words, normalizing only known aliases.
   const match = normalizeNeighborhood(neighborhood);
-  return { extracted: { ...extracted, neighborhood: match.canonical ?? match.original } };
+  const value = match.canonical ?? match.original;
+  return {
+    extracted: { ...extracted, neighborhood: value },
+    ...(match.known ? {} : { unknownNeighborhood: value }),
+  };
 }

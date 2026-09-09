@@ -4,9 +4,11 @@ import { upsertContactByPhone, type Contact } from '../db/repositories/contacts.
 import { recordOptOut } from '../db/repositories/optOuts.js';
 import { setupTestDatabase, truncateAll } from '../db/testing.js';
 import { FakeChannel } from './fakeChannel.js';
+import { CloudApiError } from './cloudApiChannel.js';
 import {
   ConsentRequiredError,
   guardedSend,
+  isPermanentSendFailure,
   OptedOutError,
   RecipientMismatchError,
   WindowClosedError,
@@ -297,4 +299,24 @@ describe('guardedSend — proactive consent (NN-2)', () => {
       ),
     ).rejects.toBeInstanceOf(ConsentRequiredError);
   });
+});
+
+describe('isPermanentSendFailure', () => {
+  // One answer for every outreach loop, so none of them keeps its own list.
+  it.each([
+    new OptedOutError('+972521234501'),
+    new ConsentRequiredError('privacy_policy_only'),
+    new WindowClosedError(),
+    new RecipientMismatchError(),
+    new CloudApiError('400', false, 400),
+  ])('is permanent: %s', (error) => {
+    expect(isPermanentSendFailure(error)).toBe(true);
+  });
+
+  it.each([new CloudApiError('503', true, 503), new Error('socket hang up'), 'nope'])(
+    'is not permanent: %s',
+    (error) => {
+      expect(isPermanentSendFailure(error)).toBe(false);
+    },
+  );
 });

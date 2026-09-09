@@ -129,6 +129,11 @@ export function statusLabelFor(
       return LEAD_STATUS.askedToStop;
     case 'closed_no_response':
       return LEAD_STATUS.noResponse;
+    case 'error':
+      // Parked because the number could not be messaged — undeliverable, or a
+      // recipient outside the allow-list. "Missing info" is the status Lidor
+      // already uses for a lead whose details need fixing.
+      return LEAD_STATUS.missingInfo;
     case 'qualified':
     case 'handed_off':
       return LEAD_STATUS.awaitingCall;
@@ -141,8 +146,11 @@ export function statusLabelFor(
   }
 }
 
-/** Monday's date column format, in the board's local terms. */
-function dateValue(at: Date): { date: string; time: string } {
+/**
+ * Monday's date column value. The JSON value is UTC — the board renders it in
+ * the account's timezone — so the instant is written as-is, never shifted.
+ */
+export function boardDateValue(at: Date): { date: string; time: string } {
   const iso = at.toISOString();
   return { date: iso.slice(0, 10), time: iso.slice(11, 19) };
 }
@@ -172,7 +180,7 @@ export const ACTIVITY_COLUMNS = {
 } as const;
 
 /** `סוג פעילות` label ids. The bot only ever books a consultation. */
-export const ACTIVITY_TYPE = { consultation: 0 } as const;
+export const ACTIVITY_TYPE = { consultation: 0, introCall: 4 } as const;
 
 /** `סטטוס` on פעילות. */
 export const ACTIVITY_STATUS = { open: 3, done: 4 } as const;
@@ -230,14 +238,34 @@ export function leadColumnValues(
       index: MARKETED_LABEL[facts.currentlyMarketed],
     };
   }
+  // A place we do not recognise never becomes a dropdown label — that is how a
+  // street address turns into a permanent board value. It is not dropped either:
+  // it goes into the notes verbatim, so Lidor still sees exactly what was said.
+  let unlistedPlace: string | undefined;
   if (facts.neighborhood) {
     const id = neighborhoodLabelId(facts.neighborhood);
-    // An unrecognised neighbourhood is left off rather than creating a label:
-    // that is how a street address becomes a permanent board value.
     if (id !== undefined) values[LEAD_COLUMNS.neighborhood] = { ids: [id] };
+    else unlistedPlace = facts.neighborhood;
   }
-  if (facts.additionalNotes) {
-    values[LEAD_COLUMNS.propertyNotes] = { text: facts.additionalNotes };
+  // Exclusivity with another agent is the one thing Lidor most needs to see on
+  // a closed lead: when it ends is when the lead becomes worth a call again.
+  const exclusivity =
+    facts.currentlyMarketed === 'with_agent' && facts.exclusivityEndsAt
+      ? [
+          `בלעדיות עם מתווך אחר עד: ${facts.exclusivityEndsAt}` +
+            (facts.exclusivityEndsOn ? ` (${facts.exclusivityEndsOn})` : '') +
+            (facts.wantsExclusivityFollowup === false
+              ? ' — לא מעוניין שנחזור אליו'
+              : ' — לחזור אליו בסיום הבלעדיות'),
+        ]
+      : [];
+  const notes = [
+    ...(unlistedPlace ? [`מיקום כפי שנמסר: ${unlistedPlace}`] : []),
+    ...exclusivity,
+    ...(facts.additionalNotes ? [facts.additionalNotes] : []),
+  ];
+  if (notes.length > 0) {
+    values[LEAD_COLUMNS.propertyNotes] = { text: notes.join('\n') };
   }
 
   // The score is the point of the whole qualification: Lidor works a queue, and
@@ -249,7 +277,7 @@ export function leadColumnValues(
 
   const lastInteraction = conversation.lastInboundAt ?? conversation.lastOutboundAt;
   if (lastInteraction) {
-    values[LEAD_COLUMNS.lastInteraction] = dateValue(lastInteraction);
+    values[LEAD_COLUMNS.lastInteraction] = boardDateValue(lastInteraction);
   }
 
   // Status is set on creation by a board automation, so it is written only on

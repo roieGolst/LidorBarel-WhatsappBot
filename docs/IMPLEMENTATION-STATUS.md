@@ -61,6 +61,10 @@ dangerous than plain gaps, because reviewers trust them.
 | ~~**D-1**~~ | ~~Consent gate is inert.~~ **Fixed in Phase 2.** `guardedSend` now takes an explicit send intent and checks `canReceiveProactiveMessage` for every proactive send. The type system makes a proactive send inexpressible without a contact to check. | `src/whatsapp/guardedSend.ts` | Resolved. **NN-2 enforced and tested.** |
 | ~~**D-2**~~ | ~~Send window never checked.~~ **Fixed in Phase 2.** Free-form sends are refused outside the 24-hour window; an approved template is the documented exception. | `src/whatsapp/guardedSend.ts` | Resolved. |
 | ~~**D-3**~~ | ~~`leadgen` payloads are silently discarded.~~ **Fixed in Phase 1.** The route now dispatches on `envelope.object`, and an unconfigured lead path fails closed with 503 rather than ACKing. | `src/whatsapp/routes.ts` · `src/leads/` | Resolved. |
+| ~~**D-5**~~ | **Permanent send failures retried for ever.** A first contact or follow-up refused at the choke point (opt-out, no consent) or rejected by Meta with a 4xx released its claim and was picked up again on the next sweep, every minute, indefinitely. The follow-up code's own comment claimed a cap would end it; the cap only counts *successful* sends. **Fixed in the hardening audit (2026-09-08):** failures are classified, permanent ones park the lead (`error` / `opted_out`) with the cause recorded and the board told, and the due-queries exclude anyone who cannot be messaged in the first place. | `outreach/firstContact.ts` · `outreach/followUp.ts` · `whatsapp/guardedSend.ts` | Resolved. |
+| ~~**D-6**~~ | **Follow-ups never reached the board.** Neither a sent nudge nor the sequence closing a lead as no-response queued a projection, so `ליד ללא מענה` — which exists on Lidor's status column for exactly that moment — was never set by the bot. **Fixed.** | `outreach/followUp.ts` | Resolved. |
+| ~~**D-7**~~ | **A street address was stored as the neighbourhood.** Q2 invites "a full address" and nothing mapped one, so "אהרון מסקין" (a street) was accepted verbatim and reached the board as where the property was. **Fixed:** an unrecognised place is checked with the person once, and if it stands it reaches Lidor in the notes rather than as a bogus dropdown label. | `workflow/conversationTurn.ts` · `workflow/validateAnswer.ts` · `monday/leadMapping.ts` | Resolved. |
+| ~~**D-8**~~ | **A deleted Monday item still counted as existing.** `items(ids: …)` returns deleted and archived items with `state` set; `itemExists` checked only the array length, so `syncLead`'s "recreate if deleted by hand" path was unreachable and its test passed only because the fake modelled semantics Monday does not have. Found by the live booking verification. **Fixed:** `state === 'active'` is required, with a test against Monday's real response shape. | `monday/client.ts` | Resolved. |
 | **D-4** | **Unused scaffolding.** `outbox` table, `appointment_requests` table, all `appointment_*` stages, `messages.template_ref`, `campaign_referrals.form_id` / `.external_lead_id`, `setMondayItemId()` — all defined, none written or read by production code. | `src/db/schema.ts` | Not a bug; a reminder that schema presence ≠ implementation. |
 
 ---
@@ -109,7 +113,85 @@ rest are recorded for attribution with no conversation opened. Replacing the for
 (for updated privacy wording, say) means a new id in both lists — Meta forms are
 immutable, so wording changes always produce a new form.
 
+### Hardening audit — 2026-09-08
+
+A deliberate pass over every flow before Phase 7, prompted by a real
+conversation in which a street address was accepted as the neighbourhood. It
+found that (D-7), and two things that would have hurt more in production:
+sweeper loops that retried a permanently refused send every minute for ever
+(D-5), and follow-ups that never told the board anything (D-6). All three are
+fixed and covered by tests; the earlier tests that encoded the "refuse and retry"
+behaviour were rewritten to assert the new contract while keeping the compliance
+property — nothing sent — intact.
+
+One rule fell out of it, now enforced at a single point
+(`isPermanentSendFailure`): a refusal from the choke point is permanent by
+construction, and the Cloud API says for itself whether its failure was
+transient. Every outreach loop routes on that one answer.
+
 ### What Phase 6 delivers
+
+**Exit criterion (added 2026-09-08):** a real booking round-trip against the
+live Monday account — `פעילות` item created and linked to the lead, Google
+Calendar event written by Monday's sync, lead status projected — the same
+standard every earlier phase was closed to. The e2e test proves the flow against
+a fake Monday only.
+
+#### Post-qualification robustness — 2026-09-08 (tasks from one live conversation)
+
+One real conversation, run end to end by the developer, went wrong four times
+after the answers were complete. Each is a task below, done and tested
+(`workflow/changedAnswers.test.ts` carries the scenario tests; the unit rules are
+in `decide.test.ts`).
+
+- [x] **Booking-context replies.** A lead who was just offered real times and
+  asked "אין מוקדם יותר היום?" was told "אין לי לוח זמנים לתאם כאן" — the
+  pre-booking rule that the bot never discusses times — and then re-asked the
+  intent question. Now `appointment_proposed` has its own routing
+  (`assist_booking`): the reply is written with the standing times handed to the
+  model as `[CONTEXT]` (a list message stores only its body), the voice rule
+  says system-offered times are real, the list is re-sent when the hold has
+  lapsed or the calendar moved, and an outright "none suits" ends the booking
+  honestly (`decline_slots`, back to `qualified`).
+- [x] **A changed answer is confirmed, never taken on faith.** After the meeting
+  was booked one stray "כן, עם מתווך" tap was applied as-is and closed the lead
+  as exclusive with another agent. Past screening (`POST_SCREENING_STAGES`) a
+  screening answer that differs from the known one is now held as
+  `pendingFactChange` and checked with two buttons; yes applies it and lets its
+  consequences run, no keeps the earlier answer, anything else lets the check
+  lapse without applying it. Asked at most once per change.
+- [x] **The closes are fixed Hebrew.** The disqualification close came out as
+  "תודה על ההתנגדות הגדולה … בלי ספק" — model-written. The exclusivity question
+  and all three closes (`DISQUALIFIED_MESSAGE`, `EXCLUSIVE_FOLLOWUP_MESSAGE`,
+  `EXCLUSIVE_NO_FOLLOWUP_MESSAGE`) are canned and pass the same validator as a
+  generated reply.
+- [x] **Exclusivity end → callback reminder in Lidor's calendar.** The classifier
+  now resolves the stated end to a date (`exclusivityEndsOn`, given today's
+  date) and the projection files a `פעילות` item — `שיחת הכרות`, 10:00 local on
+  that date (never Shabbat), linked to the lead — exactly once
+  (`conversations.exclusivity_callback_item_id`, migration 0008). The end date
+  and follow-up wish also reach `פרטי נכס`; before this they never left Postgres.
+- [x] **A return keeps the answers.** Reopening a closed conversation wiped every
+  fact, so a lead who tapped an old meeting time after being closed was asked
+  "are you selling?" from scratch. Now only the answer that closed the door is
+  cleared (Q1 for not-selling, Q4 + exclusivity for exclusive), the intent check
+  stays passed (`intentAssessed`), and a slot label tapped outside the booking
+  stage is read deterministically as "I want a meeting": a booked lead is told
+  the meeting is set, a complete lead gets fresh times, an incomplete one gets
+  the single missing question and then the times.
+
+**Known limit:** a lead who confirms a disqualifying change *after* a meeting was
+booked is closed per the spec, and the meeting stays in Lidor's calendar (the bot
+never deletes a `פעילות` item — see MONDAY-MAPPING). Lidor sees both on the
+board; a cancel/reschedule flow is not built.
+- [x] **Live booking verified — 2026-09-08.** Two real bookings against the live
+  account (items `3212538619`, `3212563443`, both deleted afterwards and confirmed
+  `state: deleted`). Each: three free slots read from the live `פעילות` board →
+  item created with type `פגישת ייעוץ`, 19:00–19:45 local, owner auto-set to
+  Lidor → **lead link present at creation** (`linked_item_ids`, read through the
+  `BoardRelationValue` fragment) → **Google Calendar event written by Monday
+  within 8 seconds** → outbox drained, lead status `ממתין לפגישה ייעוץ` /
+  `לידים בטיפול` → after cleanup, back to `ממתין לשיחה`.
 
 A qualified lead who asks for a meeting is offered Lidor's real free times in
 WhatsApp and books one — no Google credentials, because a booking is a `פעילות`
@@ -300,7 +382,7 @@ onward, so start them early.
 
 ## 6. Test coverage reality
 
-587 tests across 39 files, colocated, with integration tests running against a
+741 tests across 46 files, colocated, with integration tests running against a
 real PostgreSQL. Phase 4 added the stop-condition suite — every cap, stage, and
 refusal asserted separately — plus Shabbat and business-hours cases pinned to
 real Israeli local times in both DST states.

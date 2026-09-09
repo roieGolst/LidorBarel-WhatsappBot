@@ -6,10 +6,15 @@ import {
   TERMINAL_STAGES,
   type Conversation,
 } from '../db/repositories/conversations.js';
-import { conversations, events, messages } from '../db/schema.js';
+import { contacts, conversations, events, messages } from '../db/schema.js';
 import { getLogger } from '../logger.js';
 import type { OutboundTemplate, WhatsAppChannel } from '../whatsapp/channel.js';
-import { guardedSend } from '../whatsapp/guardedSend.js';
+import {
+  guardedSend,
+  isPermanentSendFailure,
+  OptedOutError,
+} from '../whatsapp/guardedSend.js';
+import { enqueueOutboxEvent } from '../outbox/outbox.js';
 import { followUpMessage } from './followUpMessages.js';
 import {
   decideFollowUp,
@@ -17,6 +22,9 @@ import {
   type FollowUpLimits,
   type FollowUpStop,
 } from './followUpPolicy.js';
+
+/** How long to wait before retrying a nudge that failed for a transient reason. */
+const TRANSIENT_RETRY_MS = 15 * 60 * 1000;
 
 /**
  * Sending the follow-ups that nudge a lead who has gone quiet.
@@ -37,7 +45,9 @@ export type FollowUpSkip =
   | 'not_due'
   | 'contact_missing'
   /** Outside the messaging window with no approved follow-up template to use. */
-  | 'no_template_available';
+  | 'no_template_available'
+  /** The send can never succeed as things stand; the sequence was stopped, not retried. */
+  | 'send_refused';
 
 export interface FollowUpDeps {
   db: Database;
@@ -195,12 +205,39 @@ export async function sendFollowUp(
     );
     providerMessageId = result.providerMessageId;
   } catch (error) {
-    // Restore the schedule so a transient failure retries. A refusal (opt-out,
-    // consent) will simply be refused again and then hit a cap, which is the
-    // correct end for it.
+    if (isPermanentSendFailure(error)) {
+      // Fails identically on every sweep. The claim already cleared the schedule
+      // and it stays cleared — the sequence is over. (An earlier version restored
+      // the schedule here on the theory that a refusal would "hit a cap"; the cap
+      // only counts successful sends, so it retried an opt-out every sweep, for
+      // ever.) An opt-out also settles the stage, and the board is told.
+      if (error instanceof OptedOutError) {
+        await deps.db.transaction(async (tx) => {
+          await tx
+            .update(conversations)
+            .set({ stage: 'opted_out', updatedAt: now })
+            .where(eq(conversations.id, conversationId));
+          await enqueueOutboxEvent(tx, conversationId);
+        });
+      }
+      logger.warn(
+        {
+          conversationId,
+          followUpNumber,
+          reason: error instanceof Error ? error.name : 'unknown',
+        },
+        'follow-up refused permanently — sequence stopped',
+      );
+      return { sent: false, reason: 'send_refused' };
+    }
+    // Transient — retry after a pause rather than on the very next sweep, so an
+    // outage is not hammered once a minute.
     await deps.db
       .update(conversations)
-      .set({ nextFollowupAt: now, updatedAt: now })
+      .set({
+        nextFollowupAt: new Date(now.getTime() + TRANSIENT_RETRY_MS),
+        updatedAt: now,
+      })
       .where(eq(conversations.id, conversationId));
     throw error;
   }
@@ -231,6 +268,9 @@ export async function sendFollowUp(
         updatedAt: now,
       })
       .where(eq(conversations.id, conversationId));
+
+    // The board shows אינטרקציה אחרונה; a nudge moves it.
+    await enqueueOutboxEvent(tx, conversationId);
 
     await tx.insert(events).values({
       aggregateType: 'conversation',
@@ -265,19 +305,25 @@ async function closeIfExhausted(
 ): Promise<void> {
   if (stop !== 'max_followups_reached' && stop !== 'max_age_reached') return;
 
-  await db
-    .update(conversations)
-    .set({ stage: 'closed_no_response', updatedAt: now })
-    .where(eq(conversations.id, conversationId));
+  await db.transaction(async (tx) => {
+    await tx
+      .update(conversations)
+      .set({ stage: 'closed_no_response', updatedAt: now })
+      .where(eq(conversations.id, conversationId));
 
-  await db.insert(events).values({
-    aggregateType: 'conversation',
-    aggregateId: conversationId,
-    eventType: 'stage_transition',
-    fromStage,
-    toStage: 'closed_no_response',
-    actor: 'system',
-    metadata: { action: 'follow_ups_exhausted', stop },
+    await tx.insert(events).values({
+      aggregateType: 'conversation',
+      aggregateId: conversationId,
+      eventType: 'stage_transition',
+      fromStage,
+      toStage: 'closed_no_response',
+      actor: 'system',
+      metadata: { action: 'follow_ups_exhausted', stop },
+    });
+
+    // Without this the lead reads as still-active on the board indefinitely —
+    // ליד ללא מענה exists on Lidor's status column precisely for this moment.
+    await enqueueOutboxEvent(tx, conversationId);
   });
 }
 
@@ -309,10 +355,15 @@ export async function findConversationsDueForFollowUp(
   const rows = await db
     .select({ id: conversations.id })
     .from(conversations)
+    .innerJoin(contacts, eq(contacts.id, conversations.contactId))
     .where(
       and(
         isNotNull(conversations.nextFollowupAt),
         lte(conversations.nextFollowupAt, now),
+        // An opted-out person is never even considered (NN-1). Consent is not
+        // filtered here: an in-window nudge to someone who messaged first needs
+        // none, and an out-of-window one is refused at the choke point.
+        eq(contacts.doNotContact, false),
       ),
     )
     .orderBy(sql`${conversations.nextFollowupAt} asc`)

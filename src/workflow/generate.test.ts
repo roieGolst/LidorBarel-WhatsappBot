@@ -43,7 +43,7 @@ describe('generateValidatedReply', () => {
     const llm = new FakeLlmClient(['תודה, קיבלתי את הפרטים.']);
 
     const result = await generateValidatedReply(llm, {
-      action: 'send_disqualification',
+      action: 'about_lidor',
       escalate: false,
     });
 
@@ -80,13 +80,35 @@ describe('generateValidatedReply', () => {
     const llm = new FakeLlmClient(['מבצע דחוף!', 'בטוח שזה זול!']);
 
     const result = await generateValidatedReply(llm, {
-      action: 'send_disqualification',
+      action: 'about_lidor',
       escalate: false,
     });
 
     expect(result.fellBack).toBe(true);
-    expect(result.text).toBe(SAFE_VARIANTS.send_disqualification);
+    expect(result.text).toBe(SAFE_VARIANTS.about_lidor);
     expect(validateReply(result.text).ok).toBe(true);
     expect(result.usage).toHaveLength(2);
+  });
+});
+
+describe('context', () => {
+  it('hands the reply-writer facts that are not in the transcript', async () => {
+    // The times offered live in a list message whose rows are never stored, so
+    // the generator is told them explicitly — as [CONTEXT] after the directive.
+    const llm = new FakeLlmClient([
+      'המועד הראשון הוא הכי מוקדם שפנוי. איזה מהם מתאים לך?',
+    ]);
+
+    await generateValidatedReply(llm, {
+      action: 'assist_booking',
+      escalate: false,
+      context: "Lidor's free times currently offered: 1) יום שלישי 19:00",
+    });
+
+    const last = llm.requests[0]!.messages.at(-1)!;
+    expect(last.content).toContain('[INSTRUCTION]');
+    expect(last.content).toContain(
+      "[CONTEXT] Lidor's free times currently offered: 1) יום שלישי 19:00",
+    );
   });
 });

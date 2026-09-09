@@ -155,13 +155,22 @@ export class MondayClient {
     );
   }
 
-  /** Whether an item still exists — a projection can be deleted by hand. */
+  /**
+   * Whether an item is still live on its board.
+   *
+   * Not merely "returned by id": Monday keeps deleted and archived items
+   * queryable, with `state` set accordingly, so `items(ids: …)` answers for a
+   * deleted item as readily as for a live one. Checking the array length alone
+   * made the "recreate if deleted by hand" path in `syncLead` unreachable — found
+   * while verifying a booking live, when two freshly deleted test items still
+   * reported present.
+   */
   async itemExists(itemId: string): Promise<boolean> {
-    const data = await this.request<{ items: { id: string }[] }>(
-      `query($item:[ID!]){ items(ids:$item){ id } }`,
+    const data = await this.request<{ items: { id: string; state?: string }[] }>(
+      `query($item:[ID!]){ items(ids:$item){ id state } }`,
       { item: [itemId] },
     );
-    return data.items.length > 0;
+    return data.items.some((item) => item.state === 'active');
   }
 
   /**

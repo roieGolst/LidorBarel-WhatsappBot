@@ -3,6 +3,7 @@ import { canReceiveProactiveMessage, type Contact } from '../db/repositories/con
 import type { Conversation } from '../db/repositories/conversations.js';
 import { isOptedOut } from '../db/repositories/optOuts.js';
 import type { OutboundResult } from './channel.js';
+import { CloudApiError } from './cloudApiChannel.js';
 import { canSendFreeForm, sendWindow } from './window.js';
 
 /**
@@ -75,6 +76,28 @@ export class RecipientMismatchError extends Error {
     super('refused a send whose contact record does not match the recipient number');
     this.name = 'RecipientMismatchError';
   }
+}
+
+/**
+ * Whether a failed send should never be retried.
+ *
+ * Every refusal this module raises is permanent by construction — a person who
+ * opted out or never consented is not going to be sendable on the next sweep —
+ * and the Cloud API says for itself whether its failure was transient. The
+ * outreach loops route on this single answer rather than each keeping its own
+ * list of exceptions, which is how one of them ended up retrying an opt-out
+ * every sixty seconds indefinitely.
+ */
+export function isPermanentSendFailure(error: unknown): boolean {
+  if (
+    error instanceof OptedOutError ||
+    error instanceof ConsentRequiredError ||
+    error instanceof WindowClosedError ||
+    error instanceof RecipientMismatchError
+  ) {
+    return true;
+  }
+  return error instanceof CloudApiError && !error.retryable;
 }
 
 /** The window-bearing part of a conversation. */

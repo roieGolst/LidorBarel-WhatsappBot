@@ -1,3 +1,4 @@
+import { describeToday } from '../domain/localTime.js';
 import type { ListRow } from '../whatsapp/channel.js';
 import type { Slot } from './availability.js';
 
@@ -44,6 +45,26 @@ function formatDate(slot: Slot, timeZone: string): string {
 
 export const SLOT_OFFER_BODY =
   'מעולה! 📅 אלה הזמנים הפנויים הקרובים של לידור — מה מתאים לך?';
+
+/** The list sent again after answering a question about the times. */
+export const SLOT_REOFFER_BODY =
+  'אלה המועדים הפנויים הקרובים של לידור — אפשר לבחור כאן 👇';
+
+/** A tapped time that is no longer on offer (a stale list, or the slot went). */
+export const STALE_SLOT_MESSAGE =
+  'המועד הזה כבר לא זמין 🙏 אלה המועדים הפנויים של לידור עכשיו:';
+
+/** The lead turned the offered times down: the honest handoff, no re-offer. */
+export const SLOTS_DECLINED_MESSAGE =
+  'בסדר גמור 🙏 העברתי את הפרטים ללידור והוא יחזור אליך לתאם מועד שנוח לך.';
+
+/** A time tapped after the meeting was already booked. */
+export function alreadyBookedMessage(slot: Slot | undefined, timeZone: string): string {
+  const when = slot
+    ? ` ל${formatSlot(slot, timeZone)} (${formatDate(slot, timeZone)})`
+    : '';
+  return `הפגישה שלך עם לידור כבר קבועה${when} ✅ אם משהו משתנה — פשוט תכתוב לי כאן.`;
+}
 
 export const SLOT_OFFER_BUTTON = 'בחירת מועד';
 
@@ -94,6 +115,49 @@ export function matchSlot(
 ): Slot | undefined {
   const normalized = text.trim();
   return slots.find((slot) => formatSlot(slot, timeZone) === normalized);
+}
+
+/**
+ * Whether a message is a slot label — the text a tapped time row echoes back.
+ *
+ * Checked on every message, not only in the booking stage: a person can tap a
+ * row from an OLD list at any point, and that must read as "they want this
+ * time", never be handed to the classifier as a fresh property answer.
+ */
+export function isSlotLabel(text: string): boolean {
+  return /^יום (ראשון|שני|שלישי|רביעי|חמישי|שישי|שבת) \d{2}:\d{2}$/.test(text.trim());
+}
+
+/** Whether two offers are the same times. */
+export function sameSlots(a: readonly Slot[], b: readonly Slot[]): boolean {
+  return (
+    a.length === b.length &&
+    a.every((s, i) => s.start.getTime() === b[i]!.start.getTime())
+  );
+}
+
+/**
+ * What the reply-writer needs to know about the standing offer: the times, in
+ * the words the person saw, and what today is — so "אין מוקדם יותר היום?" can
+ * be answered truthfully from the calendar rather than deflected.
+ */
+export function offeredTimesContext(
+  slots: readonly Slot[],
+  timeZone: string,
+  now: Date,
+): string {
+  const listed = slots
+    .map(
+      (slot, i) =>
+        `${i + 1}) ${formatSlot(slot, timeZone)} (${formatDate(slot, timeZone)})`,
+    )
+    .join('; ');
+  return (
+    `Today is ${describeToday(now, timeZone)}. ` +
+    `Lidor's free times currently offered, earliest first: ${listed}. ` +
+    'The first is the earliest time Lidor has free — nothing earlier is available, ' +
+    'and no other times may be suggested.'
+  );
 }
 
 /** Restores slots from what was stored on the offer. */

@@ -125,6 +125,47 @@ const conversation = (over = {}) =>
   }) as never;
 
 describe('leadColumnValues', () => {
+  it('tells Lidor when an exclusivity with another agent ends', () => {
+    // Before, the end date stayed in Postgres only; the one fact that says
+    // when a closed lead becomes worth a call never reached the board.
+    const values = leadColumnValues(
+      {
+        contact: contact(),
+        conversation: conversation(),
+        facts: {
+          currentlyMarketed: 'with_agent',
+          exclusivityEndsAt: 'מחר',
+          exclusivityEndsOn: '2026-09-09',
+          additionalNotes: '4 חדרים',
+        },
+      },
+      { includeStatus: false },
+    );
+
+    expect((values[LEAD_COLUMNS.propertyNotes] as { text: string }).text).toBe(
+      'בלעדיות עם מתווך אחר עד: מחר (2026-09-09) — לחזור אליו בסיום הבלעדיות\n4 חדרים',
+    );
+  });
+
+  it('records a declined follow-up so Lidor does not call anyway', () => {
+    const values = leadColumnValues(
+      {
+        contact: contact(),
+        conversation: conversation(),
+        facts: {
+          currentlyMarketed: 'with_agent',
+          exclusivityEndsAt: 'עוד חודשיים',
+          wantsExclusivityFollowup: false,
+        },
+      },
+      { includeStatus: false },
+    );
+
+    expect((values[LEAD_COLUMNS.propertyNotes] as { text: string }).text).toBe(
+      'בלעדיות עם מתווך אחר עד: עוד חודשיים — לא מעוניין שנחזור אליו',
+    );
+  });
+
   it('writes the phone without a plus, with the country', () => {
     const values = leadColumnValues(
       { contact: contact(), conversation: conversation(), facts: {} },
@@ -256,5 +297,57 @@ describe('leadColumnValues', () => {
 
     expect(values).not.toHaveProperty('color_mkp8eq7j');
     expect(values).not.toHaveProperty('date_mm6apc14');
+  });
+});
+
+describe('a place the board does not list', () => {
+  it('still reaches Lidor, in the notes rather than as a bogus label', () => {
+    const values = leadColumnValues(
+      {
+        contact: contact(),
+        conversation: conversation(),
+        facts: { neighborhood: 'אהרון מסקין' },
+      },
+      { includeStatus: false },
+    );
+
+    expect(values).not.toHaveProperty(LEAD_COLUMNS.neighborhood);
+    expect(values[LEAD_COLUMNS.propertyNotes]).toEqual({
+      text: 'מיקום כפי שנמסר: אהרון מסקין',
+    });
+  });
+
+  it('sits alongside the property notes, not instead of them', () => {
+    const values = leadColumnValues(
+      {
+        contact: contact(),
+        conversation: conversation(),
+        facts: { neighborhood: 'אופקים', additionalNotes: '4 חדרים, קומה 2' },
+      },
+      { includeStatus: false },
+    );
+
+    expect((values[LEAD_COLUMNS.propertyNotes] as { text: string }).text).toBe(
+      'מיקום כפי שנמסר: אופקים\n4 חדרים, קומה 2',
+    );
+  });
+
+  it('does not add a note for a listed neighbourhood', () => {
+    const values = leadColumnValues(
+      {
+        contact: contact(),
+        conversation: conversation(),
+        facts: { neighborhood: 'רמות' },
+      },
+      { includeStatus: false },
+    );
+
+    expect(values).not.toHaveProperty(LEAD_COLUMNS.propertyNotes);
+  });
+});
+
+describe('a lead parked because it could not be messaged', () => {
+  it('shows as missing info, the status Lidor uses for details that need fixing', () => {
+    expect(statusLabelFor('error', null)).toBe(LEAD_STATUS.missingInfo);
   });
 });

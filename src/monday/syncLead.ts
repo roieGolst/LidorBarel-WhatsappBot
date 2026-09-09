@@ -6,6 +6,7 @@ import {
   setMondayItemId,
 } from '../db/repositories/conversations.js';
 import { campaignReferrals } from '../db/schema.js';
+import { ensureExclusivityCallback } from '../appointments/exclusivityCallback.js';
 import { getLogger } from '../logger.js';
 import { enqueueOutboxEvent } from '../outbox/outbox.js';
 import type { KnownFacts } from '../workflow/decide.js';
@@ -33,7 +34,11 @@ export interface SyncLeadDeps {
   monday: MondayClient;
   /** Resolves a Meta form id to its display name. Optional; an id tells Lidor nothing. */
   resolveFormName?: ((formId: string) => Promise<string | undefined>) | undefined;
+  /** Lidor's timezone, for placing a callback reminder on a local date. */
+  timeZone?: string | undefined;
 }
+
+const DEFAULT_TIME_ZONE = 'Asia/Jerusalem';
 
 export type SyncLeadResult =
   | { synced: true; itemId: string; created: boolean }
@@ -118,6 +123,11 @@ export async function syncLead(
     // cannot loop.
     await applyStatus(deps, itemId, projection.conversation);
     await enqueueOutboxEvent(deps.db, conversationId);
+    await ensureExclusivityCallback(
+      { db: deps.db, monday: deps.monday, timeZone: deps.timeZone ?? DEFAULT_TIME_ZONE },
+      { ...conversation, mondayItemId: itemId },
+      projection.facts,
+    );
 
     logger.info({ conversationId, itemId }, 'created Monday lead');
     return { synced: true, itemId, created: true };
@@ -129,6 +139,12 @@ export async function syncLead(
     leadColumnValues(projection, { includeStatus: true }),
   );
   await applyGroupMove(deps, existingId, projection.conversation);
+  // A lead closed as exclusive gets a callback reminder on the end date, once.
+  await ensureExclusivityCallback(
+    { db: deps.db, monday: deps.monday, timeZone: deps.timeZone ?? DEFAULT_TIME_ZONE },
+    conversation,
+    projection.facts,
+  );
   logger.info({ conversationId, itemId: existingId }, 'updated Monday lead');
   return { synced: true, itemId: existingId, created: false };
 }

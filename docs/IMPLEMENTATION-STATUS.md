@@ -371,12 +371,14 @@ onward, so start them early.
 | E-9 | **Consent wording scope.** The checkbox says *הודעת אישור* (a confirmation message); the bot runs a qualification conversation plus five days of follow-ups. Under Amendment 40 those are commercial messages. Worth a privacy review, and worth broadening on the next form. | Volume send |
 | E-3 | Decision on leads already collected under the old form (re-consent or treat as inbound-only) | Phase 3 |
 | E-4 | ✅ Done — template approved by Meta | — |
-| E-5 | `leads_retrieval` permission + Page access token (`META_PAGE_ACCESS_TOKEN`) + Page subscribed to `leadgen` | Phase 1 go-live |
+| ~~E-5~~ | ✅ Done — System User token with `leads_retrieval`, Page `110085325138352` subscribed to `leadgen`; lead retrieval verified live | — |
 | E-6 | ✅ Done — Monday native Lead Ads integration disabled | — |
 | ~~E-7~~ | ✅ Done — token in place, columns verified live, board automations corrected | — |
 | ~~E-8~~ | ~~Google Cloud project, calendar credentials~~ **Dropped.** פעילות is bidirectionally synced with Lidor's calendar, so booking is a Monday write and availability is a Monday read. | — |
-| E-10 | **Approved template: nudging a lead who never replied.** They have no messaging window, so without it non-responders cannot be nudged at all. Drafted and validated — see the Phase 4 notes. | Nudging non-responders |
-| E-11 | **Approved template: nudging a lead who started and stopped.** Different wording — thanking someone mid-qualification for "leaving details" reads as though we lost track of them. Without it, those nudges only work within 24 hours of their last message. | Nudging partial completions |
+| ~~E-10~~ | ✅ Done — `seller_followup_1` approved (`he`). Set `FOLLOWUP_TEMPLATE_NAME` in the environment. | — |
+| ~~E-11~~ | ✅ Done — `seller_followup_incomplete` approved (`he`). Set `FOLLOWUP_INCOMPLETE_TEMPLATE_NAME`. | — |
+| E-12 | **Production server.** Everything so far ran on a laptop behind ngrok. The AWS stack and the step-by-step are in [GO-LIVE.md](GO-LIVE.md); the box, domain, S3 bucket and Meta webhook switch are operator work. | Real leads reaching the bot |
+| E-13 | **Uptime alerting.** Nothing tells anyone when the app is down. An external check on `/health` (see GO-LIVE §7). | Noticing an outage before Lidor does |
 
 ---
 

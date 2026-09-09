@@ -1,0 +1,105 @@
+# Production stack: one box, four containers, and a backup job.
+#
+#   caddy    ─▶ app:3000     TLS from Let's Encrypt for $DOMAIN, the only thing
+#                            published to the internet (80/443).
+#   app                      The bot. Reads .env; never publishes a port.
+#   postgres                 Source of truth. Volume-backed, not published.
+#   redis                    Transport only (BullMQ). Losing it loses nothing.
+#   backup                   Nightly pg_dump to S3. See deploy/backup/.
+#
+# Run from the repository root with `deploy/deploy.sh`, which also builds the
+# image and applies migrations before starting the app. Variables come from
+# `.env` (see deploy/env.production.example).
+
+services:
+  caddy:
+    image: caddy:2-alpine
+    restart: always
+    ports:
+      - '80:80'
+      - '443:443'
+    environment:
+      DOMAIN: ${DOMAIN:?set DOMAIN in .env}
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - app
+
+  app:
+    build: .
+    image: lidor-whatsapp-bot:latest
+    restart: always
+    env_file: .env
+    environment:
+      NODE_ENV: production
+      PORT: '3000'
+    volumes:
+      # The testimonial/promo clips live outside git; copy them to the server.
+      - ./assets/recommendations:/app/assets/recommendations:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    logging:
+      driver: json-file
+      options:
+        max-size: '20m'
+        max-file: '5'
+
+  postgres:
+    image: postgres:16-alpine
+    restart: always
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-lidor}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: ${POSTGRES_DB:-lidor_bot}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test:
+        [
+          'CMD-SHELL',
+          'pg_isready -U ${POSTGRES_USER:-lidor} -d ${POSTGRES_DB:-lidor_bot}',
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    restart: always
+    # appendonly keeps delayed BullMQ jobs across restarts; Postgres remains
+    # authoritative for every schedule regardless.
+    command: redis-server --appendonly yes
+    volumes:
+      - redis_data:/data
+
+  backup:
+    build: ./deploy/backup
+    restart: always
+    environment:
+      PGHOST: postgres
+      PGUSER: ${POSTGRES_USER:-lidor}
+      PGPASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      PGDATABASE: ${POSTGRES_DB:-lidor_bot}
+      BACKUP_S3_URI: ${BACKUP_S3_URI:?set BACKUP_S3_URI in .env}
+      AWS_ACCESS_KEY_ID: ${BACKUP_AWS_ACCESS_KEY_ID:?set BACKUP_AWS_ACCESS_KEY_ID in .env}
+      AWS_SECRET_ACCESS_KEY: ${BACKUP_AWS_SECRET_ACCESS_KEY:?set BACKUP_AWS_SECRET_ACCESS_KEY in .env}
+      AWS_DEFAULT_REGION: ${BACKUP_AWS_REGION:-il-central-1}
+      # UTC. 00:30 UTC is 03:30 in Israel — nobody is messaging the bot.
+      BACKUP_CRON: ${BACKUP_CRON:-30 0 * * *}
+    volumes:
+      - backups:/backups
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+volumes:
+  postgres_data:
+  redis_data:
+  caddy_data:
+  caddy_config:
+  backups:

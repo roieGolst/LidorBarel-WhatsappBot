@@ -65,6 +65,10 @@ npm run check           # the pre-commit gate: typecheck + lint + format:check +
 - `npm run typecheck` · `npm run lint` · `npm run format` · `npm run build`
 - **Migrations:** edit `src/db/schema.ts`, then `npm run db:generate` (writes SQL to
   `drizzle/`), then `npm run db:migrate`. Never hand-edit generated migration files.
+  Production applies the same files with `db:migrate:prod` (`src/db/migrate.ts`,
+  no drizzle-kit in the image); `deploy/deploy.sh` runs it before starting the app.
+- **Production:** `Dockerfile` + `docker-compose.prod.yml` (app, Postgres, Redis,
+  Caddy TLS, nightly S3 backup). The runbook is [docs/GO-LIVE.md](docs/GO-LIVE.md).
 
 Integration tests run against a **real** Postgres (not mocks) because the guarantees
 being tested — unique constraints, upserts, cascades, checkpoint durability — live in

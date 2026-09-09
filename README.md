@@ -46,7 +46,9 @@ deliberate act gated on Meta Business verification (external item E-1). See
 ## Requirements
 
 - **Node.js 24** (see `.nvmrc` — run `nvm use`)
-- **Docker** with Compose, for local PostgreSQL and Redis
+- **Docker** with Compose, for local PostgreSQL and Redis — and for production:
+  the whole stack runs from `docker-compose.prod.yml`; see
+  [docs/GO-LIVE.md](docs/GO-LIVE.md)
 
 ## Getting started
 

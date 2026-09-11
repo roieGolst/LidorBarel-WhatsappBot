@@ -1,6 +1,8 @@
 import { resolve } from 'node:path';
 import type { ConversationStage } from '../db/repositories/conversations.js';
 import type { ListRow, ReplyButton } from '../whatsapp/channel.js';
+import { normalizeNeighborhood } from '../domain/neighborhoods.js';
+import { isAffirmative } from './confirmation.js';
 import type { DisqualificationReason, KnownFacts, TurnAction } from './decide.js';
 
 /**
@@ -377,6 +379,15 @@ export function screeningAnswerFor(
   stage: ConversationStage,
   text: string,
 ): Partial<KnownFacts> | undefined {
+  // Q2 is free text, but a name on the list — or one of its aliases and
+  // spellings — is as unambiguous as a tapped button. Resolved here so it does
+  // not depend on the classifier knowing every variant ("שכונה ו' החדשה" was
+  // re-asked until the person typed a listed name).
+  if (stage === 'screening_neighborhood') {
+    const match = normalizeNeighborhood(text);
+    return match.canonical ? { neighborhood: match.canonical } : undefined;
+  }
+
   const action = STAGE_TO_SCREENING_ACTION[stage];
   if (!action) return undefined;
   const question = SCREENING_QUESTIONS[action];
@@ -385,12 +396,47 @@ export function screeningAnswerFor(
   const options = question.kind === 'buttons' ? question.buttons : question.rows;
   const trimmed = text.trim();
   const match = options.find((option) => option.title.trim() === trimmed);
-  if (!match) return undefined;
+  if (!match) {
+    // A bare "כן" to "האם חשבת למכור…?" is "yes, I want to sell" — the first
+    // option starts with that very word. The classifier called it unclear and
+    // the question was re-asked five times to a live lead. Only Q1 reads this
+    // way: a yes to Q4 ("is it marketed?") still needs "privately or with an
+    // agent?" — see MARKETED_YES_QUESTION — and a yes to Q3 means nothing.
+    if (stage === 'screening_sell_intent' && isAffirmative(trimmed)) {
+      return { sellIntent: 'ready' };
+    }
+    return undefined;
+  }
 
   const [prefix, value] = match.id.split(':');
   const field = OPTION_PREFIX_FIELD[prefix as keyof typeof OPTION_PREFIX_FIELD];
   if (!field || !value) return undefined;
   return { [field]: value };
+}
+
+/**
+ * Asked when the answer to Q4 is a bare "כן": marketed, yes — but how? The two
+ * options that a yes leaves open, with the same ids as the full question so a
+ * tap maps to the fact the same way.
+ */
+export const MARKETED_YES_QUESTION: ScreeningQuestion = {
+  kind: 'buttons',
+  body: 'כן — הנכס משווק באופן פרטי, או דרך מתווך?',
+  buttons: [
+    { id: 'marketed:privately', title: 'כן, באופן פרטי' },
+    { id: 'marketed:with_agent', title: 'כן, עם מתווך' },
+  ],
+};
+
+/**
+ * The question, asked again after an answer that could not be read. Saying so
+ * is the difference between a person and a bot that repeats itself word for
+ * word: a live lead got the identical Q1 five times in a row.
+ */
+export const RETRY_PREFIX = 'לא הצלחתי להבין 🙂 ';
+
+export function retryQuestion(question: ScreeningQuestion): ScreeningQuestion {
+  return { ...question, body: RETRY_PREFIX + question.body };
 }
 
 /** The plain-text body of a screening question — the text stored for the turn. */

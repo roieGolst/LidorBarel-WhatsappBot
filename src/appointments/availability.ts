@@ -1,4 +1,10 @@
-import { hm, isWithinHours, type OpeningWindow } from '../domain/localTime.js';
+import {
+  hm,
+  isWithinHours,
+  localDate,
+  localParts,
+  type OpeningWindow,
+} from '../domain/localTime.js';
 
 /**
  * Finding times Lidor is actually free.
@@ -70,10 +76,15 @@ export interface SlotOptions {
 
 export const DEFAULT_SLOT_OPTIONS: Omit<SlotOptions, 'timeZone'> = {
   durationMs: 45 * 60 * 1000,
-  stepMs: 60 * 60 * 1000,
+  // Half-hour grid: 08:30 — the opening time Lidor asked for — is otherwise
+  // never offered, because on an hourly grid the first candidate is 09:00.
+  stepMs: 30 * 60 * 1000,
   horizonMs: 7 * 24 * 60 * 60 * 1000,
   leadTimeMs: 3 * 60 * 60 * 1000,
 };
+
+/** How many times an offer lists — two days of morning / midday / evening. */
+export const OFFER_SLOT_COUNT = 6;
 
 /** Whether two intervals overlap at all. */
 export function overlaps(a: Slot, b: BusyBlock): boolean {
@@ -94,13 +105,14 @@ export function availableSlots(
   const slots: Slot[] = [];
   const horizonEnd = now.getTime() + options.horizonMs;
 
-  // Start from the next whole hour after the lead time, so offered times read as
-  // "14:00" rather than "13:47".
-  const first = new Date(now.getTime() + options.leadTimeMs);
-  first.setMinutes(0, 0, 0);
-  first.setTime(first.getTime() + options.stepMs);
+  // Start on the first grid boundary at or after the lead time, so offered
+  // times read as "14:00" / "14:30" rather than "13:47" — and never before the
+  // lead time (rounding down to the hour and stepping once did, on a half-hour
+  // grid).
+  const earliest = now.getTime() + options.leadTimeMs;
+  const first = Math.ceil(earliest / options.stepMs) * options.stepMs;
 
-  for (let t = first.getTime(); t < horizonEnd; t += options.stepMs) {
+  for (let t = first; t < horizonEnd; t += options.stepMs) {
     const start = new Date(t);
     const end = new Date(t + options.durationMs);
 
@@ -122,43 +134,65 @@ export function availableSlots(
 }
 
 /**
- * Picks the slots to offer, spread across different days.
- *
- * Three consecutive hours on one afternoon is a worse offer than three
- * mornings across three days: if that afternoon does not suit, the lead has
- * nothing to choose and the conversation stalls. One per day, earliest first.
+ * A day's three parts and the time a person most likely means by each. An
+ * offer picks the free slot nearest the anchor in each part, so it reads
+ * "09:00 / 13:00 / 18:00" rather than three consecutive half-hours.
  */
-export function spreadAcrossDays(
+const DAY_PARTS: readonly { from: number; to: number; anchor: number }[] = [
+  { from: hm(0), to: hm(12), anchor: hm(9) },
+  { from: hm(12), to: hm(16), anchor: hm(13) },
+  { from: hm(16), to: hm(24), anchor: hm(18) },
+];
+
+/**
+ * Picks the slots to offer: morning, midday and evening on each of the next
+ * free days, until `count` are found.
+ *
+ * Earlier this took the earliest slot of each day, which meant every offer
+ * beyond today read "09:00, 09:00, 09:00" — and someone free only in the
+ * evening had nothing to choose. Variety within a day matters as much as
+ * variety across days. A day that is busy in one part simply contributes
+ * fewer; a week with fewer free slots than wanted is filled from whatever is
+ * left, so a busy calendar still produces an offer rather than silence.
+ */
+export function pickOfferSlots(
   slots: readonly Slot[],
   count: number,
   timeZone: string,
 ): Slot[] {
-  const seen = new Set<string>();
-  const picked: Slot[] = [];
-
+  const byDay = new Map<string, Slot[]>();
   for (const slot of slots) {
-    const day = new Intl.DateTimeFormat('en-CA', {
-      timeZone,
-      year: 'numeric',
-      month: '2-digit',
-      day: '2-digit',
-    }).format(slot.start);
-
-    if (seen.has(day)) continue;
-    seen.add(day);
-    picked.push(slot);
-    if (picked.length === count) break;
+    const day = localDate(slot.start, timeZone);
+    const list = byDay.get(day);
+    if (list) list.push(slot);
+    else byDay.set(day, [slot]);
   }
 
-  // Fewer free days than slots wanted — fall back to filling from whatever is
-  // free, so a busy week still produces an offer rather than silence.
-  if (picked.length < count) {
-    for (const slot of slots) {
-      if (picked.includes(slot)) continue;
-      picked.push(slot);
-      if (picked.length === count) break;
+  const picked: Slot[] = [];
+  for (const daySlots of byDay.values()) {
+    for (const part of DAY_PARTS) {
+      const inPart = daySlots.filter((slot) => {
+        const minutes = localParts(slot.start, timeZone).minutesOfDay;
+        return minutes >= part.from && minutes < part.to;
+      });
+      const nearest = inPart.reduce<Slot | undefined>((best, slot) => {
+        const distance = Math.abs(
+          localParts(slot.start, timeZone).minutesOfDay - part.anchor,
+        );
+        const bestDistance = best
+          ? Math.abs(localParts(best.start, timeZone).minutesOfDay - part.anchor)
+          : Infinity;
+        return distance < bestDistance ? slot : best;
+      }, undefined);
+      if (nearest) picked.push(nearest);
+      if (picked.length === count) return picked;
     }
   }
 
-  return picked;
+  // Fewer free parts than slots wanted — fill from whatever is free.
+  for (const slot of slots) {
+    if (picked.length === count) break;
+    if (!picked.includes(slot)) picked.push(slot);
+  }
+  return picked.sort((a, b) => a.start.getTime() - b.start.getTime());
 }

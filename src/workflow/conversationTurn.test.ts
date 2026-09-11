@@ -193,13 +193,20 @@ describe('conversationTurn', () => {
       extracted: { neighborhood: 'רמות' },
       priorReply: 'האם הנכס משווק כרגע?',
     });
-    // The lead sends a photo (no caption) — now the latest inbound.
+    // The bot answered the greeting; then the lead sends a photo (no caption).
+    await db.insert(messages).values({
+      conversationId,
+      direction: 'outbound',
+      body: 'האם הנכס משווק כרגע?',
+      providerMessageId: `re-ask-${conversationId}`,
+      createdAt: new Date(Date.now() + 1),
+    });
     await recordInboundMessage(db, {
       conversationId,
       providerMessageId: `photo1-${conversationId}`,
       mediaType: 'image',
       mediaUrl: 'wamid-media-1',
-      createdAt: new Date(Date.now() + 1000),
+      createdAt: new Date(Date.now() + 2),
     });
     const channel = new FakeChannel();
     const llm = new FakeLlmClient([]); // a photo needs no classification/generation
@@ -224,7 +231,7 @@ describe('conversationTurn', () => {
       providerMessageId: `photo2-${conversationId}`,
       mediaType: 'image',
       mediaUrl: 'wamid-media-2',
-      createdAt: new Date(Date.now() + 2000),
+      createdAt: new Date(),
     });
     const result2 = await workflow({ db, llm, channel }).invoke(
       conversationId,
@@ -243,13 +250,20 @@ describe('conversationTurn', () => {
       stage: 'screening_currently_marketed',
       priorReply: 'האם הנכס משווק כרגע?',
     });
-    // A voice note (audio, no caption) — the latest inbound.
+    // The bot answered the greeting; then a voice note (audio, no caption).
+    await db.insert(messages).values({
+      conversationId,
+      direction: 'outbound',
+      body: 'האם הנכס משווק כרגע?',
+      providerMessageId: `re-ask-${conversationId}`,
+      createdAt: new Date(Date.now() + 1),
+    });
     await recordInboundMessage(db, {
       conversationId,
       providerMessageId: `voice1-${conversationId}`,
       mediaType: 'audio',
       mediaUrl: 'wamid-voice-1',
-      createdAt: new Date(Date.now() + 1000),
+      createdAt: new Date(Date.now() + 2),
     });
     const channel = new FakeChannel();
     const llm = new FakeLlmClient([]); // no classification for unsupported media
@@ -274,7 +288,7 @@ describe('conversationTurn', () => {
       providerMessageId: `voice2-${conversationId}`,
       mediaType: 'audio',
       mediaUrl: 'wamid-voice-2',
-      createdAt: new Date(Date.now() + 2000),
+      createdAt: new Date(),
     });
     const result2 = await workflow({ db, llm, channel }).invoke(
       conversationId,

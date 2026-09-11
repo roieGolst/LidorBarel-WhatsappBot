@@ -6,6 +6,7 @@ import { findSlotsToOffer, latestOffer, recordOffer } from '../appointments/book
 import {
   formatSlot,
   SLOT_REOFFER_BODY,
+  SLOT_SUGGEST_BODY,
   SLOTS_DECLINED_MESSAGE,
   STALE_SLOT_MESSAGE,
 } from '../appointments/slotMessages.js';
@@ -33,6 +34,9 @@ import {
   FACT_CHANGE_NO,
   FACT_CHANGE_YES,
   FACT_CHANGE_APPLIED_MESSAGE,
+  MARKETED_YES_QUESTION,
+  RETRY_PREFIX,
+  neighborhoodClarification,
   screeningQuestionFor,
 } from './interactive.js';
 
@@ -104,10 +108,12 @@ async function seed(options: {
   known?: KnownFacts;
   priorReply: string;
   inbound: string;
+  /** A direct-message lead is asked all four questions; a form lead Q2 + Q4. */
+  entryPoint?: 'meta_lead_form' | 'direct_message';
 }): Promise<string> {
   const contact = await upsertContactByPhone(db, {
     phone: `+9725044444${String(phoneCounter++).padStart(2, '0')}`,
-    entryPoint: 'meta_lead_form',
+    entryPoint: options.entryPoint ?? 'meta_lead_form',
     consentStatus: 'whatsapp_opt_in',
   });
   const { conversation } = await findOrCreateConversation(db, contact.id);
@@ -133,11 +139,13 @@ async function seed(options: {
 }
 
 async function reply(conversationId: string, text: string): Promise<void> {
+  // Dated now, never ahead: a message dated in the future would sort after the
+  // reply the turn persists, and read as unanswered on the next turn.
   await recordInboundMessage(db, {
     conversationId,
     providerMessageId: `in-${conversationId}-${text}`,
     body: text,
-    createdAt: new Date(Date.now() + 1000),
+    createdAt: new Date(),
   });
 }
 
@@ -515,5 +523,242 @@ describe('a meeting time tapped outside the booking stage', () => {
     expect(
       channel.sent.some((m) => m.kind === 'text' && /חדרים|קומה|כתובת/.test(m.text)),
     ).toBe(false);
+  });
+});
+
+describe('a burst of messages', () => {
+  it('is answered once, as one message — nothing in it is lost', async () => {
+    // Live: "תקבע לי פגישה" followed by "נוווו" a second later. The turn read
+    // only the last line and answered "נוווו"; the request in the line before
+    // it was never classified.
+    const deps = appointments();
+    const channel = new FakeChannel();
+    const conversationId = await seed({
+      stage: 'qualified',
+      priorReply: 'תודה על הפרטים!',
+      inbound: 'תקבע לי פגישה',
+    });
+    await reply(conversationId, 'נוווו');
+    const llm = new FakeLlmClient([
+      '{"intent":"ANSWER","confidence":0.9,"extracted":{"bookingIntent":true}}',
+    ]);
+
+    const result = await run({ db, llm, channel, appointments: deps }, conversationId);
+
+    // The classifier saw both lines as the message under classification…
+    const classified = llm.requests[0]!.messages.at(-1)!.content;
+    expect(classified).toBe('תקבע לי פגישה\nנוווו');
+    // …and neither line is also in the history it was given.
+    expect(
+      llm.requests[0]!.messages.slice(0, -1).some((m) => m.content === 'נוווו'),
+    ).toBe(false);
+    expect(result.action).toBe('offer_slots');
+    expect(channel.sent).toHaveLength(1);
+
+    // The surplus turn the second message scheduled finds nothing to answer.
+    const again = await run(
+      { db, llm: new FakeLlmClient([]), channel, appointments: deps },
+      conversationId,
+    );
+    expect(again.action).toBe('skipped_no_inbound');
+    expect(channel.sent).toHaveLength(1);
+  });
+
+  it('answers the text and counts the photo when both arrive together', async () => {
+    const conversationId = await seed({
+      stage: 'qualified',
+      priorReply: 'תודה על הפרטים!',
+      inbound: 'זה הבית',
+    });
+    await recordInboundMessage(db, {
+      conversationId,
+      providerMessageId: `photo-${conversationId}`,
+      mediaType: 'image',
+      mediaUrl: 'wamid-media-1',
+      createdAt: new Date(),
+    });
+    const llm = new FakeLlmClient([
+      '{"intent":"ANSWER","confidence":0.9,"extracted":{"additionalNotes":"בית פרטי"}}',
+    ]);
+
+    const result = await run({ db, llm, channel: new FakeChannel() }, conversationId);
+
+    expect(result.action).toBe('acknowledge_additional_info');
+    expect((await facts(conversationId)).photoCount).toBe(1);
+  });
+});
+
+describe('answers the script did not anticipate', () => {
+  const Q1 = screeningQuestionFor('ask_sell_intent')!.body;
+  const Q2 = screeningQuestionFor('ask_neighborhood')!.body;
+  const Q4 = screeningQuestionFor('ask_currently_marketed')!.body;
+
+  it('takes a bare "כן" to Q1 as the wish to sell and moves on', async () => {
+    // Live: five identical re-asks of Q1 to a lead who kept saying כן.
+    const conversationId = await seed({
+      stage: 'screening_sell_intent',
+      known: {},
+      priorReply: Q1,
+      inbound: 'כן',
+      entryPoint: 'direct_message',
+    });
+    const llm = new FakeLlmClient([
+      '{"intent":"UNCLEAR","confidence":0.2,"extracted":{}}',
+    ]);
+
+    const result = await run({ db, llm, channel: new FakeChannel() }, conversationId);
+
+    expect(result.action).toBe('ask_neighborhood');
+    expect((await facts(conversationId)).sellIntent).toBe('ready');
+  });
+
+  it('narrows a bare "כן" to Q4 instead of asking Q4 again', async () => {
+    const channel = new FakeChannel();
+    const conversationId = await seed({
+      stage: 'screening_currently_marketed',
+      known: { sellIntent: 'ready', neighborhood: 'רמות', timeline: 'immediate' },
+      priorReply: Q4,
+      inbound: 'כן',
+    });
+    const llm = new FakeLlmClient([]); // deterministic — no model call
+
+    const result = await run({ db, llm, channel }, conversationId);
+
+    expect(result.stage).toBe('screening_currently_marketed');
+    expect(result.text).toBe(MARKETED_YES_QUESTION.body);
+    expect(channel.sent[0]!.kind).toBe('buttons');
+    expect(llm.requests).toHaveLength(0);
+    expect((await facts(conversationId)).currentlyMarketed).toBeUndefined();
+  });
+
+  it('says it did not understand before asking the same question again', async () => {
+    const conversationId = await seed({
+      stage: 'screening_sell_intent',
+      known: {},
+      priorReply: Q1,
+      inbound: '🥹',
+      entryPoint: 'direct_message',
+    });
+    const llm = new FakeLlmClient([
+      '{"intent":"UNCLEAR","confidence":0.1,"extracted":{}}',
+    ]);
+
+    const result = await run({ db, llm, channel: new FakeChannel() }, conversationId);
+
+    expect(result.action).toBe('ask_sell_intent');
+    expect(result.text).toBe(RETRY_PREFIX + Q1);
+  });
+
+  it('checks an address the classifier could not place, once, then accepts the answer', async () => {
+    // Live: a Tel Aviv address at Q2 drew the identical Q2 again, and would
+    // have forever — the one-time clarification only fired for a place the
+    // classifier *had* extracted.
+    const channel = new FakeChannel();
+    const conversationId = await seed({
+      stage: 'screening_neighborhood',
+      known: { sellIntent: 'ready', timeline: 'immediate' },
+      priorReply: Q2,
+      inbound: 'התימנים 18 בכרם התימנים בתל אביב',
+    });
+
+    const first = await run(
+      {
+        db,
+        llm: new FakeLlmClient([
+          '{"intent":"ANSWER","confidence":0.9,"extracted":{"additionalNotes":"התימנים 18, תל אביב"}}',
+        ]),
+        channel,
+      },
+      conversationId,
+    );
+    expect(first.action).toBe('clarify_neighborhood');
+    expect(first.text).toBe(
+      neighborhoodClarification('התימנים 18 בכרם התימנים בתל אביב'),
+    );
+
+    await reply(conversationId, 'זה לא בבאר שבע, זה בתל אביב');
+    const second = await run(
+      {
+        db,
+        llm: new FakeLlmClient(['{"intent":"ANSWER","confidence":0.9,"extracted":{}}']),
+        channel,
+      },
+      conversationId,
+    );
+    // The flow moves on (a form lead's next question is Q4) with their words kept.
+    expect(second.action).toBe('ask_currently_marketed');
+    expect((await facts(conversationId)).neighborhood).toBe(
+      'התימנים 18 בכרם התימנים בתל אביב',
+    );
+  });
+});
+
+describe('a high-priority lead at the end of screening', () => {
+  it("is offered Lidor's times as a suggestion, and can decline them", async () => {
+    const deps = appointments();
+    const channel = new FakeChannel();
+    const conversationId = await seed({
+      stage: 'assessing_intent',
+      known: {
+        sellIntent: 'ready',
+        neighborhood: 'רמות',
+        timeline: 'immediate',
+        currentlyMarketed: 'no',
+      },
+      priorReply: 'כמה חדרים ובאיזו קומה?',
+      inbound: '4 חדרים קומה 3, עוברים דירה',
+    });
+
+    const offered = await run(
+      {
+        db,
+        llm: new FakeLlmClient([
+          '{"intent":"ANSWER","confidence":0.9,"extracted":{"seriousSeller":true,"sellMotivation":"עוברים דירה","additionalNotes":"4 חדרים, קומה 3"}}',
+        ]),
+        channel,
+        appointments: deps,
+      },
+      conversationId,
+    );
+    expect(offered.action).toBe('offer_slots');
+    expect(offered.stage).toBe('appointment_proposed');
+    const list = channel.sent.at(-1)!;
+    expect(list.kind === 'list' && list.body).toBe(SLOT_SUGGEST_BODY);
+    expect(list.kind === 'list' && list.rows.length).toBe(6);
+
+    await reply(conversationId, 'לא עכשיו, שלידור יתקשר אליי');
+    const declined = await run(
+      {
+        db,
+        llm: new FakeLlmClient([
+          '{"intent":"ANSWER","confidence":0.9,"declinesOfferedTimes":true,"extracted":{}}',
+        ]),
+        channel,
+        appointments: deps,
+      },
+      conversationId,
+    );
+    expect(declined.action).toBe('decline_slots');
+    expect(declined.stage).toBe('qualified');
+  });
+});
+
+describe('a listed neighbourhood typed in a variant', () => {
+  it('is taken as the answer even when the classifier does not know the variant', async () => {
+    const conversationId = await seed({
+      stage: 'screening_neighborhood',
+      known: { sellIntent: 'ready', timeline: 'immediate' },
+      priorReply: screeningQuestionFor('ask_neighborhood')!.body,
+      inbound: "שכונה ו' החדשה",
+    });
+    // The classifier omits it (not on its list) — the old dead-end.
+    const llm = new FakeLlmClient([
+      '{"intent":"ANSWER","confidence":0.8,"extracted":{}}',
+    ]);
+
+    const result = await run({ db, llm, channel: new FakeChannel() }, conversationId);
+
+    expect(result.action).toBe('ask_currently_marketed');
+    expect((await facts(conversationId)).neighborhood).toBe('שכונה ו׳');
   });
 });

@@ -58,6 +58,11 @@ wrong and has been corrected.** See [plan-v5.md](plan-v5.md) §"v5 change".
    after a close is re-asked only the one question that closed the door.
    When a client is exclusive with another agent and names when that ends, a
    **callback reminder is placed in Lidor's calendar** for that date.
+   A qualified client who scores high (ready to sell within the month — the
+   leads the bot exists to find) is **offered Lidor's real times without
+   asking**, as a suggestion they can decline; the rest are handed to Lidor to
+   call. Offered times cover morning, midday and evening across the next free
+   days, never the same hour three times.
 6. The follow-up sequence **stops immediately** when any of the following occurs:
    - the client completes the qualification process;
    - the client requests no further messages, or opts out;

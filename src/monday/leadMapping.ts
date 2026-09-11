@@ -134,11 +134,14 @@ export function statusLabelFor(
       // recipient outside the allow-list. "Missing info" is the status Lidor
       // already uses for a lead whose details need fixing.
       return LEAD_STATUS.missingInfo;
+    // Times offered but not yet chosen (appointment_proposed) count as
+    // awaiting a call: the lead is still one to call, and now that
+    // high-priority leads are offered times unasked, many sit here.
     case 'qualified':
     case 'handed_off':
-      return LEAD_STATUS.awaitingCall;
     case 'appointment_proposed':
     case 'appointment_pending':
+      return LEAD_STATUS.awaitingCall;
     case 'appointment_confirmed':
       return LEAD_STATUS.awaitingMeeting;
     default:

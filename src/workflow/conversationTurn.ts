@@ -10,7 +10,11 @@ import {
   type ConversationStage,
 } from '../db/repositories/conversations.js';
 import { getConfig } from '../config.js';
-import { countInboundMessages, recentMessages } from '../db/repositories/messages.js';
+import {
+  countInboundMessages,
+  recentMessages,
+  type Message,
+} from '../db/repositories/messages.js';
 import { isOptedOut } from '../db/repositories/optOuts.js';
 import { getLogger } from '../logger.js';
 import type { LlmClient, LlmMessage, LlmUsage } from '../llm/client.js';
@@ -33,6 +37,7 @@ import {
   SLOT_OFFER_BODY,
   SLOT_OFFER_BUTTON,
   SLOT_REOFFER_BODY,
+  SLOT_SUGGEST_BODY,
   SLOT_TAKEN_MESSAGE,
   SLOTS_DECLINED_MESSAGE,
   STALE_SLOT_MESSAGE,
@@ -52,6 +57,7 @@ import type { Conversation } from '../db/repositories/conversations.js';
 import { classifyAndExtract, WORKFLOW_OWNED_FIELDS, type Analysis } from './classify.js';
 import { isAffirmative, isNegative } from './confirmation.js';
 import {
+  CONFIDENCE_THRESHOLD,
   decideMainMenu,
   decideTransition,
   screensAllQuestions,
@@ -69,7 +75,9 @@ import {
   FACT_CHANGE_NO,
   FACT_CHANGE_YES,
   factChangeConfirmation,
+  MARKETED_YES_QUESTION,
   neighborhoodClarification,
+  retryQuestion,
   INTRO_VIDEO_PATH,
   MAIN_MENU,
   mainMenuChoiceFor,
@@ -89,7 +97,7 @@ import {
   type PersistTurnInput,
 } from './persist.js';
 import { selectVideo } from './testimonial.js';
-import { sanitizeExtraction } from './validateAnswer.js';
+import { isPlausibleNeighborhood, sanitizeExtraction } from './validateAnswer.js';
 
 /**
  * The conversation workflow — one turn, per the plan's §5.1 shape.
@@ -208,6 +216,13 @@ export interface TurnContext {
    * Meta media id (the binary is fetched from the Graph API separately).
    */
   currentMedia?: { kind: string; id: string };
+  /**
+   * Property photos among the unanswered messages this turn covers. A burst
+   * of a photo and a line of text is one turn: the text is answered and the
+   * photo is counted, rather than the photo being acknowledged and the text
+   * lost (or the reverse).
+   */
+  batchPhotoCount: number;
   /** Turns before the current one, for classification context. */
   classifyHistory: LlmMessage[];
   /** The full recent transcript, for reply generation. */
@@ -267,10 +282,28 @@ export async function loadContext(
     return null;
   }
 
-  const currentText = latest.body ?? '';
+  // Everything the person sent since the bot last spoke is answered together.
+  // People type in bursts — "תקבע לי פגישה" then "נוווו" — and a turn that reads
+  // only the last line answers "נוווו". The lines are joined for the classifier
+  // and the reply-writer; the transcript keeps them as they were sent.
+  const unanswered: Message[] = [];
+  for (let i = messageRows.length - 1; i >= 0; i -= 1) {
+    const row = messageRows[i]!;
+    if (row.direction !== 'inbound') break;
+    unanswered.unshift(row);
+  }
+  const texts = unanswered.map((m) => m.body?.trim() ?? '').filter((t) => t.length > 0);
+  const currentText = texts.join('\n');
+  const batchPhotoCount = unanswered.filter(
+    (m) => m.mediaType === 'image' && m.mediaUrl,
+  ).length;
+  // With no text at all this is a media turn (a photo, a voice note): the last
+  // media message decides its kind. With text, the text is answered and any
+  // photos are counted.
+  const lastMedia = [...unanswered].reverse().find((m) => m.mediaType && m.mediaUrl);
   const currentMedia =
-    latest.mediaType && latest.mediaUrl
-      ? { kind: latest.mediaType, id: latest.mediaUrl }
+    texts.length === 0 && lastMedia
+      ? { kind: lastMedia.mediaType!, id: lastMedia.mediaUrl! }
       : undefined;
 
   // The text transcript for the LLM. Media-only messages (no caption) contribute
@@ -289,10 +322,10 @@ export async function loadContext(
     countInboundMessages(db, conversationId, new Date(now - RATE_WINDOW_MS)),
   ]);
 
-  // History for classification excludes the current message when it carried text
-  // (it is the last user turn); a media-only current message is not in `turns`.
-  const classifyHistory =
-    currentText.length > 0 && turns.at(-1)?.role === 'user' ? turns.slice(0, -1) : turns;
+  // History for classification excludes the current messages (the trailing user
+  // turns — they are sent joined, as the one message being classified); a
+  // media-only current message is not in `turns`.
+  const classifyHistory = turns.slice(0, turns.length - texts.length);
 
   // Earlier user turns, for the abuse strike.
   const priorMalicious = classifyHistory.some(
@@ -315,6 +348,7 @@ export async function loadContext(
     currentText,
     currentMessageId: latest.providerMessageId ?? '',
     ...(currentMedia ? { currentMedia } : {}),
+    batchPhotoCount,
     classifyHistory,
     turns,
     inboundCount,
@@ -323,6 +357,21 @@ export async function loadContext(
     priorMalicious,
     ...(lastOutboundText !== undefined ? { lastOutboundText } : {}),
   };
+}
+
+/**
+ * Whether a Q2 answer reads as a place rather than filler: Hebrew, at least two
+ * words (a one-word real neighbourhood is extracted by the classifier; a
+ * one-word non-answer is "כן"), and not a yes/no.
+ */
+function looksLikeAPlace(text: string): boolean {
+  const trimmed = text.trim();
+  return (
+    isPlausibleNeighborhood(trimmed) &&
+    trimmed.split(/\s+/).length >= 2 &&
+    !isAffirmative(trimmed) &&
+    !isNegative(trimmed)
+  );
 }
 
 /** Dispatches an outbound part to the right channel method. */
@@ -901,7 +950,7 @@ export function createConversationWorkflow(
       // photo (empty text) is not mistaken for gibberish and redirected. On the very
       // first turn the opening sequence takes precedence (fall through).
       if (ctx.currentMedia?.kind === 'image' && !ctx.isFirstResponse) {
-        const photoCount = (ctx.known.photoCount ?? 0) + 1;
+        const photoCount = (ctx.known.photoCount ?? 0) + Math.max(1, ctx.batchPhotoCount);
         const extracted: KnownFacts = { ...ctx.known, photoCount };
         const alreadyAcked = ctx.lastOutboundText === PHOTO_ACK_MESSAGE;
         logger.info(
@@ -1164,6 +1213,37 @@ export function createConversationWorkflow(
         );
       }
 
+      // A bare "כן" to Q4 ("is the property marketed?"): yes — but privately or
+      // through an agent? The two are different outcomes (one continues, one
+      // asks about exclusivity), so the answer is narrowed with two buttons
+      // rather than the whole question asked again. Deterministic, no model.
+      if (
+        ctx.stage === 'screening_currently_marketed' &&
+        isAffirmative(ctx.currentText)
+      ) {
+        const { providerMessageId } = await send({
+          to: ctx.contactPhone,
+          conversation: ctx,
+          part: questionPart(MARKETED_YES_QUESTION),
+        });
+        await persist({
+          conversationId,
+          contactId: ctx.contactId,
+          contactPhone: ctx.contactPhone,
+          fromStage: ctx.stage,
+          toStage: ctx.stage,
+          action: 'ask_currently_marketed',
+          extracted: ctx.known,
+          outbound: [{ body: MARKETED_YES_QUESTION.body, providerMessageId }],
+        });
+        return {
+          stage: ctx.stage,
+          action: 'ask_currently_marketed',
+          text: MARKETED_YES_QUESTION.body,
+          sent: true,
+        };
+      }
+
       // Hebrew-only gate (review req #4): a predominantly-English message is
       // unsupported input — a fixed Hebrew reply, no classification, no fact
       // change, no flow advance. An explicit opt-out (even in English, e.g.
@@ -1287,12 +1367,30 @@ export function createConversationWorkflow(
         delete validated.extracted[lapsedChange.field];
       }
 
+      // Deterministic screening answer: when the message exactly matches one of
+      // the pending question's fixed options (a tapped button, or the same word
+      // typed), or names a listed neighbourhood, map it straight to the fact
+      // instead of trusting the classifier — which occasionally missed a terse
+      // "לא"/"מיד" and re-asked the same question. Treated as a confident answer
+      // for that field; opt-out still wins. Applied BEFORE the clarification
+      // below, so a known name is never mistaken for an unknown place.
+      const screeningAnswer = screeningAnswerFor(ctx.stage, ctx.currentText);
+      if (screeningAnswer && validated.intent !== 'OPT_OUT') {
+        validated.intent = 'ANSWER';
+        validated.confidence = Math.max(validated.confidence, 0.9);
+        Object.assign(validated.extracted, screeningAnswer);
+      }
+
       // Q2 clarification. The neighbourhood question invites a full address, but
       // nothing maps an address onto a neighbourhood — so a plausible place we do
       // not recognise (a street, another city) is checked with the person once
       // rather than stored on faith. It is held out of the facts until then.
       let clarifyNeighborhood: string | undefined;
-      if (unknownNeighborhood !== undefined && ctx.known.neighborhoodClarified !== true) {
+      if (
+        unknownNeighborhood !== undefined &&
+        screeningAnswer?.neighborhood === undefined &&
+        ctx.known.neighborhoodClarified !== true
+      ) {
         delete validated.extracted.neighborhood;
         clarifyNeighborhood = unknownNeighborhood;
       } else if (
@@ -1304,6 +1402,22 @@ export function createConversationWorkflow(
         // their original words stand — accepted verbatim, never swapped for a
         // nearest match (rule 1 in domain/neighborhoods.ts).
         validated.extracted.neighborhood = ctx.known.neighborhoodCandidate;
+      } else if (
+        ctx.stage === 'screening_neighborhood' &&
+        validated.intent === 'ANSWER' &&
+        validated.confidence >= CONFIDENCE_THRESHOLD &&
+        validated.extracted.neighborhood === undefined &&
+        ctx.known.neighborhoodCandidate === undefined &&
+        ctx.known.neighborhoodClarified !== true &&
+        looksLikeAPlace(ctx.currentText)
+      ) {
+        // A real answer to Q2 from which the classifier could name no Beer Sheva
+        // neighbourhood — a full address elsewhere ("התימנים 18, תל אביב"). Not
+        // an unknown place it *did* extract (the branch above), so it fell
+        // through to a plain re-ask, forever. It gets the same one-time
+        // clarification; a second answer without a known name is then accepted
+        // verbatim and reaches Lidor as "מיקום כפי שנמסר".
+        clarifyNeighborhood = ctx.currentText.trim();
       }
 
       // `seriousSeller` / `sellMotivation` are the answer to the intent question,
@@ -1313,20 +1427,6 @@ export function createConversationWorkflow(
       if (ctx.stage !== 'assessing_intent') {
         delete validated.extracted.seriousSeller;
         delete validated.extracted.sellMotivation;
-      }
-
-      // Deterministic screening answer: when the message exactly matches one of
-      // the pending question's fixed options (a tapped button, or the same word
-      // typed), map it straight to the enum instead of trusting the classifier —
-      // which occasionally missed a terse "לא"/"מיד" and re-asked the same
-      // question. Treated as a confident answer for that field; opt-out still
-      // wins (an option title is never an opt-out phrase, so this never fires on
-      // one, but the guard keeps that explicit).
-      const screeningAnswer = screeningAnswerFor(ctx.stage, ctx.currentText);
-      if (screeningAnswer && validated.intent !== 'OPT_OUT') {
-        validated.intent = 'ANSWER';
-        validated.confidence = Math.max(validated.confidence, 0.9);
-        Object.assign(validated.extracted, screeningAnswer);
       }
 
       // A tapped menu row is a deterministic, unambiguous choice, so it OUTRANKS a
@@ -1559,7 +1659,11 @@ export function createConversationWorkflow(
             offeredSlots,
             OFFER_HOLD_MS,
           );
-          const body = staleSlotTap ? STALE_SLOT_MESSAGE : SLOT_OFFER_BODY;
+          const body = staleSlotTap
+            ? STALE_SLOT_MESSAGE
+            : decision.bookingSuggested
+              ? SLOT_SUGGEST_BODY
+              : SLOT_OFFER_BODY;
           plan.push({
             part: {
               kind: 'list',
@@ -1645,7 +1749,13 @@ export function createConversationWorkflow(
         // "no callback-time promise" rule can never drift.
         plan.push({ part: { kind: 'text', text: canned }, storeBody: canned });
       } else if (question) {
-        plan.push({ part: questionPart(question), storeBody: question.body });
+        // Asking the same question the bot just asked: say so, rather than
+        // repeat it word for word as if nothing had been said.
+        const retry = retryQuestion(question);
+        const repeated =
+          ctx.lastOutboundText === question.body || ctx.lastOutboundText === retry.body;
+        const asked = repeated ? retry : question;
+        plan.push({ part: questionPart(asked), storeBody: asked.body });
       } else {
         const reply = await generate({
           action: decision.action,
@@ -1750,6 +1860,10 @@ export function createConversationWorkflow(
             : {}),
           // The intent check, once passed, stays passed (see nextScreeningStep).
           ...(decision.qualified === true ? { intentAssessed: true } : {}),
+          // Photos sent alongside text in this burst.
+          ...(ctx.batchPhotoCount > 0
+            ? { photoCount: (ctx.known.photoCount ?? 0) + ctx.batchPhotoCount }
+            : {}),
           // Remember the clip that went out, so the next request brings another one.
           ...(sentTestimonial
             ? {

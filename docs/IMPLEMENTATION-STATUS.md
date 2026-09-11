@@ -180,6 +180,57 @@ in `decide.test.ts`).
   the meeting is set, a complete lead gets fresh times, an incomplete one gets
   the single missing question and then the times.
 
+- [x] **A booking wish is honoured however it is phrased (2026-09-09).** A
+  qualified lead asked "למה אתה לא קובע לי פגישה?"; the classifier read an
+  objection, the objection rule ran before the booking rule, and the bot
+  apologised that Lidor would call — while able to offer his real times. Past
+  screening, `bookingIntent` now routes to `offer_slots` ahead of the
+  objection/FAQ handlers, and the classifier is told that a complaint about no
+  meeting or a question about when the call will be is the same wish.
+
+- [x] **A burst of messages is answered once, and none of it is lost
+  (2026-09-09).** The queue keyed turns by conversation id, so every message a
+  person sent while the bot was composing a reply was silently discarded —
+  "תקבע לי פגישה" among them — and a turn read only the last line of a burst.
+  Turns are now debounced 3 s per conversation (BullMQ deduplication with
+  `extend`/`replace`/`keepLastIfActive`, semantics pinned in
+  `conversationQueue.test.ts` against real Redis), and a turn answers every
+  unanswered message together: the lines are joined for the classifier, photos
+  sent alongside text are counted.
+
+- [x] **Answers the script did not anticipate (2026-09-09).** A bare "כן" to
+  Q1 was "unclear" to the classifier and the identical question was sent five
+  times; a Tel Aviv address at Q2 drew the identical Q2 forever. Now a yes to
+  Q1 maps to "wants to sell" deterministically (like a button tap); a yes to
+  Q4 is narrowed with two buttons (privately / with an agent) rather than
+  re-asked; a question asked twice in a row says "לא הצלחתי להבין" first; and a
+  real Q2 answer the classifier cannot place gets the same one-time
+  clarification as an unknown place, after which the person's words are kept.
+
+- [x] **High-priority leads are offered a meeting unasked (2026-09-11).** The
+  handoff "Lidor will call you" is where a ready lead's intent cools. A
+  qualified lead scoring ≥ `HIGH_PRIORITY_SCORE` (60 — ready + within a month,
+  or immediate) is offered real times worded as a suggestion
+  (`SLOT_SUGGEST_BODY`, `Decision.bookingSuggested`); a decline ends it with
+  the ordinary handoff. On the board, offered-but-unchosen is `ממתין לשיחה`,
+  not `ממתין לפגישה` — only a booked meeting is that.
+- [x] **Offered times cover the day (2026-09-11).** The offer read "09:00 /
+  09:00 / 19:00": one slot per day, earliest first, on an hourly grid that
+  could never show the 08:30 opening. Now a half-hour grid (`stepMs` 30 min,
+  first candidate on the grid at or after the lead time), and `pickOfferSlots`
+  lists six times — the free slot nearest 09:00 / 13:00 / 18:00 on each of the
+  next free days.
+- [x] **A listed neighbourhood typed in a variant is the answer (2026-09-11).**
+  "שכונה ו׳ החדשה" was re-asked until the person typed a listed name: the
+  classifier did not know the variant, and the normaliser only ran on what the
+  classifier extracted. Q2 now resolves the typed text through
+  `normalizeNeighborhood` deterministically, before the classifier's read and
+  before the clarification logic; ו׳ החדשה folds onto שכונה ו׳ (one board label).
+- [x] **"What did you record?" is answered, not acknowledged (2026-09-11).** A
+  qualified lead's question that also carried the re-emitted notes drew "got
+  it, I'll pass it on". A message that asks something is answered by the
+  assistant, which is told to list the recorded details for confirmation.
+
 **Known limit:** a lead who confirms a disqualifying change *after* a meeting was
 booked is closed per the spec, and the meeting stays in Lidor's calendar (the bot
 never deletes a `פעילות` item — see MONDAY-MAPPING). Lidor sees both on the

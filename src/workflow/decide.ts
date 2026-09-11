@@ -71,6 +71,26 @@ export interface Decision {
   addressFirst?: 'answer_aside' | 'handle_objection';
   /** Set with `confirm_fact_change`: the answer awaiting the person's yes. */
   pendingChange?: PendingFactChange;
+  /**
+   * Set with `offer_slots` when the lead did not ask for a meeting: the times
+   * are a suggestion made on the strength of their score, and the offer is
+   * worded as one.
+   */
+  bookingSuggested?: true;
+}
+
+/**
+ * The score from which a qualified lead is offered a consultation without
+ * asking for one. The bot's purpose is to get Lidor talking to the leads worth
+ * his time; a lead who is ready to sell within the month (ready 30 + within a
+ * month 30, or immediate 40) has said as much, and "Lidor will call you" is
+ * where that intent cools. Below it the handoff stands — the lead is Lidor's
+ * to call when he judges. See leadPriorityScore for the model.
+ */
+export const HIGH_PRIORITY_SCORE = 60;
+
+export function isHighPriority(facts: KnownFacts): boolean {
+  return (leadPriorityScore(facts) ?? 0) >= HIGH_PRIORITY_SCORE;
 }
 
 /**
@@ -262,6 +282,22 @@ export function decideTransition(
     };
   }
 
+  // 2d. Past screening, a wish to book is honoured before anything else is
+  //     read into the message. "למה אתה לא קובע לי פגישה?" is an objection in
+  //     form and a booking request in substance; routed by its form it drew an
+  //     apology that Lidor would call — from a bot that could have offered his
+  //     real times. Only when booking is wired, and never to a lead whose
+  //     meeting is already set.
+  if (
+    canBook &&
+    confident &&
+    analysis.extracted.bookingIntent === true &&
+    POST_SCREENING_STAGES.includes(current) &&
+    current !== 'appointment_confirmed'
+  ) {
+    return { nextStage: 'appointment_proposed', action: 'offer_slots', escalate };
+  }
+
   // 3. A confident objection or FAQ gets a bespoke reply, without advancing
   //    screening. An objection reaches for the stronger model to handle it.
   if (confident && analysis.intent === 'OBJECTION') {
@@ -281,24 +317,23 @@ export function decideTransition(
   }
 
   // 4. Past screening (qualified, handed off, or a meeting booked): the
-  //    conversation stays OPEN and behaves like a real assistant. A request to
-  //    book — from a lead whose meeting is not yet set — gets real times. New
-  //    property details volunteered are appended to the lead with a brief ack;
+  //    conversation stays OPEN and behaves like a real assistant (a request to
+  //    book was already honoured in 2d). New property details volunteered are
+  //    appended to the lead with a brief ack;
   //    ANYTHING ELSE — a question, a clarification ("את מה?"), a comment — is
   //    answered by the model, not brushed off with the same canned ack. Never
   //    re-run screening or re-send the handoff. (The dismissive "I already have
   //    everything, no more needed" line is reserved for the rate-limit window; see
   //    THROTTLE_MESSAGE — it must not be how the bot replies to a normal message.)
   if (POST_SCREENING_STAGES.includes(current)) {
+    // New details get a brief ack — unless the message also asks something:
+    // "what did you record, so I can check?" re-emitted the consolidated
+    // notes and was answered "got it, I'll pass it on", which is not an answer.
     if (
-      canBook &&
       confident &&
-      analysis.extracted.bookingIntent === true &&
-      current !== 'appointment_confirmed'
+      analysis.extracted.additionalNotes !== undefined &&
+      !analysis.asksQuestion
     ) {
-      return { nextStage: 'appointment_proposed', action: 'offer_slots', escalate };
-    }
-    if (confident && analysis.extracted.additionalNotes !== undefined) {
       return { nextStage: current, action: 'acknowledge_additional_info', escalate };
     }
     return { nextStage: current, action: 'assist_qualified', escalate: true };
@@ -476,14 +511,17 @@ function nextScreeningStep(
   }
   // A qualified lead who asked for a meeting is offered real times rather than a
   // promise that Lidor will call: they have already said yes, and making them
-  // wait for a callback is where that intent goes cold. Only when booking is
-  // actually wired up — otherwise the handoff is still the honest answer.
-  if (canBook && facts.bookingIntent === true) {
+  // wait for a callback is where that intent goes cold. So is a lead who did
+  // not ask but scores high — the offer is then worded as a suggestion, and a
+  // "none suits" ends it honestly. Only when booking is actually wired up —
+  // otherwise the handoff is still the honest answer.
+  if (canBook && (facts.bookingIntent === true || isHighPriority(facts))) {
     return {
       nextStage: 'appointment_proposed',
       action: 'offer_slots',
       qualified: true,
       escalate,
+      ...(facts.bookingIntent === true ? {} : { bookingSuggested: true }),
     };
   }
 

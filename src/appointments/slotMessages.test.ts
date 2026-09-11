@@ -15,6 +15,7 @@ import {
   NO_SLOTS_MESSAGE,
   SLOT_OFFER_BODY,
   SLOT_REOFFER_BODY,
+  SLOT_SUGGEST_BODY,
   SLOT_TAKEN_MESSAGE,
   SLOTS_DECLINED_MESSAGE,
   STALE_SLOT_MESSAGE,
@@ -149,6 +150,7 @@ describe('offeredTimesContext', () => {
 describe('the booking-stage lines', () => {
   it.each([
     ['re-offer', SLOT_REOFFER_BODY],
+    ['suggestion', SLOT_SUGGEST_BODY],
     ['stale slot', STALE_SLOT_MESSAGE],
     ['declined', SLOTS_DECLINED_MESSAGE],
     ['already booked', alreadyBookedMessage(SUNDAY_10, TZ)],

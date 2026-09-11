@@ -4,8 +4,9 @@ import {
   DEFAULT_SLOT_OPTIONS,
   availableSlots,
   isWithinMeetingHours,
+  OFFER_SLOT_COUNT,
   overlaps,
-  spreadAcrossDays,
+  pickOfferSlots,
   type BusyBlock,
   type SlotOptions,
 } from './availability.js';
@@ -131,46 +132,91 @@ describe('availableSlots', () => {
     expect(availableSlots(wall, OPTIONS, NOW)).toEqual([]);
   });
 
-  it('offers whole-hour start times', () => {
+  it('offers start times on the half-hour grid', () => {
     for (const slot of availableSlots([], OPTIONS, NOW).slice(0, 5)) {
-      expect(slot.start.getUTCMinutes()).toBe(0);
+      expect([0, 30]).toContain(slot.start.getUTCMinutes());
     }
   });
 });
 
-describe('spreadAcrossDays', () => {
-  it('picks one slot per day so a bad day does not stall the offer', () => {
+const localTime = (d: Date): string =>
+  new Intl.DateTimeFormat('en-GB', {
+    timeZone: TZ,
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  }).format(d);
+const localDay = (d: Date): string =>
+  new Intl.DateTimeFormat('en-CA', { timeZone: TZ, dateStyle: 'short' }).format(d);
+
+describe('the candidate grid', () => {
+  it('starts on the first half-hour at or after the lead time, never before it', () => {
+    // 09:00 local + 3 h lead = 12:00 → 12:00 is the first candidate.
+    const slots = availableSlots([], OPTIONS, NOW);
+    expect(localTime(slots[0]!.start)).toBe('12:00');
+    // 09:20 + 3 h = 12:20 → 12:30, not 12:00 (the old round-down-then-step).
+    const later = availableSlots([], OPTIONS, new Date('2026-08-23T06:20:00Z'));
+    expect(localTime(later[0]!.start)).toBe('12:30');
+  });
+
+  it('offers the 08:30 opening Lidor asked for', () => {
+    const slots = availableSlots([], OPTIONS, NOW);
+    const tomorrow = slots.filter((s) => localDay(s.start) === '2026-08-24');
+    expect(localTime(tomorrow[0]!.start)).toBe('08:30');
+  });
+});
+
+describe('pickOfferSlots', () => {
+  it('offers morning, midday and evening — not the earliest half-hour three times', () => {
+    // The live offer read "09:00 / 09:00 / 19:00": one per day, earliest first,
+    // so someone free only in the evening had nothing to pick.
     const slots = availableSlots([], OPTIONS, NOW);
 
-    const picked = spreadAcrossDays(slots, 3, TZ);
+    const picked = pickOfferSlots(slots, OFFER_SLOT_COUNT, TZ);
 
-    const days = picked.map((s) =>
-      new Intl.DateTimeFormat('en-CA', { timeZone: TZ, dateStyle: 'short' }).format(
-        s.start,
-      ),
+    expect(picked).toHaveLength(6);
+    // Today from 12:00: midday + evening; tomorrow: all three; then the next
+    // morning. Anchored on 09:00 / 13:00 / 18:00.
+    expect(picked.map((s) => `${localDay(s.start)} ${localTime(s.start)}`)).toEqual([
+      '2026-08-23 13:00',
+      '2026-08-23 18:00',
+      '2026-08-24 09:00',
+      '2026-08-24 13:00',
+      '2026-08-24 18:00',
+      '2026-08-25 09:00',
+    ]);
+  });
+
+  it('picks the free slot nearest the anchor when the anchor itself is taken', () => {
+    const busy = [block('2026-08-24T05:30:00Z', '2026-08-24T07:00:00Z')]; // 08:30–10:00 local
+    const slots = availableSlots(busy, OPTIONS, NOW);
+
+    const picked = pickOfferSlots(slots, OFFER_SLOT_COUNT, TZ);
+    const tomorrowMorning = picked.find(
+      (s) => localDay(s.start) === '2026-08-24' && localTime(s.start) < '12:00',
     );
-    expect(new Set(days).size).toBe(3);
+
+    expect(localTime(tomorrowMorning!.start)).toBe('10:00');
   });
 
-  it('returns the earliest slot of each day', () => {
-    const slots = availableSlots([], OPTIONS, NOW);
-
-    const picked = spreadAcrossDays(slots, 3, TZ);
-
-    expect(picked[0]).toEqual(slots[0]);
+  it('is in chronological order', () => {
+    const picked = pickOfferSlots(availableSlots([], OPTIONS, NOW), OFFER_SLOT_COUNT, TZ);
+    const times = picked.map((s) => s.start.getTime());
+    expect([...times].sort((a, b) => a - b)).toEqual(times);
   });
 
-  it('falls back to same-day slots when free days run out', () => {
+  it('fills from whatever is free when the week has fewer parts than wanted', () => {
     // A busy week should still produce an offer rather than silence.
     const oneDayOnly: SlotOptions = { ...OPTIONS, horizonMs: 8 * 60 * 60 * 1000 };
     const slots = availableSlots([], oneDayOnly, NOW);
 
-    const picked = spreadAcrossDays(slots, 3, TZ);
+    const picked = pickOfferSlots(slots, OFFER_SLOT_COUNT, TZ);
 
-    expect(picked.length).toBeGreaterThan(1);
+    expect(picked.length).toBeGreaterThan(2);
+    expect(picked.length).toBeLessThanOrEqual(OFFER_SLOT_COUNT);
   });
 
   it('returns nothing when there is nothing free', () => {
-    expect(spreadAcrossDays([], 3, TZ)).toEqual([]);
+    expect(pickOfferSlots([], OFFER_SLOT_COUNT, TZ)).toEqual([]);
   });
 });

@@ -13,6 +13,9 @@ import {
   INTRO_VIDEO_PATH,
   MAIN_MENU,
   mainMenuChoiceFor,
+  MARKETED_YES_QUESTION,
+  RETRY_PREFIX,
+  retryQuestion,
   screeningAnswerFor,
   screeningQuestionFor,
   WELCOME_MESSAGE,
@@ -103,9 +106,9 @@ describe('interactive content', () => {
       });
     });
 
-    it('returns undefined for free-text stages, non-options, and non-screening stages', () => {
-      // Q2 is free text — no fixed options to match.
-      expect(screeningAnswerFor('screening_neighborhood', 'רמות')).toBeUndefined();
+    it('returns undefined for non-options and non-screening stages', () => {
+      // Q2 is free text: a listed name resolves (see below); anything else does not.
+      expect(screeningAnswerFor('screening_neighborhood', 'לא יודע')).toBeUndefined();
       // Not one of Q4's option titles.
       expect(
         screeningAnswerFor('screening_currently_marketed', 'אולי בעתיד'),
@@ -184,5 +187,60 @@ describe('the fixed closes and checks', () => {
     );
     expect(place.body).toContain('הנכס בשכונת נווה זאב?');
     expect(place.body).toContain('הנכס בשכונת רמות.');
+  });
+});
+
+describe('a bare yes', () => {
+  it('answers Q1 as "yes, I want to sell"', () => {
+    expect(screeningAnswerFor('screening_sell_intent', 'כן')).toEqual({
+      sellIntent: 'ready',
+    });
+    expect(screeningAnswerFor('screening_sell_intent', 'כן!')).toEqual({
+      sellIntent: 'ready',
+    });
+    expect(screeningAnswerFor('screening_sell_intent', 'בהחלט')).toEqual({
+      sellIntent: 'ready',
+    });
+  });
+
+  it('does not answer Q4 or Q3 on its own', () => {
+    // Marketed, yes — but how? And "yes" says nothing about a timeline.
+    expect(screeningAnswerFor('screening_currently_marketed', 'כן')).toBeUndefined();
+    expect(screeningAnswerFor('screening_timeline', 'כן')).toBeUndefined();
+  });
+
+  it('is narrowed at Q4 with buttons whose taps map to the fact', () => {
+    for (const button of MARKETED_YES_QUESTION.kind === 'buttons'
+      ? MARKETED_YES_QUESTION.buttons
+      : []) {
+      expect(
+        screeningAnswerFor('screening_currently_marketed', button.title),
+      ).toBeDefined();
+    }
+  });
+});
+
+describe('retryQuestion', () => {
+  it('says the answer was not understood before asking again', () => {
+    const q = screeningQuestionFor('ask_sell_intent')!;
+    const retry = retryQuestion(q);
+    expect(retry.body).toBe(RETRY_PREFIX + q.body);
+    expect(retry.kind).toBe(q.kind);
+    expect(validateReply(retry.body, { requireQuestion: true }).ok).toBe(true);
+  });
+});
+
+describe('a listed neighbourhood typed at Q2', () => {
+  it('is the answer, in canonical form, without the classifier', () => {
+    expect(screeningAnswerFor('screening_neighborhood', "שכונה ו' החדשה")).toEqual({
+      neighborhood: 'שכונה ו׳',
+    });
+    expect(screeningAnswerFor('screening_neighborhood', 'נוה זאב')).toEqual({
+      neighborhood: 'נווה זאב',
+    });
+  });
+
+  it('leaves an unlisted place to the classifier and the clarification', () => {
+    expect(screeningAnswerFor('screening_neighborhood', 'התימנים 18')).toBeUndefined();
   });
 });

@@ -142,12 +142,12 @@ describe('busyBlocks', () => {
 });
 
 describe('findSlotsToOffer', () => {
-  it('offers slots spread across days', async () => {
+  it('offers six times across the day parts by default', async () => {
     const fake = new FakeMonday();
 
-    const slots = await findSlotsToOffer(deps(fake), 3, NOW);
+    const slots = await findSlotsToOffer(deps(fake), undefined, NOW);
 
-    expect(slots).toHaveLength(3);
+    expect(slots).toHaveLength(6);
   });
 
   it('offers nothing when the calendar is full', async () => {

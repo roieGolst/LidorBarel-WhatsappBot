@@ -14,8 +14,9 @@ import {
 import { enqueueOutboxEvent } from '../outbox/outbox.js';
 import {
   availableSlots,
+  OFFER_SLOT_COUNT,
   overlaps,
-  spreadAcrossDays,
+  pickOfferSlots,
   type BusyBlock,
   type Slot,
   type SlotOptions,
@@ -91,15 +92,15 @@ export async function busyBlocks(deps: BookingDeps): Promise<BusyBlock[]> {
   return blocks;
 }
 
-/** Slots to offer a lead, spread across days. */
+/** Slots to offer a lead: morning, midday and evening across the next free days. */
 export async function findSlotsToOffer(
   deps: BookingDeps,
-  count = 3,
+  count = OFFER_SLOT_COUNT,
   now: Date = new Date(),
 ): Promise<Slot[]> {
   const busy = await busyBlocks(deps);
   const free = availableSlots(busy, deps.slotOptions, now);
-  return spreadAcrossDays(free, count, deps.slotOptions.timeZone);
+  return pickOfferSlots(free, count, deps.slotOptions.timeZone);
 }
 
 /**

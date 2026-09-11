@@ -106,9 +106,9 @@ describe('interactive content', () => {
       });
     });
 
-    it('returns undefined for free-text stages, non-options, and non-screening stages', () => {
-      // Q2 is free text — no fixed options to match.
-      expect(screeningAnswerFor('screening_neighborhood', 'רמות')).toBeUndefined();
+    it('returns undefined for non-options and non-screening stages', () => {
+      // Q2 is free text: a listed name resolves (see below); anything else does not.
+      expect(screeningAnswerFor('screening_neighborhood', 'לא יודע')).toBeUndefined();
       // Not one of Q4's option titles.
       expect(
         screeningAnswerFor('screening_currently_marketed', 'אולי בעתיד'),
@@ -227,5 +227,20 @@ describe('retryQuestion', () => {
     expect(retry.body).toBe(RETRY_PREFIX + q.body);
     expect(retry.kind).toBe(q.kind);
     expect(validateReply(retry.body, { requireQuestion: true }).ok).toBe(true);
+  });
+});
+
+describe('a listed neighbourhood typed at Q2', () => {
+  it('is the answer, in canonical form, without the classifier', () => {
+    expect(screeningAnswerFor('screening_neighborhood', "שכונה ו' החדשה")).toEqual({
+      neighborhood: 'שכונה ו׳',
+    });
+    expect(screeningAnswerFor('screening_neighborhood', 'נוה זאב')).toEqual({
+      neighborhood: 'נווה זאב',
+    });
+  });
+
+  it('leaves an unlisted place to the classifier and the clarification', () => {
+    expect(screeningAnswerFor('screening_neighborhood', 'התימנים 18')).toBeUndefined();
   });
 });

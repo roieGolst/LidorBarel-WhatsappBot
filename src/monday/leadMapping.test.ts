@@ -20,6 +20,7 @@ describe('statusLabelFor', () => {
     ['qualified', LEAD_STATUS.awaitingCall],
     ['handed_off', LEAD_STATUS.awaitingCall],
     ['appointment_confirmed', LEAD_STATUS.awaitingMeeting],
+    ['appointment_proposed', LEAD_STATUS.awaitingCall],
     ['closed_no_response', LEAD_STATUS.noResponse],
     ['opted_out', LEAD_STATUS.askedToStop],
     ['blocked', LEAD_STATUS.askedToStop],

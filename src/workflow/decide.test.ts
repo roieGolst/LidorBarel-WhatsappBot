@@ -4,6 +4,8 @@ import {
   CONFIDENCE_THRESHOLD,
   decideMainMenu,
   decideTransition,
+  HIGH_PRIORITY_SCORE,
+  isHighPriority,
   leadPriorityScore,
   screensAllQuestions,
   type KnownFacts,
@@ -922,5 +924,94 @@ describe('with meeting times on the table (appointment_proposed)', () => {
         complete,
       ).action,
     ).toBe('stay_on_topic');
+  });
+});
+
+describe('a high-priority lead is offered a meeting without asking', () => {
+  // At the intent-check answer, with the details in hand.
+  const answered = (over: Partial<KnownFacts>): KnownFacts => ({
+    sellIntent: 'ready',
+    neighborhood: 'רמות',
+    timeline: 'within_month',
+    currentlyMarketed: 'no',
+    ...over,
+  });
+  const intentAnswer = analysis({
+    extracted: { seriousSeller: true, sellMotivation: 'עוברים דירה' },
+  });
+
+  it('ready + within a month clears the bar; a price-check in no hurry does not', () => {
+    expect(isHighPriority(answered({}))).toBe(true);
+    expect(leadPriorityScore(answered({}))).toBeGreaterThanOrEqual(HIGH_PRIORITY_SCORE);
+    expect(
+      isHighPriority(answered({ sellIntent: 'not_sure', timeline: 'no_urgency' })),
+    ).toBe(false);
+  });
+
+  it('offers real times, worded as a suggestion, when booking is wired', () => {
+    const decision = decideTransition(
+      'assessing_intent',
+      intentAnswer,
+      answered({}),
+      false,
+      true,
+    );
+    expect(decision.action).toBe('offer_slots');
+    expect(decision.nextStage).toBe('appointment_proposed');
+    expect(decision.qualified).toBe(true);
+    expect(decision.bookingSuggested).toBe(true);
+  });
+
+  it('is not a suggestion when the lead asked — that is the plain offer', () => {
+    const decision = decideTransition(
+      'assessing_intent',
+      intentAnswer,
+      answered({ bookingIntent: true }),
+      false,
+      true,
+    );
+    expect(decision.action).toBe('offer_slots');
+    expect(decision.bookingSuggested).toBeUndefined();
+  });
+
+  it('hands a lower-priority lead to Lidor as before', () => {
+    const decision = decideTransition(
+      'assessing_intent',
+      intentAnswer,
+      answered({ timeline: 'still_checking' }),
+      false,
+      true,
+    );
+    expect(decision.action).toBe('proceed_qualified');
+    expect(decision.nextStage).toBe('qualified');
+  });
+
+  it('hands every lead to Lidor when booking is not wired', () => {
+    const decision = decideTransition(
+      'assessing_intent',
+      intentAnswer,
+      answered({}),
+      false,
+      false,
+    );
+    expect(decision.action).toBe('proceed_qualified');
+  });
+});
+
+describe('a question from a qualified lead that also carries the notes', () => {
+  it('is answered, not acknowledged', () => {
+    // "מה פרטי הנכס שתיעדת?" — the classifier re-emitted the consolidated notes
+    // and the bot said "got it, I'll pass it on".
+    const decision = decideTransition(
+      'qualified',
+      analysis({ asksQuestion: true, extracted: { additionalNotes: '6 חדרים ומחסן' } }),
+      {
+        sellIntent: 'ready',
+        neighborhood: 'רמות',
+        currentlyMarketed: 'no',
+        intentAssessed: true,
+      },
+    );
+    expect(decision.action).toBe('assist_qualified');
   });
 });

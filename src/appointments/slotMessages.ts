@@ -46,6 +46,10 @@ function formatDate(slot: Slot, timeZone: string): string {
 export const SLOT_OFFER_BODY =
   'מעולה! 📅 אלה הזמנים הפנויים הקרובים של לידור — מה מתאים לך?';
 
+/** The offer to a high-priority lead who did not ask: a suggestion, not a "great!". */
+export const SLOT_SUGGEST_BODY =
+  'תודה על הפרטים! 🙏 העברתי אותם ללידור. כדי לחסוך לך זמן, אפשר לקבוע כבר עכשיו שיחת ייעוץ איתו 📅 אלה הזמנים הפנויים הקרובים — ואם אף אחד לא מתאים, פשוט תכתוב לי.';
+
 /** The list sent again after answering a question about the times. */
 export const SLOT_REOFFER_BODY =
   'אלה המועדים הפנויים הקרובים של לידור — אפשר לבחור כאן 👇';

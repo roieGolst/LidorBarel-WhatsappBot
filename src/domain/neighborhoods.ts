@@ -73,6 +73,9 @@ const ALIASES: Record<string, CanonicalNeighborhood> = {
   ד: 'שכונה ד׳',
   ה: 'שכונה ה׳',
   ו: 'שכונה ו׳',
+  // ו׳ החדשה is the newer part of ו׳; the board has one label for both.
+  'ו החדשה': 'שכונה ו׳',
+  'שכונה ו החדשה': 'שכונה ו׳',
   ט: 'שכונה ט׳',
   יא: 'שכונה י״א',
   // Alternate / former names (the parentheticals in the official list).
@@ -106,6 +109,15 @@ const CANONICAL_BY_CLEAN = new Map<string, CanonicalNeighborhood>(
   BEER_SHEVA_NEIGHBORHOODS.map((name) => [clean(name), name]),
 );
 
+/** Aliases keyed in cleaned form, so a variant matches however it was typed. */
+const ALIAS_BY_CLEAN = new Map<string, CanonicalNeighborhood>(
+  Object.entries(ALIASES).map(([alias, name]) => [clean(alias), name]),
+);
+
+function lookup(key: string): CanonicalNeighborhood | null {
+  return CANONICAL_BY_CLEAN.get(key) ?? ALIAS_BY_CLEAN.get(key) ?? null;
+}
+
 /**
  * Folds the spelling noise that should never affect a match: the geresh/apostrophe
  * marks on lettered neighborhoods, surrounding quotes, and repeated whitespace. A
@@ -116,7 +128,7 @@ function clean(raw: string): string {
     .trim()
     .replace(/[׳״'’`"]/g, '')
     .replace(/\s+/g, ' ')
-    .replace(/^שכונת\b/, 'שכונה');
+    .replace(/^שכונת(?=\s)/, 'שכונה');
 }
 
 export interface NeighborhoodMatch {
@@ -140,6 +152,8 @@ export function normalizeNeighborhood(raw: string): NeighborhoodMatch {
   const original = raw.trim();
   const key = clean(original);
 
-  const canonical = CANONICAL_BY_CLEAN.get(key) ?? ALIASES[key] ?? null;
+  // "שכונה X" / "שכונת X" for a named neighbourhood is the same place as "X".
+  const bare = key.startsWith('שכונה ') ? key.slice('שכונה '.length) : undefined;
+  const canonical = lookup(key) ?? (bare !== undefined ? lookup(bare) : null);
   return { canonical, original, known: canonical !== null };
 }

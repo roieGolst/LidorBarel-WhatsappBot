@@ -37,6 +37,7 @@ import {
   SLOT_OFFER_BODY,
   SLOT_OFFER_BUTTON,
   SLOT_REOFFER_BODY,
+  SLOT_SUGGEST_BODY,
   SLOT_TAKEN_MESSAGE,
   SLOTS_DECLINED_MESSAGE,
   STALE_SLOT_MESSAGE,
@@ -1366,12 +1367,30 @@ export function createConversationWorkflow(
         delete validated.extracted[lapsedChange.field];
       }
 
+      // Deterministic screening answer: when the message exactly matches one of
+      // the pending question's fixed options (a tapped button, or the same word
+      // typed), or names a listed neighbourhood, map it straight to the fact
+      // instead of trusting the classifier — which occasionally missed a terse
+      // "לא"/"מיד" and re-asked the same question. Treated as a confident answer
+      // for that field; opt-out still wins. Applied BEFORE the clarification
+      // below, so a known name is never mistaken for an unknown place.
+      const screeningAnswer = screeningAnswerFor(ctx.stage, ctx.currentText);
+      if (screeningAnswer && validated.intent !== 'OPT_OUT') {
+        validated.intent = 'ANSWER';
+        validated.confidence = Math.max(validated.confidence, 0.9);
+        Object.assign(validated.extracted, screeningAnswer);
+      }
+
       // Q2 clarification. The neighbourhood question invites a full address, but
       // nothing maps an address onto a neighbourhood — so a plausible place we do
       // not recognise (a street, another city) is checked with the person once
       // rather than stored on faith. It is held out of the facts until then.
       let clarifyNeighborhood: string | undefined;
-      if (unknownNeighborhood !== undefined && ctx.known.neighborhoodClarified !== true) {
+      if (
+        unknownNeighborhood !== undefined &&
+        screeningAnswer?.neighborhood === undefined &&
+        ctx.known.neighborhoodClarified !== true
+      ) {
         delete validated.extracted.neighborhood;
         clarifyNeighborhood = unknownNeighborhood;
       } else if (
@@ -1408,20 +1427,6 @@ export function createConversationWorkflow(
       if (ctx.stage !== 'assessing_intent') {
         delete validated.extracted.seriousSeller;
         delete validated.extracted.sellMotivation;
-      }
-
-      // Deterministic screening answer: when the message exactly matches one of
-      // the pending question's fixed options (a tapped button, or the same word
-      // typed), map it straight to the enum instead of trusting the classifier —
-      // which occasionally missed a terse "לא"/"מיד" and re-asked the same
-      // question. Treated as a confident answer for that field; opt-out still
-      // wins (an option title is never an opt-out phrase, so this never fires on
-      // one, but the guard keeps that explicit).
-      const screeningAnswer = screeningAnswerFor(ctx.stage, ctx.currentText);
-      if (screeningAnswer && validated.intent !== 'OPT_OUT') {
-        validated.intent = 'ANSWER';
-        validated.confidence = Math.max(validated.confidence, 0.9);
-        Object.assign(validated.extracted, screeningAnswer);
       }
 
       // A tapped menu row is a deterministic, unambiguous choice, so it OUTRANKS a
@@ -1654,7 +1659,11 @@ export function createConversationWorkflow(
             offeredSlots,
             OFFER_HOLD_MS,
           );
-          const body = staleSlotTap ? STALE_SLOT_MESSAGE : SLOT_OFFER_BODY;
+          const body = staleSlotTap
+            ? STALE_SLOT_MESSAGE
+            : decision.bookingSuggested
+              ? SLOT_SUGGEST_BODY
+              : SLOT_OFFER_BODY;
           plan.push({
             part: {
               kind: 'list',

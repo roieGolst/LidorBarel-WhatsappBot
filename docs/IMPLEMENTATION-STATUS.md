@@ -207,6 +207,30 @@ in `decide.test.ts`).
   real Q2 answer the classifier cannot place gets the same one-time
   clarification as an unknown place, after which the person's words are kept.
 
+- [x] **High-priority leads are offered a meeting unasked (2026-09-11).** The
+  handoff "Lidor will call you" is where a ready lead's intent cools. A
+  qualified lead scoring ≥ `HIGH_PRIORITY_SCORE` (60 — ready + within a month,
+  or immediate) is offered real times worded as a suggestion
+  (`SLOT_SUGGEST_BODY`, `Decision.bookingSuggested`); a decline ends it with
+  the ordinary handoff. On the board, offered-but-unchosen is `ממתין לשיחה`,
+  not `ממתין לפגישה` — only a booked meeting is that.
+- [x] **Offered times cover the day (2026-09-11).** The offer read "09:00 /
+  09:00 / 19:00": one slot per day, earliest first, on an hourly grid that
+  could never show the 08:30 opening. Now a half-hour grid (`stepMs` 30 min,
+  first candidate on the grid at or after the lead time), and `pickOfferSlots`
+  lists six times — the free slot nearest 09:00 / 13:00 / 18:00 on each of the
+  next free days.
+- [x] **A listed neighbourhood typed in a variant is the answer (2026-09-11).**
+  "שכונה ו׳ החדשה" was re-asked until the person typed a listed name: the
+  classifier did not know the variant, and the normaliser only ran on what the
+  classifier extracted. Q2 now resolves the typed text through
+  `normalizeNeighborhood` deterministically, before the classifier's read and
+  before the clarification logic; ו׳ החדשה folds onto שכונה ו׳ (one board label).
+- [x] **"What did you record?" is answered, not acknowledged (2026-09-11).** A
+  qualified lead's question that also carried the re-emitted notes drew "got
+  it, I'll pass it on". A message that asks something is answered by the
+  assistant, which is told to list the recorded details for confirmation.
+
 **Known limit:** a lead who confirms a disqualifying change *after* a meeting was
 booked is closed per the spec, and the meeting stays in Lidor's calendar (the bot
 never deletes a `פעילות` item — see MONDAY-MAPPING). Lidor sees both on the

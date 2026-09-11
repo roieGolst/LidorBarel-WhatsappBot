@@ -16,12 +16,21 @@ describe('normalizeNeighborhood', () => {
   it('normalizes spelling variants and the שכונת prefix', () => {
     expect(normalizeNeighborhood('נוה זאב').canonical).toBe('נווה זאב');
     expect(normalizeNeighborhood('שכונת נווה זאב').canonical).toBe('נווה זאב');
+    // The prefix fold itself, not an alias: \b is ASCII-only and never matched
+    // after Hebrew, so this used to depend on a listed alias existing.
+    expect(normalizeNeighborhood('שכונת ט׳').canonical).toBe('שכונה ט׳');
   });
 
   it('recognises the newer neighborhoods', () => {
     expect(normalizeNeighborhood('רובע החדשנות').known).toBe(true);
     expect(normalizeNeighborhood('שכונה י״א').canonical).toBe('שכונה י״א');
     expect(normalizeNeighborhood('יא').canonical).toBe('שכונה י״א');
+  });
+
+  it('folds ו׳ החדשה onto שכונה ו׳ — the board has one label for both', () => {
+    expect(normalizeNeighborhood("שכונה ו' החדשה").canonical).toBe('שכונה ו׳');
+    expect(normalizeNeighborhood('ו׳ החדשה').canonical).toBe('שכונה ו׳');
+    expect(normalizeNeighborhood('שכונת ו החדשה').canonical).toBe('שכונה ו׳');
   });
 
   it('folds alternate / former names onto the canonical name', () => {

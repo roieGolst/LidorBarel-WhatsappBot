@@ -93,8 +93,14 @@ sets the status unopposed. Only creation queues it, so it cannot loop.
 |---|---|---|
 | awaiting_first_contact | `2` ליד חדש | לידים חדשים |
 | engaged / screening_* | `2` ליד חדש | לידים חדשים |
-| qualified / handed_off | `14` ממתין לשיחה | לידים בטיפול |
+| qualified / handed_off / appointment_proposed | `14` ממתין לשיחה | לידים בטיפול |
 | appointment_confirmed | `0` ממתין לפגישה ייעוץ | לידים בטיפול |
+
+`appointment_proposed` — times offered, none chosen yet — is `ממתין לשיחה`, not
+`ממתין לפגישה`: the lead is still one to call, and since high-priority leads
+are offered times without asking, many sit here. Only a booked meeting is
+`ממתין לפגישה ייעוץ`. `שכונה ו׳ החדשה` folds onto the `שכונה ו׳` label; if Lidor
+wants it separate, append it to `BEER_SHEVA_NEIGHBORHOODS` (never reorder).
 | disqualified | `7` exclusive · `8` uncooperative · `9` no_urgency · `10` not_selling | לידים לא מתאימים — **bot moves** |
 | opted_out | `6` ביקש להפסיק | לידים לא מתאימים — **bot moves** |
 | closed_no_response | `3` ליד ללא מענה | לידים ללא מענה |

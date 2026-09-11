@@ -6,6 +6,7 @@ import { findSlotsToOffer, latestOffer, recordOffer } from '../appointments/book
 import {
   formatSlot,
   SLOT_REOFFER_BODY,
+  SLOT_SUGGEST_BODY,
   SLOTS_DECLINED_MESSAGE,
   STALE_SLOT_MESSAGE,
 } from '../appointments/slotMessages.js';
@@ -689,5 +690,75 @@ describe('answers the script did not anticipate', () => {
     expect((await facts(conversationId)).neighborhood).toBe(
       'התימנים 18 בכרם התימנים בתל אביב',
     );
+  });
+});
+
+describe('a high-priority lead at the end of screening', () => {
+  it("is offered Lidor's times as a suggestion, and can decline them", async () => {
+    const deps = appointments();
+    const channel = new FakeChannel();
+    const conversationId = await seed({
+      stage: 'assessing_intent',
+      known: {
+        sellIntent: 'ready',
+        neighborhood: 'רמות',
+        timeline: 'immediate',
+        currentlyMarketed: 'no',
+      },
+      priorReply: 'כמה חדרים ובאיזו קומה?',
+      inbound: '4 חדרים קומה 3, עוברים דירה',
+    });
+
+    const offered = await run(
+      {
+        db,
+        llm: new FakeLlmClient([
+          '{"intent":"ANSWER","confidence":0.9,"extracted":{"seriousSeller":true,"sellMotivation":"עוברים דירה","additionalNotes":"4 חדרים, קומה 3"}}',
+        ]),
+        channel,
+        appointments: deps,
+      },
+      conversationId,
+    );
+    expect(offered.action).toBe('offer_slots');
+    expect(offered.stage).toBe('appointment_proposed');
+    const list = channel.sent.at(-1)!;
+    expect(list.kind === 'list' && list.body).toBe(SLOT_SUGGEST_BODY);
+    expect(list.kind === 'list' && list.rows.length).toBe(6);
+
+    await reply(conversationId, 'לא עכשיו, שלידור יתקשר אליי');
+    const declined = await run(
+      {
+        db,
+        llm: new FakeLlmClient([
+          '{"intent":"ANSWER","confidence":0.9,"declinesOfferedTimes":true,"extracted":{}}',
+        ]),
+        channel,
+        appointments: deps,
+      },
+      conversationId,
+    );
+    expect(declined.action).toBe('decline_slots');
+    expect(declined.stage).toBe('qualified');
+  });
+});
+
+describe('a listed neighbourhood typed in a variant', () => {
+  it('is taken as the answer even when the classifier does not know the variant', async () => {
+    const conversationId = await seed({
+      stage: 'screening_neighborhood',
+      known: { sellIntent: 'ready', timeline: 'immediate' },
+      priorReply: screeningQuestionFor('ask_neighborhood')!.body,
+      inbound: "שכונה ו' החדשה",
+    });
+    // The classifier omits it (not on its list) — the old dead-end.
+    const llm = new FakeLlmClient([
+      '{"intent":"ANSWER","confidence":0.8,"extracted":{}}',
+    ]);
+
+    const result = await run({ db, llm, channel: new FakeChannel() }, conversationId);
+
+    expect(result.action).toBe('ask_currently_marketed');
+    expect((await facts(conversationId)).neighborhood).toBe('שכונה ו׳');
   });
 });

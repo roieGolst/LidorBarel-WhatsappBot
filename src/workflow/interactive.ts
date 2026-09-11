@@ -1,6 +1,7 @@
 import { resolve } from 'node:path';
 import type { ConversationStage } from '../db/repositories/conversations.js';
 import type { ListRow, ReplyButton } from '../whatsapp/channel.js';
+import { normalizeNeighborhood } from '../domain/neighborhoods.js';
 import { isAffirmative } from './confirmation.js';
 import type { DisqualificationReason, KnownFacts, TurnAction } from './decide.js';
 
@@ -378,6 +379,15 @@ export function screeningAnswerFor(
   stage: ConversationStage,
   text: string,
 ): Partial<KnownFacts> | undefined {
+  // Q2 is free text, but a name on the list — or one of its aliases and
+  // spellings — is as unambiguous as a tapped button. Resolved here so it does
+  // not depend on the classifier knowing every variant ("שכונה ו' החדשה" was
+  // re-asked until the person typed a listed name).
+  if (stage === 'screening_neighborhood') {
+    const match = normalizeNeighborhood(text);
+    return match.canonical ? { neighborhood: match.canonical } : undefined;
+  }
+
   const action = STAGE_TO_SCREENING_ACTION[stage];
   if (!action) return undefined;
   const question = SCREENING_QUESTIONS[action];

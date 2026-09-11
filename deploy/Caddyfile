@@ -1,0 +1,6 @@
+# TLS is automatic: Caddy obtains and renews a Let's Encrypt certificate for
+# $DOMAIN as long as the DNS A record points at this box and 80/443 are open.
+{$DOMAIN} {
+	encode gzip
+	reverse_proxy app:3000
+}

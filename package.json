@@ -2,7 +2,7 @@
   "name": "lidor-whatsapp-bot",
   "version": "0.1.0",
   "private": true,
-  "description": "Opt-in WhatsApp lead bot for Lidor Barel real estate \u2014 proactively contacts consenting Meta lead-form leads, qualifies them, syncs to Monday.com, books appointments.",
+  "description": "Opt-in WhatsApp lead bot for Lidor Barel real estate — proactively contacts consenting Meta lead-form leads, qualifies them, syncs to Monday.com, books appointments.",
   "type": "module",
   "engines": {
     "node": ">=24"
@@ -21,6 +21,7 @@
     "check": "npm run typecheck && npm run lint && npm run format:check && npm run test",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate",
+    "db:migrate:prod": "node dist/db/migrate.js",
     "db:studio": "drizzle-kit studio",
     "db:up": "docker compose up -d",
     "db:down": "docker compose down",

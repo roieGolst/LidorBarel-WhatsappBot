@@ -30,6 +30,17 @@ export const FOLLOW_UP_MESSAGES: readonly string[] = [
 ] as const;
 
 /**
+ * The nudge for a lead who was offered meeting times and went quiet: the times
+ * are still open, and here they are again. Sent as the body of a fresh list of
+ * Lidor's free slots, so the person has something to tap rather than a
+ * question to answer. Replaces the ladder for that stage — a generic "shall we
+ * start?" to someone one tap away from a booked meeting reads as though the
+ * offer never happened.
+ */
+export const APPOINTMENT_NUDGE_BODY =
+  'עדיין אפשר לקבוע 📅 אלה המועדים הפנויים הקרובים של לידור — אפשר לבחור כאן, ואם אף אחד לא מתאים פשוט תכתוב לי.';
+
+/**
  * The message for a given follow-up number (1-based).
  *
  * Clamped to the ladder rather than indexed blindly: raising the cap in config

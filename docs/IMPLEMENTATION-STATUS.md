@@ -214,6 +214,17 @@ in `decide.test.ts`).
   (`SLOT_SUGGEST_BODY`, `Decision.bookingSuggested`); a decline ends it with
   the ordinary handoff. On the board, offered-but-unchosen is `ממתין לשיחה`,
   not `ממתין לפגישה` — only a booked meeting is that.
+- [x] **The nudge to a lead who was offered times re-offers them (2026-09-15).**
+  With high-priority leads now offered a meeting unasked, many go quiet on that
+  message, and the 24-hour follow-up was the generic "shall we start?" — the
+  offer was lost. Inside the messaging window, a due follow-up for
+  `appointment_proposed` now sends `APPOINTMENT_NUDGE_BODY` as a fresh list of
+  Lidor's free times (`findSlotsToOffer` at send time, recorded with
+  `recordOffer`), so a tap books through the ordinary slot-selection path.
+  Outside the window the approved template goes as before; an empty calendar,
+  or booking not wired, falls back to the ladder. Caps, hours, stop conditions,
+  the choke point and the board projection are untouched; the stage stays
+  `appointment_proposed`.
 - [x] **Offered times cover the day (2026-09-11).** The offer read "09:00 /
   09:00 / 19:00": one slot per day, earliest first, on an hourly grid that
   could never show the 08:30 opening. Now a half-hour grid (`stepMs` 30 min,

@@ -7,6 +7,7 @@ import { getFreshMediaId, saveMediaId } from './db/repositories/mediaUploads.js'
 import { createGraphLeadsClient } from './leads/graphLeads.js';
 import { createMondayClient, type MondayClient } from './monday/client.js';
 import { DEFAULT_SLOT_OPTIONS } from './appointments/availability.js';
+import type { BookingDeps } from './appointments/booking.js';
 import { startOutboxWorker, type OutboxWorker } from './outbox/outboxWorker.js';
 import {
   startOutreachSweeper,
@@ -51,6 +52,8 @@ interface ConversationPipeline {
   checkpointer: PostgresSaver;
   /** Shared with the outreach sweeper, so both send through one channel. */
   channel: WhatsAppChannel;
+  /** Booking, when Monday is configured — shared with the sweeper's nudges. */
+  appointments: BookingDeps | undefined;
 }
 
 /**
@@ -91,6 +94,7 @@ async function buildConversationPipeline(
   let checkpointer: PostgresSaver | undefined;
   let queue: ConversationQueue | undefined;
   let worker: ConversationWorker | undefined;
+  let appointments: BookingDeps | undefined;
   try {
     // Guaranteed by the guard above: the Anthropic key is present.
     const llm = new AnthropicLlmClient(config.anthropicApiKey);
@@ -105,6 +109,18 @@ async function buildConversationPipeline(
     // that owns deciding when.
     await checkpointer.setup();
 
+    // Booking needs the CRM: a consultation is a פעילות item, and Monday's
+    // calendar sync turns it into a real event. Without a Monday client the
+    // bot hands a booking request to Lidor instead of offering times. Shared
+    // with the follow-up sweeper, whose nudge re-offers times.
+    appointments = mondayForBooking
+      ? {
+          db,
+          monday: mondayForBooking,
+          slotOptions: { ...DEFAULT_SLOT_OPTIONS, timeZone: config.timezone },
+        }
+      : undefined;
+
     queue = createConversationQueue(config.redisUrl);
     worker = createConversationWorker(
       config.redisUrl,
@@ -112,18 +128,7 @@ async function buildConversationPipeline(
         db,
         llm,
         channel,
-        // Booking needs the CRM: a consultation is a פעילות item, and Monday's
-        // calendar sync turns it into a real event. Without a Monday client the
-        // bot hands a booking request to Lidor instead of offering times.
-        ...(mondayForBooking
-          ? {
-              appointments: {
-                db,
-                monday: mondayForBooking,
-                slotOptions: { ...DEFAULT_SLOT_OPTIONS, timeZone: config.timezone },
-              },
-            }
-          : {}),
+        ...(appointments ? { appointments } : {}),
         // Scheduling is gated on outreach being enabled: the sweeper is what
         // sends these, so scheduling without it would only accumulate due rows
         // that nothing ever picks up.
@@ -143,7 +148,7 @@ async function buildConversationPipeline(
       checkpointer,
     );
 
-    return { queue, worker, checkpointer, channel };
+    return { queue, worker, checkpointer, channel, appointments };
   } catch (error) {
     // A partial build must not leak connections. Anything constructed before the
     // failure is torn down before we fall back to ingestion-only.
@@ -266,6 +271,7 @@ async function main(): Promise<void> {
         headerVideoPath: INTRO_VIDEO_PATH,
       },
       followUp: { limits: followUpLimits, timeZone: config.timezone },
+      appointments: pipeline.appointments,
       gracePeriodMs: config.outreachGracePeriodMinutes * 60 * 1000,
       intervalMs: config.outreachSweepSeconds * 1000,
       batchSize: config.outreachBatchSize,

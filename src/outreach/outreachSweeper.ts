@@ -1,3 +1,4 @@
+import type { BookingDeps } from '../appointments/booking.js';
 import { getLogger } from '../logger.js';
 import {
   findLeadsAwaitingFirstContact,
@@ -32,6 +33,8 @@ export interface OutreachSweeperOptions extends FirstContactDeps {
   followUpLimits: FollowUpLimits;
   /** Templates for nudging outside the window, by situation. */
   followUpTemplates?: FollowUpTemplates | undefined;
+  /** Booking, when wired up — a nudge to a lead offered times re-offers them. */
+  appointments?: BookingDeps | undefined;
   /** How long to leave a fresh lead alone before reaching out. */
   gracePeriodMs: number;
   /** How often to look for due leads. */
@@ -119,6 +122,7 @@ export function startOutreachSweeper(options: OutreachSweeperOptions): OutreachS
             limits: options.followUpLimits,
             timeZone: options.timeZone,
             templates: options.followUpTemplates,
+            appointments: options.appointments,
           },
           conversationId,
         );

@@ -1,6 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import { MAX_REPLY_LENGTH, findBannedTerms } from '../workflow/validate.js';
-import { FOLLOW_UP_MESSAGES, followUpMessage } from './followUpMessages.js';
+import {
+  APPOINTMENT_NUDGE_BODY,
+  FOLLOW_UP_MESSAGES,
+  followUpMessage,
+} from './followUpMessages.js';
+
+/** Every hand-written nudge, the booking one included. */
+const ALL_NUDGES = [...FOLLOW_UP_MESSAGES, APPOINTMENT_NUDGE_BODY];
 
 /**
  * Follow-ups bypass the model, so they also bypass the validator that guards
@@ -8,12 +15,16 @@ import { FOLLOW_UP_MESSAGES, followUpMessage } from './followUpMessages.js';
  * hand-written copy cannot drift off-voice where generated copy could not.
  */
 describe('follow-up wording', () => {
-  it.each(FOLLOW_UP_MESSAGES)('uses no banned term: %s', (message) => {
+  it.each(ALL_NUDGES)('uses no banned term: %s', (message) => {
     expect(findBannedTerms(message)).toEqual([]);
   });
 
-  it.each(FOLLOW_UP_MESSAGES)('stays within the reply length limit', (message) => {
+  it.each(ALL_NUDGES)('stays within the reply length limit', (message) => {
     expect(message.length).toBeLessThanOrEqual(MAX_REPLY_LENGTH);
+  });
+
+  it('the booking nudge asks nothing — the list underneath is the question', () => {
+    expect(APPOINTMENT_NUDGE_BODY).not.toContain('?');
   });
 
   it('tells an unresponsive lead how to stop before the cap does', () => {

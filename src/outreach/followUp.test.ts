@@ -1,5 +1,10 @@
 import { eq } from 'drizzle-orm';
+import type { PostgresSaver } from '@langchain/langgraph-checkpoint-postgres';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { DEFAULT_SLOT_OPTIONS } from '../appointments/availability.js';
+import { latestOffer } from '../appointments/booking.js';
+import { ACTIVITY_COLUMNS } from '../monday/leadMapping.js';
+import type { MondayClient } from '../monday/client.js';
 import type { Database } from '../db/client.js';
 import { upsertContactByPhone, type Contact } from '../db/repositories/contacts.js';
 import {
@@ -7,21 +12,29 @@ import {
   recordInboundActivity,
   type ConversationStage,
 } from '../db/repositories/conversations.js';
+import { recordInboundMessage } from '../db/repositories/messages.js';
 import { recordOptOut } from '../db/repositories/optOuts.js';
 import { conversations, messages, outbox } from '../db/schema.js';
-import { setupTestDatabase, truncateAll } from '../db/testing.js';
+import { setupTestDatabase, testDatabaseUrl, truncateAll } from '../db/testing.js';
+import { FakeLlmClient } from '../llm/fake.js';
 import { FakeChannel } from '../whatsapp/fakeChannel.js';
+import { createCheckpointer } from '../workflow/checkpointer.js';
+import { createConversationWorkflow } from '../workflow/conversationTurn.js';
 import { findConversationsDueForFollowUp, sendFollowUp } from './followUp.js';
-import { FOLLOW_UP_MESSAGES } from './followUpMessages.js';
+import { APPOINTMENT_NUDGE_BODY, FOLLOW_UP_MESSAGES } from './followUpMessages.js';
 import type { FollowUpLimits } from './followUpPolicy.js';
 
 let db: Database;
+let checkpointer: PostgresSaver;
 
 beforeAll(async () => {
   db = await setupTestDatabase();
+  checkpointer = createCheckpointer(testDatabaseUrl());
+  await checkpointer.setup();
 });
 
 afterAll(async () => {
+  await checkpointer.end();
   await db.close();
 });
 
@@ -459,5 +472,184 @@ describe('findConversationsDueForFollowUp', () => {
     await seed({ dueAt: new Date(NOW.getTime() - 3000) });
 
     expect(await findConversationsDueForFollowUp(db, 2, NOW)).toHaveLength(2);
+  });
+});
+
+/** Stands in for the פעילות board; `busy` fills the whole horizon. */
+class FakeCalendar {
+  created: { name: string; values: Record<string, unknown> }[] = [];
+  private items: {
+    id: string;
+    columnValues: Record<string, { text: null; value: string }>;
+  }[] = [];
+  private counter = 0;
+  listItems() {
+    return Promise.resolve(this.items);
+  }
+  createItem(_board: string, name: string, values: Record<string, unknown>) {
+    this.created.push({ name, values });
+    return Promise.resolve(`activity-${++this.counter}`);
+  }
+  fullyBooked(): void {
+    const asValue = (d: Date) =>
+      JSON.stringify({
+        date: d.toISOString().slice(0, 10),
+        time: d.toISOString().slice(11, 19),
+      });
+    this.items.push({
+      id: 'busy-all',
+      columnValues: {
+        [ACTIVITY_COLUMNS.start]: {
+          text: null,
+          value: asValue(new Date(NOW.getTime() - DAY)),
+        },
+        [ACTIVITY_COLUMNS.end]: {
+          text: null,
+          value: asValue(new Date(NOW.getTime() + 30 * DAY)),
+        },
+      },
+    });
+  }
+}
+
+function bookingDeps(calendar: FakeCalendar) {
+  return {
+    db,
+    monday: calendar as unknown as MondayClient,
+    slotOptions: { ...DEFAULT_SLOT_OPTIONS, timeZone: TZ },
+  };
+}
+
+describe('a lead who was offered times and went quiet', () => {
+  it('is nudged with the times again — a fresh list they can tap', async () => {
+    const channel = new FakeChannel();
+    const calendar = new FakeCalendar();
+    const { conversationId } = await seed({
+      stage: 'appointment_proposed',
+      windowOpen: true,
+    });
+
+    const outcome = await sendFollowUp(
+      { ...deps(channel), appointments: bookingDeps(calendar) },
+      conversationId,
+      NOW,
+    );
+
+    expect(outcome).toMatchObject({ sent: true, followUpNumber: 1 });
+    const sent = channel.sent[0]!;
+    expect(sent.kind).toBe('list');
+    expect(sent.kind === 'list' && sent.body).toBe(APPOINTMENT_NUDGE_BODY);
+    expect(sent.kind === 'list' && sent.rows.length).toBeGreaterThan(0);
+
+    // The re-offer is recorded, so a tap on it is a real choice; the stage is
+    // unchanged — they are still choosing — and the ladder counts the nudge.
+    const offer = await latestOffer(db, conversationId);
+    expect(offer).toBeDefined();
+    const [conversation] = await db
+      .select()
+      .from(conversations)
+      .where(eq(conversations.id, conversationId));
+    expect(conversation?.stage).toBe('appointment_proposed');
+    expect(conversation?.followupCount).toBe(1);
+    expect(conversation?.nextFollowupAt).not.toBeNull();
+  });
+
+  it('a tap on the re-offered list books the meeting', async () => {
+    const channel = new FakeChannel();
+    const calendar = new FakeCalendar();
+    const appointments = bookingDeps(calendar);
+    const { conversationId } = await seed({
+      stage: 'appointment_proposed',
+      windowOpen: true,
+    });
+
+    await sendFollowUp({ ...deps(channel), appointments }, conversationId, NOW);
+    const list = channel.sent[0]!;
+    const tapped = list.kind === 'list' ? list.rows[0]!.title : '';
+
+    // WhatsApp echoes a tapped row as its title; ingestion records it and the
+    // conversation worker runs the turn.
+    await recordInboundMessage(db, {
+      conversationId,
+      providerMessageId: `tap-${conversationId}`,
+      body: tapped,
+      createdAt: new Date(),
+    });
+    await recordInboundActivity(db, conversationId, new Date());
+    const result = await createConversationWorkflow(
+      { db, llm: new FakeLlmClient([]), channel, appointments },
+      checkpointer,
+    ).invoke(conversationId, { configurable: { thread_id: conversationId } });
+
+    expect(result.action).toBe('confirm_booking');
+    expect(result.stage).toBe('appointment_confirmed');
+    expect(calendar.created).toHaveLength(1);
+  });
+
+  it('outside the window gets the template, as anyone does', async () => {
+    const channel = new FakeChannel();
+    const { conversationId } = await seed({
+      stage: 'appointment_proposed',
+      windowOpen: false,
+    });
+
+    const outcome = await sendFollowUp(
+      { ...deps(channel, TEMPLATE), appointments: bookingDeps(new FakeCalendar()) },
+      conversationId,
+      NOW,
+    );
+
+    expect(outcome).toMatchObject({ sent: true });
+    expect(channel.sent[0]).toMatchObject({ kind: 'template' });
+    expect(await latestOffer(db, conversationId)).toBeUndefined();
+  });
+
+  it('falls back to the ordinary nudge when nothing is free', async () => {
+    const channel = new FakeChannel();
+    const calendar = new FakeCalendar();
+    calendar.fullyBooked();
+    const { conversationId } = await seed({
+      stage: 'appointment_proposed',
+      windowOpen: true,
+    });
+
+    await sendFollowUp(
+      { ...deps(channel), appointments: bookingDeps(calendar) },
+      conversationId,
+      NOW,
+    );
+
+    expect(channel.sent[0]).toMatchObject({ kind: 'text', text: FOLLOW_UP_MESSAGES[0] });
+    expect(await latestOffer(db, conversationId)).toBeUndefined();
+  });
+
+  it('gets the ordinary nudge when booking is not wired up', async () => {
+    const channel = new FakeChannel();
+    const { conversationId } = await seed({
+      stage: 'appointment_proposed',
+      windowOpen: true,
+    });
+
+    await sendFollowUp(deps(channel), conversationId, NOW);
+
+    expect(channel.sent[0]).toMatchObject({ kind: 'text', text: FOLLOW_UP_MESSAGES[0] });
+  });
+
+  it('still stops at the cap', async () => {
+    const channel = new FakeChannel();
+    const { conversationId } = await seed({
+      stage: 'appointment_proposed',
+      windowOpen: true,
+      followupCount: 5,
+    });
+
+    const outcome = await sendFollowUp(
+      { ...deps(channel), appointments: bookingDeps(new FakeCalendar()) },
+      conversationId,
+      NOW,
+    );
+
+    expect(outcome).toMatchObject({ sent: false, reason: 'max_followups_reached' });
+    expect(channel.sent).toHaveLength(0);
   });
 });

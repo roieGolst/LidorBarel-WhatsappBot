@@ -15,7 +15,14 @@ import {
   OptedOutError,
 } from '../whatsapp/guardedSend.js';
 import { enqueueOutboxEvent } from '../outbox/outbox.js';
-import { followUpMessage } from './followUpMessages.js';
+import {
+  findSlotsToOffer,
+  OFFER_HOLD_MS,
+  recordOffer,
+  type BookingDeps,
+} from '../appointments/booking.js';
+import { SLOT_OFFER_BUTTON, slotListRows } from '../appointments/slotMessages.js';
+import { APPOINTMENT_NUDGE_BODY, followUpMessage } from './followUpMessages.js';
 import {
   decideFollowUp,
   scheduleNextFollowUp,
@@ -60,6 +67,12 @@ export interface FollowUpDeps {
    * one means that situation cannot be nudged — see {@link sendFollowUp}.
    */
   templates?: FollowUpTemplates | undefined;
+  /**
+   * Booking, when it is wired up. Lets the nudge to a lead who was offered
+   * times re-offer them (fresh) instead of asking whether they want to start.
+   * Absent, that lead gets the ordinary ladder.
+   */
+  appointments?: BookingDeps | undefined;
 }
 
 /**
@@ -189,7 +202,22 @@ export async function sendFollowUp(
     return { sent: false, reason: 'no_template_available' };
   }
 
-  const body = followUpMessage(followUpNumber);
+  // A lead who was offered times and went quiet is one tap away from a
+  // booking, so inside the window the nudge is the offer again — a fresh list,
+  // since the calendar may have moved, recorded so a tap on it books through
+  // the ordinary slot-selection path. Only free-form can carry a list; outside
+  // the window the template goes as for anyone else. An empty calendar falls
+  // back to the ladder rather than promising times that do not exist.
+  const reoffer =
+    windowOpen && claimed.stage === 'appointment_proposed' && deps.appointments
+      ? await findSlotsToOffer(deps.appointments, undefined, now)
+      : [];
+  if (reoffer.length > 0) {
+    await recordOffer(deps.appointments!, conversationId, reoffer, OFFER_HOLD_MS, now);
+  }
+
+  const body =
+    reoffer.length > 0 ? APPOINTMENT_NUDGE_BODY : followUpMessage(followUpNumber);
 
   let providerMessageId: string;
   try {
@@ -198,10 +226,18 @@ export async function sendFollowUp(
       windowOpen
         ? { kind: 'reply', to: contact.phone, conversation: claimed }
         : { kind: 'proactive', to: contact.phone, contact, isTemplate: true },
-      () =>
-        windowOpen
-          ? deps.channel.sendText(contact.phone, body)
-          : deps.channel.sendTemplate(contact.phone, template!),
+      () => {
+        if (!windowOpen) return deps.channel.sendTemplate(contact.phone, template!);
+        if (reoffer.length > 0) {
+          return deps.channel.sendList(
+            contact.phone,
+            body,
+            SLOT_OFFER_BUTTON,
+            slotListRows(reoffer, deps.appointments!.slotOptions.timeZone),
+          );
+        }
+        return deps.channel.sendText(contact.phone, body);
+      },
     );
     providerMessageId = result.providerMessageId;
   } catch (error) {
@@ -279,12 +315,21 @@ export async function sendFollowUp(
       fromStage: claimed.stage,
       toStage: claimed.stage,
       actor: 'system',
-      metadata: { followUpNumber, viaTemplate: !windowOpen },
+      metadata: {
+        followUpNumber,
+        viaTemplate: !windowOpen,
+        offeredSlots: reoffer.length,
+      },
     });
   });
 
   logger.info(
-    { conversationId, followUpNumber, viaTemplate: !windowOpen },
+    {
+      conversationId,
+      followUpNumber,
+      viaTemplate: !windowOpen,
+      offeredSlots: reoffer.length,
+    },
     'follow-up sent',
   );
   return { sent: true, providerMessageId, followUpNumber };

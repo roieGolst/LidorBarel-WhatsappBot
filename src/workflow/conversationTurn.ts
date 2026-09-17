@@ -29,6 +29,7 @@ import {
   bookSlot,
   findSlotsToOffer,
   latestOffer,
+  OFFER_HOLD_MS,
   recordOffer,
   type BookingDeps,
 } from '../appointments/booking.js';
@@ -450,14 +451,6 @@ const DEV_RESET_CONFIRMATION =
  * the pending question still stands. On a burst of photos it is sent once (see
  * the dedupe in the entrypoint), not once per image.
  */
-/**
- * How long an offer of times stays honourable.
- *
- * Not a reservation — nothing is written to the calendar until a time is chosen.
- * It bounds how long the offer is trusted, after which availability is
- * recomputed rather than assumed.
- */
-const OFFER_HOLD_MS = 30 * 60 * 1000;
 
 const PHOTO_ACK_MESSAGE = 'קיבלתי את התמונות, תודה! 📸 אצרף אותן לפרטים שיעברו ללידור.';
 

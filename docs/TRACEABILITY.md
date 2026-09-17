@@ -47,6 +47,7 @@ Last updated: 2026-09-08
 | 5 | Never double-book | availability re-read at booking time | `booking.test.ts` (slot taken) | ✅ |
 | 5 | Never offer outside meeting hours or on Shabbat | `appointments/availability.ts` | `availability.test.ts` | ✅ |
 | 5 | Offered times cover morning / midday / evening, on a half-hour grid from 08:30 | `appointments/availability.ts` (`pickOfferSlots`) | `availability.test.ts` · `booking.test.ts` | ✅ |
+| 3 | A lead offered times who goes quiet is nudged with the times again | `outreach/followUp.ts` (`appointments`) · `outreach/followUpMessages.ts` (`APPOINTMENT_NUDGE_BODY`) | `followUp.test.ts` (list nudge, tap books, template outside the window, empty calendar) · `followUpMessages.test.ts` | ✅ |
 | 5 | A high-priority lead is offered a meeting without asking | `workflow/decide.ts` (`HIGH_PRIORITY_SCORE`, `bookingSuggested`) · `appointments/slotMessages.ts` (`SLOT_SUGGEST_BODY`) | `decide.test.ts` · `changedAnswers.test.ts` | ✅ |
 | 4a | A listed neighbourhood typed in any known variant answers Q2 | `workflow/interactive.ts` (`screeningAnswerFor`) · `domain/neighborhoods.ts` | `interactive.test.ts` · `neighborhoods.test.ts` · `changedAnswers.test.ts` | ✅ |
 | 5 | A question while times are offered is answered with the real times, not deflected | `workflow/decide.ts` (`appointment_proposed` routing) · `workflow/generate.ts` (`assist_booking`, `[CONTEXT]`) · `appointments/slotMessages.ts` | `decide.test.ts` · `changedAnswers.test.ts` · `generate.test.ts` | ✅ |

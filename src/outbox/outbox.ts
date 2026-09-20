@@ -48,17 +48,26 @@ export type OutboxRow = typeof outbox.$inferSelect;
  * the others have not, instead of blocking behind them. The claim flips status
  * to `processing` so a crashed worker's rows are visibly stuck rather than
  * silently redelivered forever.
+ *
+ * "Due" is judged by the DATABASE clock unless a time is passed. A new event's
+ * `next_attempt_at` is stamped by Postgres (`now()`, microseconds), and a
+ * JavaScript `Date` is truncated to the millisecond — so compared against one, an
+ * event enqueued in the same millisecond reads as due in the future and is
+ * skipped. Harmless to the worker, which simply catches it on the next poll, but
+ * it made a claim straight after an enqueue a coin toss on a fast machine.
  */
 export async function claimOutboxBatch(
   db: Database,
   limit: number,
-  now: Date = new Date(),
+  now?: Date,
 ): Promise<OutboxRow[]> {
   return db.transaction(async (tx) => {
     const due = await tx
       .select({ id: outbox.id })
       .from(outbox)
-      .where(and(eq(outbox.status, 'pending'), lte(outbox.nextAttemptAt, now)))
+      .where(
+        and(eq(outbox.status, 'pending'), lte(outbox.nextAttemptAt, now ?? sql`now()`)),
+      )
       .orderBy(asc(outbox.createdAt))
       .limit(limit)
       .for('update', { skipLocked: true });

@@ -71,6 +71,7 @@ npm run check           # the pre-commit gate: typecheck + lint + format:check +
   pull request, and **a merge to `main` deploys to production** (when the
   `DEPLOY_ENABLED` repository variable is `true`). The server side is
   `deploy/remote-deploy.sh`, a forced command that only accepts a commit on `main`.
+  A change touching only `*.md` / `docs/` skips the gate and the deploy.
   Setup and rollback interplay: [docs/GO-LIVE.md](docs/GO-LIVE.md) §9.
 - **Production:** `Dockerfile` + `docker-compose.prod.yml` (app, Postgres, Redis,
   Caddy TLS, nightly S3 backup). The runbook is [docs/GO-LIVE.md](docs/GO-LIVE.md).

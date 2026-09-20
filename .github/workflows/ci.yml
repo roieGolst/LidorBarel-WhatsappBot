@@ -20,8 +20,59 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  # Decides whether anything that can affect the gate, the image, or the deploy
+  # changed. A README or docs/ edit cannot: Prettier ignores *.md, nothing under
+  # src/ reads docs/, and neither is copied into the image — so such a change
+  # skips the install, the services, the suite, the build, and the deploy.
+  #
+  # A job-level skip rather than a workflow-level `paths-ignore` on purpose: a
+  # skipped JOB reports as passed, so `check` can be a required status on main. A
+  # workflow that never starts reports nothing, and a required check would leave a
+  # docs-only pull request waiting on it for ever.
+  changes:
+    name: detect code changes
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      code: ${{ steps.diff.outputs.code }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # Full history: a push can carry any number of commits, and the diff
+          # below needs the commit main pointed at before it.
+          fetch-depth: 0
+
+      - id: diff
+        env:
+          # A pull request is checked out as its merge commit, whose first parent
+          # is the base branch — so HEAD^1..HEAD is exactly what the PR changes.
+          # A push is compared with where the branch was before it.
+          BASE: ${{ github.event_name == 'pull_request' && 'HEAD^1' || github.event.before }}
+        run: |
+          # Fail safe: if the base cannot be resolved (a force-push, a brand-new
+          # branch), assume code changed and run everything.
+          if ! changed=$(git diff --name-only "$BASE" HEAD 2>/dev/null); then
+            echo "cannot diff against '$BASE' — treating as a code change"
+            echo "code=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # A deny-list, not an allow-list: a kind of file nobody thought about
+          # is treated as code. Only what provably cannot matter is exempt.
+          code=$(printf '%s\n' "$changed" | grep -Ev '(\.md$|^docs/|^LICENSE$)' || true)
+
+          if [ -n "$code" ]; then
+            printf 'code changed — running the full gate:\n%s\n' "$code"
+            echo "code=true" >> "$GITHUB_OUTPUT"
+          else
+            printf 'documentation only — skipping the gate and the deploy:\n%s\n' "$changed"
+            echo "code=false" >> "$GITHUB_OUTPUT"
+          fi
+
   check:
     name: typecheck · lint · format · test
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
@@ -78,13 +129,18 @@ jobs:
 
   deploy:
     name: deploy to production
-    needs: check
+    needs: [changes, check]
+    # Nothing to ship when only documentation changed — the image would be
+    # byte-for-byte the same. The server picks those commits up on the next real
+    # deploy, which fast-forwards past them.
+    #
     # DEPLOY_ENABLED is a repository *variable*: the switch that turns CD on once
     # the secrets exist, and the way to pause it (before a rollback, say)
     # without touching this file.
     if: >-
       github.event_name == 'push' &&
       github.ref == 'refs/heads/main' &&
+      needs.changes.outputs.code == 'true' &&
       vars.DEPLOY_ENABLED == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 25

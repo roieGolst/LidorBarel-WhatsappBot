@@ -1,0 +1,131 @@
+# CI on every pull request, and CI + deploy on every push to main.
+#
+# One workflow rather than two so the deploy job can `needs:` the check job: the
+# commit that reaches the server is exactly the commit that passed, with no
+# cross-workflow trigger to reason about.
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+# A newer push to a PR supersedes the run before it. On main nothing is ever
+# cancelled — a deploy interrupted halfway is worse than a deploy that waits.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  check:
+    name: typecheck · lint · format · test
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    # The suite runs against a real Postgres and Redis (see CLAUDE.md): the
+    # guarantees under test — unique constraints, upserts, queue coalescing —
+    # live in them. Same images as docker-compose.yml.
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: lidor
+          POSTGRES_PASSWORD: lidor_ci_password
+          POSTGRES_DB: lidor_bot
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U lidor -d lidor_bot"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      # All the suite needs. It derives its own `lidor_bot_test` database from
+      # this URL and creates it, so development data is never what it truncates.
+      DATABASE_URL: postgresql://lidor:lidor_ci_password@localhost:5432/lidor_bot
+      REDIS_URL: redis://localhost:6379
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - run: npm ci
+
+      # The same gate as the local pre-commit: typecheck + lint + format + test.
+      - run: npm run check
+
+      # `check` typechecks with tsconfig.json; the image is built with
+      # tsconfig.build.json. Compile with that too, so a build-only break is
+      # caught here rather than by the server halfway through a deploy.
+      - run: npm run build
+
+  deploy:
+    name: deploy to production
+    needs: check
+    # DEPLOY_ENABLED is a repository *variable*: the switch that turns CD on once
+    # the secrets exist, and the way to pause it (before a rollback, say)
+    # without touching this file.
+    if: >-
+      github.event_name == 'push' &&
+      github.ref == 'refs/heads/main' &&
+      vars.DEPLOY_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    concurrency:
+      group: deploy-production
+      cancel-in-progress: false
+
+    steps:
+      # Plain ssh rather than a marketplace action: this step holds the key to
+      # production, so it runs no third-party code.
+      #
+      # The key is pinned on the server to deploy/remote-deploy.sh (a forced
+      # command), which takes the commit sha as its only input. It cannot open a
+      # shell, so a leaked secret can deploy main and do nothing else.
+      - name: Deploy ${{ github.sha }}
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+        run: |
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          # The server's host key is pinned, not trusted on first use: a runner
+          # is a fresh machine every time, so "first use" would be every use.
+          printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > ~/.ssh/known_hosts
+
+          ssh -i ~/.ssh/deploy_key \
+            -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes \
+            -o ServerAliveInterval=30 \
+            "$DEPLOY_USER@$DEPLOY_HOST" "$GITHUB_SHA"
+
+      # From outside, through Caddy and real TLS — the path Meta's webhooks take.
+      # /health also pings the database, so this fails if the new app cannot
+      # reach it.
+      - name: Verify /health
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+        run: |
+          curl --fail --silent --show-error \
+            --retry 12 --retry-delay 5 --retry-all-errors \
+            "https://$DEPLOY_HOST/health"

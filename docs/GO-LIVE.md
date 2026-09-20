@@ -239,6 +239,13 @@ service containers) and `npm run build` on every pull request. On a push to
 fast-forwards to that commit and runs `deploy/deploy.sh` — the same single path as
 a manual deploy — and finally checks `https://<DOMAIN>/health` from outside.
 
+**Documentation-only changes skip all of it.** A first job diffs the change; if
+every file is `*.md`, under `docs/`, or `LICENSE`, the gate, the build and the
+deploy are skipped — none of those files can affect the suite (Prettier ignores
+`*.md`) or the image. Anything else, including a file type nobody anticipated,
+runs the full gate. The skipped `check` job still reports as passed, so it can be
+a required status check without blocking a README fix.
+
 **The deploy key cannot open a shell.** It is pinned in `authorized_keys` to
 `deploy/remote-deploy.sh`, which accepts one input — a commit sha — and refuses
 anything that is not already on `origin/main`. A leaked GitHub secret can deploy

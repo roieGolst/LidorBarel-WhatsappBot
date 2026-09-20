@@ -83,6 +83,7 @@ Last updated: 2026-09-08
 | Redelivered webhook cannot double-reply | `whatsapp/ingest.ts` + unique `provider_message_id` | `ingest.test.ts` |
 | Crash mid-turn resumes without re-sending | `workflow/checkpointer.ts` | `checkpointer.test.ts` |
 | Turns for one conversation never interleave | `queue/conversationQueue.ts` (job-id coalescing) | `conversationWorker.test.ts` |
+| A turn's messages arrive in the order sent, even behind a video | `whatsapp/deliveryGate.ts` · `workflow/conversationTurn.ts` (`ct_awaitDelivery`) · `whatsapp/routes.ts` | `deliveryGate.test.ts` · `conversationTurn.test.ts` · `routes.test.ts` |
 | Banned words never reach the customer | `workflow/validate.ts` | `validate.test.ts` |
 
 ---

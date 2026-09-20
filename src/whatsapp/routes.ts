@@ -8,6 +8,7 @@ import {
   leadgenEnvelopeSchema,
 } from '../leads/leadgenPayload.js';
 import type { TurnProducer } from '../queue/conversationQueue.js';
+import type { DeliveryGate } from './deliveryGate.js';
 import { ingestEvents, type IngestResult } from './ingest.js';
 import { extractEvents, webhookEnvelopeSchema } from './payload.js';
 import { isValidSignature, verifySubscription } from './signature.js';
@@ -34,6 +35,12 @@ export interface WebhookRouteOptions {
    * fails closed (503) rather than ACKing a paid lead it cannot store.
    */
   leadIngest?: LeadIngestDeps;
+  /**
+   * Told about every delivery status, so a turn holding its next message behind
+   * a video (see `deliveryGate.ts`) can release it. Optional: without it turns
+   * fall through on their timeout.
+   */
+  deliveryGate?: DeliveryGate;
 }
 
 /**
@@ -143,7 +150,7 @@ async function handleLeadgenWebhook(
  */
 export function registerWhatsAppRoutes(
   app: FastifyInstance,
-  { db, config, producer, leadIngest }: WebhookRouteOptions,
+  { db, config, producer, leadIngest, deliveryGate }: WebhookRouteOptions,
 ): void {
   app.get('/webhooks/whatsapp', (request, reply) => {
     if (!config.metaWebhookVerifyToken) {
@@ -204,6 +211,17 @@ export function registerWhatsAppRoutes(
     }
 
     const events = extractEvents(parsed.data);
+
+    // Before the database work, and independent of it: a turn may be holding a
+    // message for exactly this status, and a slow or failed write must not keep
+    // a live conversation waiting.
+    if (deliveryGate) {
+      for (const event of events) {
+        if (event.kind === 'status') {
+          deliveryGate.notify(event.providerMessageId, event.status);
+        }
+      }
+    }
 
     // Processed synchronously, before responding. Ingestion is only database
     // writes and takes milliseconds, and doing it here means a failure returns

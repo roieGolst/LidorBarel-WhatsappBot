@@ -15,7 +15,10 @@ echo "deploy: building image"
 $COMPOSE build --pull app backup
 
 echo "deploy: starting postgres + redis"
-$COMPOSE up -d postgres redis
+# --wait blocks on the postgres healthcheck. On a fresh volume Postgres spends
+# several seconds in initdb, and the migration below runs with --no-deps, so
+# without this the very first deploy fails to connect and aborts.
+$COMPOSE up -d --wait postgres redis
 
 echo "deploy: applying migrations"
 $COMPOSE run --rm --no-deps app node dist/db/migrate.js

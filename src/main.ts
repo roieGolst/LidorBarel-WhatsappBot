@@ -26,6 +26,7 @@ import {
   type ConversationWorker,
 } from './queue/conversationWorker.js';
 import { buildServer } from './server.js';
+import { createDeliveryGate, type DeliveryGate } from './whatsapp/deliveryGate.js';
 import { createCheckpointer } from './workflow/checkpointer.js';
 import type { WhatsAppChannel } from './whatsapp/channel.js';
 import { createCloudApiChannel } from './whatsapp/cloudApiChannel.js';
@@ -54,6 +55,8 @@ interface ConversationPipeline {
   channel: WhatsAppChannel;
   /** Booking, when Monday is configured — shared with the sweeper's nudges. */
   appointments: BookingDeps | undefined;
+  /** Shared with the webhook, which hears the statuses the worker waits on. */
+  deliveryGate: DeliveryGate;
 }
 
 /**
@@ -121,6 +124,8 @@ async function buildConversationPipeline(
         }
       : undefined;
 
+    const deliveryGate = createDeliveryGate();
+
     queue = createConversationQueue(config.redisUrl);
     worker = createConversationWorker(
       config.redisUrl,
@@ -128,6 +133,7 @@ async function buildConversationPipeline(
         db,
         llm,
         channel,
+        deliveryGate,
         ...(appointments ? { appointments } : {}),
         // Scheduling is gated on outreach being enabled: the sweeper is what
         // sends these, so scheduling without it would only accumulate due rows
@@ -148,7 +154,7 @@ async function buildConversationPipeline(
       checkpointer,
     );
 
-    return { queue, worker, checkpointer, channel, appointments };
+    return { queue, worker, checkpointer, channel, appointments, deliveryGate };
   } catch (error) {
     // A partial build must not leak connections. Anything constructed before the
     // failure is torn down before we fall back to ingestion-only.
@@ -314,7 +320,9 @@ async function main(): Promise<void> {
   const app = buildServer({
     db,
     config,
-    ...(pipeline ? { producer: pipeline.queue } : {}),
+    ...(pipeline
+      ? { producer: pipeline.queue, deliveryGate: pipeline.deliveryGate }
+      : {}),
     ...(leadIngest ? { leadIngest } : {}),
   });
 

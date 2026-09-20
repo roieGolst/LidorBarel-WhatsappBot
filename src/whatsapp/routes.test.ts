@@ -7,6 +7,7 @@ import type { TurnProducer } from '../queue/conversationQueue.js';
 import { conversations, messages } from '../db/schema.js';
 import { setupTestDatabase, truncateAll } from '../db/testing.js';
 import { buildServer } from '../server.js';
+import { createDeliveryGate } from './deliveryGate.js';
 
 const APP_SECRET = 'test_app_secret';
 const VERIFY_TOKEN = 'test_verify_token';
@@ -327,6 +328,54 @@ describe('POST /webhooks/whatsapp — enqueueing turns', () => {
     const response = await post(statusPayload());
     expect(response.statusCode).toBe(200);
     expect(producer.enqueued).toHaveLength(0);
+  });
+});
+
+describe('POST /webhooks/whatsapp — delivery statuses', () => {
+  it('reports each status to the delivery gate, so a waiting turn is released', async () => {
+    const gate = createDeliveryGate();
+    const gated = buildServer({ db, config, deliveryGate: gate });
+    await gated.ready();
+
+    try {
+      const waiting = gate.waitForDelivery('wamid.VIDEO');
+      const payload = JSON.stringify(statusPayload('wamid.VIDEO', 'delivered'));
+      const response = await gated.inject({
+        method: 'POST',
+        url: '/webhooks/whatsapp',
+        headers: {
+          'content-type': 'application/json',
+          'x-hub-signature-256': `sha256=${createHmac('sha256', APP_SECRET).update(payload).digest('hex')}`,
+        },
+        payload,
+      });
+
+      expect(response.statusCode).toBe(200);
+      await expect(waiting).resolves.toBe('delivered');
+    } finally {
+      await gated.close();
+    }
+  });
+
+  it('does not report a status from an unsigned request', async () => {
+    const gate = createDeliveryGate({ timeoutMs: 50 });
+    const gated = buildServer({ db, config, deliveryGate: gate });
+    await gated.ready();
+
+    try {
+      const waiting = gate.waitForDelivery('wamid.FORGED');
+      const response = await gated.inject({
+        method: 'POST',
+        url: '/webhooks/whatsapp',
+        headers: { 'content-type': 'application/json' },
+        payload: JSON.stringify(statusPayload('wamid.FORGED', 'delivered')),
+      });
+
+      expect(response.statusCode).toBe(403);
+      await expect(waiting).resolves.toBe('timeout');
+    } finally {
+      await gated.close();
+    }
   });
 });
 

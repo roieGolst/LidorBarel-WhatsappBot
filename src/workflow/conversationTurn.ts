@@ -24,6 +24,7 @@ import type {
   ReplyButton,
   WhatsAppChannel,
 } from '../whatsapp/channel.js';
+import type { DeliveryGate, DeliveryOutcome } from '../whatsapp/deliveryGate.js';
 import { guardedSend } from '../whatsapp/guardedSend.js';
 import {
   bookSlot,
@@ -143,6 +144,12 @@ export interface ConversationDeps {
    * actually write to his calendar.
    */
   appointments?: BookingDeps | undefined;
+  /**
+   * Keeps a turn's messages in order behind a video, which WhatsApp delivers
+   * late (see `deliveryGate.ts`). Absent, messages go out back to back — fine
+   * for tests and the fake harness, where nothing is delivered at all.
+   */
+  deliveryGate?: DeliveryGate | undefined;
 }
 
 /**
@@ -562,6 +569,18 @@ export function createConversationWorkflow(
         return null;
       }
     },
+  );
+
+  // Holds the turn until a video has reached the handset, so what follows it
+  // cannot overtake it. A task, not a bare await: the outcome decides whether a
+  // fallback text is sent, and a resumed run must take the same branch — a
+  // different one would shift every later `ct_send` onto the wrong cached result.
+  const awaitDelivery = task(
+    'ct_awaitDelivery',
+    async (providerMessageId: string): Promise<DeliveryOutcome> =>
+      deps.deliveryGate
+        ? await deps.deliveryGate.waitForDelivery(providerMessageId)
+        : 'delivered',
   );
 
   /**
@@ -1770,14 +1789,29 @@ export function createConversationWorkflow(
       // whole turn) — it is skipped and the turn still delivers its text reply. A
       // failed text/interactive send stays fatal: that IS the reply, so the turn
       // should fail and be retried rather than leave the person with nothing.
+      //
+      // A video with anything after it is waited on before the next send:
+      // WhatsApp processes a clip for seconds and delivers a text at once, so the
+      // menu or first question used to arrive above the welcome it follows. A clip
+      // Meta accepted and then failed to deliver is treated like one it refused.
       const outbound: OutboundMessageRecord[] = [];
-      for (const planned of plan) {
+      for (const [index, planned] of plan.entries()) {
         if (planned.part.kind === 'video') {
-          const providerMessageId = await sendOptionalMedia({
+          let providerMessageId = await sendOptionalMedia({
             to: ctx.contactPhone,
             conversation: ctx,
             part: planned.part,
           });
+          if (providerMessageId !== null && index < plan.length - 1) {
+            const outcome = await awaitDelivery(providerMessageId);
+            if (outcome === 'failed') {
+              logger.warn(
+                { conversationId },
+                'video accepted but not delivered — falling back to its caption',
+              );
+              providerMessageId = null;
+            }
+          }
           if (providerMessageId === null) {
             // The clip was dropped. If it carried a caption — the opening welcome
             // rides on the intro video — send that caption as plain text so the

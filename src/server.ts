@@ -5,6 +5,7 @@ import type { LeadIngestDeps } from './leads/ingestLead.js';
 import type { TurnProducer } from './queue/conversationQueue.js';
 import { buildLoggerOptions } from './logger.js';
 import { registerDebugRoutes } from './admin/debugRoutes.js';
+import type { DeliveryGate } from './whatsapp/deliveryGate.js';
 import { registerWhatsAppRoutes } from './whatsapp/routes.js';
 
 export interface ServerOptions {
@@ -21,6 +22,11 @@ export interface ServerOptions {
    * token; absent, the leadgen webhook fails closed rather than discarding leads.
    */
   leadIngest?: LeadIngestDeps;
+  /**
+   * Shared with the conversation worker: the webhook reports delivery statuses
+   * to it so a turn can keep its messages in order behind a video.
+   */
+  deliveryGate?: DeliveryGate;
 }
 
 /**
@@ -34,6 +40,7 @@ export function buildServer({
   config,
   producer,
   leadIngest,
+  deliveryGate,
 }: ServerOptions): FastifyInstance {
   const app = Fastify({
     // Options rather than an instance, so Fastify builds its own child logger
@@ -77,6 +84,7 @@ export function buildServer({
     config,
     ...(producer ? { producer } : {}),
     ...(leadIngest ? { leadIngest } : {}),
+    ...(deliveryGate ? { deliveryGate } : {}),
   });
 
   // A development-only window into a lead's full state (facts, qualification,

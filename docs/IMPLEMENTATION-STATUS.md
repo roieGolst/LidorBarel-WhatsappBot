@@ -65,6 +65,7 @@ dangerous than plain gaps, because reviewers trust them.
 | ~~**D-6**~~ | **Follow-ups never reached the board.** Neither a sent nudge nor the sequence closing a lead as no-response queued a projection, so `ליד ללא מענה` — which exists on Lidor's status column for exactly that moment — was never set by the bot. **Fixed.** | `outreach/followUp.ts` | Resolved. |
 | ~~**D-7**~~ | **A street address was stored as the neighbourhood.** Q2 invites "a full address" and nothing mapped one, so "אהרון מסקין" (a street) was accepted verbatim and reached the board as where the property was. **Fixed:** an unrecognised place is checked with the person once, and if it stands it reaches Lidor in the notes rather than as a bogus dropdown label. | `workflow/conversationTurn.ts` · `workflow/validateAnswer.ts` · `monday/leadMapping.ts` | Resolved. |
 | ~~**D-8**~~ | **A deleted Monday item still counted as existing.** `items(ids: …)` returns deleted and archived items with `state` set; `itemExists` checked only the array length, so `syncLead`'s "recreate if deleted by hand" path was unreachable and its test passed only because the fake modelled semantics Monday does not have. Found by the live booking verification. **Fixed:** `state === 'active'` is required, with a test against Monday's real response shape. | `monday/client.ts` | Resolved. |
+| ~~**D-9**~~ | **The first screening message arrived above the welcome.** The opening sends the intro clip (welcome as its caption) and then the menu, in that order — but WhatsApp does not deliver in API order: a video is processed for seconds after Meta accepts it, while the text behind it is delivered at once. Found on the first production deploy (2026-09-20). **Fixed:** a turn now waits for a video's `delivered` status before sending what follows it, capped at 15 s so an offline phone cannot hold the turn; a clip Meta accepts and then fails to deliver falls back to its caption as text, like one it refuses outright. | `whatsapp/deliveryGate.ts` · `workflow/conversationTurn.ts` · `whatsapp/routes.ts` | Resolved. |
 | **D-4** | **Unused scaffolding.** `outbox` table, `appointment_requests` table, all `appointment_*` stages, `messages.template_ref`, `campaign_referrals.form_id` / `.external_lead_id`, `setMondayItemId()` — all defined, none written or read by production code. | `src/db/schema.ts` | Not a bug; a reminder that schema presence ≠ implementation. |
 
 ---
@@ -112,6 +113,15 @@ retired seller forms. Exactly one form is live: `1746567036243410`.
 rest are recorded for attribution with no conversation opened. Replacing the form
 (for updated privacy wording, say) means a new id in both lists — Meta forms are
 immutable, so wording changes always produce a new form.
+
+**Messages are not delivered in the order the API accepted them.** Meta's own
+guidance is to wait for the previous message's `delivered` status webhook before
+sending the next when order matters. It matters after any video: the clip is
+processed for several seconds, and a text sent straight after overtakes it (defect
+D-9). `whatsapp/deliveryGate.ts` is that wait. It is in-process — the webhook and
+the worker share one process — so splitting them would degrade every such wait to
+its 15-second timeout rather than break anything; it would need a Redis-backed
+gate to stay fast.
 
 ### Hardening audit — 2026-09-08
 

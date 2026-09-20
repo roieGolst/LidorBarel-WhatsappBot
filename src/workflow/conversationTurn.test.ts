@@ -1,5 +1,5 @@
 import { eq } from 'drizzle-orm';
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Database } from '../db/client.js';
 import {
   findContactById,
@@ -19,6 +19,7 @@ import { conversations, messages, optOuts } from '../db/schema.js';
 import { setupTestDatabase, truncateAll } from '../db/testing.js';
 import { FakeLlmClient } from '../llm/fake.js';
 import type { PostgresSaver } from '@langchain/langgraph-checkpoint-postgres';
+import type { DeliveryGate, DeliveryOutcome } from '../whatsapp/deliveryGate.js';
 import { FakeChannel } from '../whatsapp/fakeChannel.js';
 import { createCheckpointer } from './checkpointer.js';
 import { createConversationWorkflow, type ConversationDeps } from './conversationTurn.js';
@@ -547,6 +548,89 @@ describe('conversationTurn', () => {
     // The clip is dropped, but its caption (the welcome) is sent as text, then the menu.
     expect(channel.sent.map((s) => s.kind)).toEqual(['text', 'list']);
     expect(channel.sent[0]).toMatchObject({ kind: 'text', text: WELCOME_MESSAGE });
+  });
+
+  it('holds the menu until the intro video is delivered, so the welcome lands first', async () => {
+    // WhatsApp delivers a text at once and a video seconds later, so sending the
+    // two back to back put the first screening message ABOVE the welcome.
+    const llm = new FakeLlmClient([
+      '{"intent":"UNCLEAR","confidence":0.2,"extracted":{}}',
+    ]);
+    const channel = new FakeChannel();
+    const { conversationId } = await seed({ inbound: 'היי' });
+
+    const waitedOn: string[] = [];
+    let release: ((outcome: DeliveryOutcome) => void) | undefined;
+    const deliveryGate: DeliveryGate = {
+      notify: () => undefined,
+      waitForDelivery: (id) => {
+        waitedOn.push(id);
+        return new Promise((resolve) => (release = resolve));
+      },
+    };
+
+    const turn = workflow({ db, llm, channel, deliveryGate }).invoke(
+      conversationId,
+      config(conversationId),
+    );
+
+    // The turn parks on the clip: it is out, the menu is not.
+    await vi.waitFor(() => expect(release).toBeDefined());
+    expect(channel.sent.map((s) => s.kind)).toEqual(['video']);
+    expect(waitedOn).toEqual([channel.sent[0]?.providerMessageId]);
+
+    release?.('delivered');
+    await turn;
+
+    expect(channel.sent.map((s) => s.kind)).toEqual(['video', 'list']);
+  });
+
+  it('still sends the menu when the delivery wait times out (phone offline)', async () => {
+    const llm = new FakeLlmClient([
+      '{"intent":"UNCLEAR","confidence":0.2,"extracted":{}}',
+    ]);
+    const channel = new FakeChannel();
+    const { conversationId } = await seed({ inbound: 'היי' });
+    const deliveryGate: DeliveryGate = {
+      notify: () => undefined,
+      waitForDelivery: () => Promise.resolve('timeout'),
+    };
+
+    const result = await workflow({ db, llm, channel, deliveryGate }).invoke(
+      conversationId,
+      config(conversationId),
+    );
+
+    expect(result.sent).toBe(true);
+    expect(channel.sent.map((s) => s.kind)).toEqual(['video', 'list']);
+  });
+
+  it('sends the welcome as text when Meta accepts the intro video but fails to deliver it', async () => {
+    const llm = new FakeLlmClient([
+      '{"intent":"UNCLEAR","confidence":0.2,"extracted":{}}',
+    ]);
+    const channel = new FakeChannel();
+    const { conversationId } = await seed({ inbound: 'היי' });
+    const deliveryGate: DeliveryGate = {
+      notify: () => undefined,
+      waitForDelivery: () => Promise.resolve('failed'),
+    };
+
+    await workflow({ db, llm, channel, deliveryGate }).invoke(
+      conversationId,
+      config(conversationId),
+    );
+
+    // The welcome is essential: it rode on the clip, so it is re-sent as text,
+    // still ahead of the menu.
+    expect(channel.sent.map((s) => s.kind)).toEqual(['video', 'text', 'list']);
+    expect(channel.sent[1]).toMatchObject({ kind: 'text', text: WELCOME_MESSAGE });
+
+    // Stored once: the transcript has one welcome, not the clip and its fallback.
+    const outbound = (await recentMessages(db, conversationId)).filter(
+      (m) => m.direction === 'outbound',
+    );
+    expect(outbound.filter((m) => m.body === WELCOME_MESSAGE)).toHaveLength(1);
   });
 
   it('tapping "check fit" starts the screening flow (buttons/list)', async () => {

@@ -189,7 +189,7 @@ sent after the 20-minute grace → reply → conversation → board.
 
 | Task | Command (from `~/bot`) |
 |---|---|
-| Deploy a new version | `git pull && ./deploy/deploy.sh` |
+| Deploy a new version | merge to `main` — CI deploys it (§9). By hand: `git pull && ./deploy/deploy.sh` |
 | Logs | `docker compose -f docker-compose.prod.yml logs -f app` |
 | Status | `docker compose -f docker-compose.prod.yml ps` |
 | Restart the app | `docker compose -f docker-compose.prod.yml restart app` |
@@ -220,7 +220,72 @@ Every deploy is a git commit. To go back:
 git checkout <previous-sha> && ./deploy/deploy.sh
 ```
 
+With continuous deployment on (§9) the checkout above leaves the server on a
+detached HEAD, and `deploy/remote-deploy.sh` **refuses to deploy onto one** — so
+the next merge cannot silently undo your rollback. Once `main` is fixed,
+`git checkout main` on the server resumes CD. To be doubly sure, set the
+`DEPLOY_ENABLED` repository variable to `false` while you investigate.
+
 Migrations are forward-only; a version whose migration has already run can be
 rolled back in code but keeps the newer schema, which every version so far
 tolerates (new columns are nullable). Check `drizzle/` before relying on that
 for a future migration that drops or renames.
+
+## 9. Continuous deployment
+
+`.github/workflows/ci.yml` runs `npm run check` (against real Postgres and Redis
+service containers) and `npm run build` on every pull request. On a push to
+`main` it then deploys the commit that just passed: it SSHes to the server, which
+fast-forwards to that commit and runs `deploy/deploy.sh` — the same single path as
+a manual deploy — and finally checks `https://<DOMAIN>/health` from outside.
+
+**The deploy key cannot open a shell.** It is pinned in `authorized_keys` to
+`deploy/remote-deploy.sh`, which accepts one input — a commit sha — and refuses
+anything that is not already on `origin/main`. A leaked GitHub secret can deploy
+`main`; it cannot read `.env` or reach the database. The script also never moves
+the server backwards, takes a lock so two deploys cannot overlap, and refuses to
+run while the server is pinned to a rollback (§8).
+
+### One-time setup
+
+On the **server**:
+
+```bash
+# A key pair used for nothing else. No passphrase: a runner cannot type one.
+ssh-keygen -t ed25519 -N '' -C github-actions-deploy -f ~/.ssh/github_deploy
+
+# Pin it to the deploy script. `restrict` turns off forwarding and the pty.
+echo "restrict,command=\"$HOME/bot/deploy/remote-deploy.sh\" $(cat ~/.ssh/github_deploy.pub)" >> ~/.ssh/authorized_keys
+
+# The two values GitHub needs:
+cat ~/.ssh/github_deploy                                          # → DEPLOY_SSH_KEY
+echo "<DOMAIN> $(cut -d' ' -f1,2 /etc/ssh/ssh_host_ed25519_key.pub)"   # → DEPLOY_KNOWN_HOSTS
+```
+
+Then delete the private half from the server — only GitHub needs it:
+`rm ~/.ssh/github_deploy`.
+
+The server pulls from GitHub during a deploy, so its own read access to the
+repository (the deploy key used for the original `git clone`) must stay in place.
+
+In **GitHub → Settings → Secrets and variables → Actions**:
+
+| Kind | Name | Value |
+|---|---|---|
+| Secret | `DEPLOY_HOST` | the bot's domain, e.g. `bot.lidorbarel.co.il` (also used for the `/health` check) |
+| Secret | `DEPLOY_USER` | `ubuntu` |
+| Secret | `DEPLOY_SSH_KEY` | the private key printed above, whole, including the `BEGIN`/`END` lines |
+| Secret | `DEPLOY_KNOWN_HOSTS` | the `<DOMAIN> ssh-ed25519 AAAA…` line printed above |
+| Variable | `DEPLOY_ENABLED` | `true` |
+
+`DEPLOY_ENABLED` is the on/off switch: until it is `true` the deploy job is
+skipped and merges only run CI. Set it back to `false` to pause CD.
+
+Port 22 must be reachable from GitHub's runners, which have no fixed addresses,
+so it stays open to the internet — keep password login off (Lightsail and
+Ubuntu's defaults).
+
+**Recommended:** in *Settings → Branches*, protect `main` and require the
+`typecheck · lint · format · test` check to pass before merging. Without it a
+red pull request can still be merged; the deploy is skipped, but `main` is broken.
+

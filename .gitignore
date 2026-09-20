@@ -44,3 +44,6 @@ assets/recommendations/*.mp4
 assets/recommendations/*.webm
 assets/recommendations/*.mov
 assets/recommendations/*.3gp
+
+# Held by deploy/remote-deploy.sh while a deploy runs.
+.deploy.lock

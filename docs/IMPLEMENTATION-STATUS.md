@@ -452,6 +452,12 @@ refusal asserted separately — plus Shabbat and business-hours cases pinned to
 real Israeli local times in both DST states.
 Coverage of the inbound engine is genuinely strong.
 
+**The suite is now enforced, not just available.** `.github/workflows/ci.yml` runs
+`npm run check` and `npm run build` on every pull request against real Postgres
+and Redis service containers, and a push to `main` deploys the commit that passed
+(`docs/GO-LIVE.md` §9). Before this nothing ran the suite except a developer
+remembering to; the first production deploy (2026-09-20) was done by hand.
+
 **The end-to-end test now exists**: `src/e2e/leadLifecycle.test.ts` carries a lead
 from form submission through the template, the reply, and into the qualification
 conversation, asserting that Q1/Q3 come from the form and Q2 is asked next. It

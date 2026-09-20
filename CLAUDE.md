@@ -67,6 +67,11 @@ npm run check           # the pre-commit gate: typecheck + lint + format:check +
   `drizzle/`), then `npm run db:migrate`. Never hand-edit generated migration files.
   Production applies the same files with `db:migrate:prod` (`src/db/migrate.ts`,
   no drizzle-kit in the image); `deploy/deploy.sh` runs it before starting the app.
+- **CI/CD:** `.github/workflows/ci.yml` runs `npm run check` + `npm run build` on every
+  pull request, and **a merge to `main` deploys to production** (when the
+  `DEPLOY_ENABLED` repository variable is `true`). The server side is
+  `deploy/remote-deploy.sh`, a forced command that only accepts a commit on `main`.
+  Setup and rollback interplay: [docs/GO-LIVE.md](docs/GO-LIVE.md) §9.
 - **Production:** `Dockerfile` + `docker-compose.prod.yml` (app, Postgres, Redis,
   Caddy TLS, nightly S3 backup). The runbook is [docs/GO-LIVE.md](docs/GO-LIVE.md).
 

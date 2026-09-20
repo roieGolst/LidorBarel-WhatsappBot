@@ -1,5 +1,5 @@
 import { eq } from 'drizzle-orm';
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Database } from '../db/client.js';
 import { upsertContactByPhone, type Contact } from '../db/repositories/contacts.js';
 import { findOrCreateConversation } from '../db/repositories/conversations.js';
@@ -201,6 +201,23 @@ describe('outbox', () => {
 
     expect(first).toHaveLength(1);
     expect(second).toHaveLength(0);
+  });
+
+  it('judges "due" by the database clock, not the process clock', async () => {
+    // Postgres stamps next_attempt_at (now(), microseconds); a JS Date is
+    // truncated to the millisecond, so by the JS clock an event enqueued in the
+    // same millisecond was "not due yet" and the claim came back empty — which
+    // failed the first CI run on main. A process clock that is plainly behind
+    // makes that race deterministic.
+    const { conversationId } = await seedLead();
+    await enqueueOutboxEvent(db, conversationId);
+
+    vi.useFakeTimers({ toFake: ['Date'], now: Date.now() - 60_000 });
+    try {
+      expect(await claimOutboxBatch(db, 10)).toHaveLength(1);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('backs off a retryable failure and keeps it pending', async () => {

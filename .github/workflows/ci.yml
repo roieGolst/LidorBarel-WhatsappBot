@@ -33,8 +33,12 @@ jobs:
     name: detect code changes
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: read
     outputs:
       code: ${{ steps.diff.outputs.code }}
+      verified: ${{ steps.verified.outputs.hit }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -69,12 +73,40 @@ jobs:
             echo "code=false" >> "$GITHUB_OUTPUT"
           fi
 
+      # A push to main whose tree a pull-request run already verified needs no
+      # second gate: the PR run tested `refs/pull/N/merge`, and when main has not
+      # moved since, the merge commit has the identical tree. The PR run leaves a
+      # marker artifact named after that tree (see the end of `check`); found
+      # here, the gate is skipped and the deploy proceeds on the PR's result. A
+      # tree that differs — main moved, a squash that changed something — has no
+      # marker and runs the gate as before. The lookup failing (API hiccup) also
+      # means "not verified": the only fallback is to run the gate.
+      - id: verified
+        if: github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tree=$(git rev-parse 'HEAD^{tree}')
+          count=$(gh api "repos/$GITHUB_REPOSITORY/actions/artifacts?name=verified-tree-$tree&per_page=1" \
+                    --jq '[.artifacts[] | select(.expired == false)] | length' 2>/dev/null || echo 0)
+          if [ "${count:-0}" -gt 0 ]; then
+            echo "tree $tree was verified by a pull-request run — skipping the gate"
+            echo "hit=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "tree $tree has no verified marker — running the gate"
+            echo "hit=false" >> "$GITHUB_OUTPUT"
+          fi
+
   check:
     name: typecheck · lint · format · test
     needs: changes
-    if: needs.changes.outputs.code == 'true'
+    if: needs.changes.outputs.code == 'true' && needs.changes.outputs.verified != 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    permissions:
+      contents: read
+      # To leave the verified-tree marker below.
+      actions: write
 
     # The suite runs against a real Postgres and Redis (see CLAUDE.md): the
     # guarantees under test — unique constraints, upserts, queue coalescing —
@@ -127,9 +159,31 @@ jobs:
       # caught here rather than by the server halfway through a deploy.
       - run: npm run build
 
+      # Leave the marker a later push to main looks for (see `changes`). Named
+      # after the TREE that was tested — the merge of this PR into main as it is
+      # now — so it matches the merge commit only if nothing else has changed.
+      # Reached only when every step above passed, so its existence is the proof.
+      - id: tree
+        if: github.event_name == 'pull_request'
+        run: |
+          tree=$(git rev-parse 'HEAD^{tree}')
+          echo "sha=$tree" >> "$GITHUB_OUTPUT"
+          echo "$GITHUB_SHA" > verified-tree.txt
+      - if: github.event_name == 'pull_request'
+        uses: actions/upload-artifact@v7
+        with:
+          name: verified-tree-${{ steps.tree.outputs.sha }}
+          path: verified-tree.txt
+          retention-days: 7
+
   deploy:
     name: deploy to production
     needs: [changes, check]
+    # `!cancelled()` because `check` may have been SKIPPED on purpose (the PR
+    # run already verified this tree) and a skipped dependency would otherwise
+    # skip this job too. The condition then requires either a passing gate or a
+    # verified tree — never neither.
+    #
     # Nothing to ship when only documentation changed — the image would be
     # byte-for-byte the same. The server picks those commits up on the next real
     # deploy, which fast-forwards past them.
@@ -138,9 +192,12 @@ jobs:
     # the secrets exist, and the way to pause it (before a rollback, say)
     # without touching this file.
     if: >-
+      !cancelled() &&
       github.event_name == 'push' &&
       github.ref == 'refs/heads/main' &&
       needs.changes.outputs.code == 'true' &&
+      (needs.check.result == 'success' ||
+       (needs.check.result == 'skipped' && needs.changes.outputs.verified == 'true')) &&
       vars.DEPLOY_ENABLED == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 25

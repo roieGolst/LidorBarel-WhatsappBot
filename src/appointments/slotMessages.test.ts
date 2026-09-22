@@ -9,6 +9,7 @@ import {
   parseStoredSlots,
   sameSlots,
   slotListRows,
+  numberedOfferedTimes,
 } from './slotMessages.js';
 import { findBannedTerms } from '../workflow/validate.js';
 import {
@@ -162,5 +163,17 @@ describe('the booking-stage lines', () => {
 
   it('names the booked time back', () => {
     expect(alreadyBookedMessage(SUNDAY_10, TZ)).toContain('יום ראשון 10:00');
+  });
+});
+
+describe('numberedOfferedTimes', () => {
+  it('numbers the offer in the exact words the person saw', () => {
+    const slots = [
+      { start: new Date('2026-09-22T10:30:00Z'), end: new Date('2026-09-22T11:15:00Z') },
+      { start: new Date('2026-09-22T14:00:00Z'), end: new Date('2026-09-22T14:45:00Z') },
+    ];
+    expect(numberedOfferedTimes(slots, TZ)).toBe(
+      '1) יום שלישי 13:30; 2) יום שלישי 17:00',
+    );
   });
 });

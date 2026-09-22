@@ -2,7 +2,12 @@ import { eq } from 'drizzle-orm';
 import type { PostgresSaver } from '@langchain/langgraph-checkpoint-postgres';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { DEFAULT_SLOT_OPTIONS } from '../appointments/availability.js';
-import { findSlotsToOffer, latestOffer, recordOffer } from '../appointments/booking.js';
+import {
+  findSlotsToOffer,
+  latestOffer,
+  recordOffer,
+  type BookingDeps,
+} from '../appointments/booking.js';
 import {
   formatSlot,
   SLOT_REOFFER_BODY,
@@ -26,7 +31,7 @@ import type { MondayClient } from '../monday/client.js';
 import { FakeChannel } from '../whatsapp/fakeChannel.js';
 import { createCheckpointer } from './checkpointer.js';
 import { createConversationWorkflow, type ConversationDeps } from './conversationTurn.js';
-import type { KnownFacts } from './decide.js';
+import { offerStrategyFor, type KnownFacts } from './decide.js';
 import {
   EXCLUSIVE_FOLLOWUP_MESSAGE,
   EXCLUSIVITY_QUESTION,
@@ -155,6 +160,12 @@ function run(deps: ConversationDeps, conversationId: string) {
   });
 }
 
+// The fixture lead scores 93 (immediate + ready + booking + screening done), so
+// the offer the bot makes them is the EARLIEST times — the standing offer these
+// tests record must be the one the bot would actually have sent.
+const offerFor = (deps: BookingDeps) =>
+  findSlotsToOffer(deps, undefined, undefined, offerStrategyFor(COMPLETE));
+
 const facts = async (conversationId: string): Promise<KnownFacts> =>
   (await getConversationById(db, conversationId))!.extracted as KnownFacts;
 
@@ -169,7 +180,7 @@ describe('a question while meeting times are on the table', () => {
       priorReply: 'מעולה! 📅 אלה הזמנים הפנויים הקרובים של לידור — מה מתאים לך?',
       inbound: 'אין מוקדם יותר היום?',
     });
-    const offered = await findSlotsToOffer(deps);
+    const offered = await offerFor(deps);
     await recordOffer(deps, conversationId, offered, 30 * 60 * 1000);
 
     const llm = new FakeLlmClient([
@@ -199,7 +210,7 @@ describe('a question while meeting times are on the table', () => {
       priorReply: 'מעולה! 📅 אלה הזמנים הפנויים הקרובים של לידור — מה מתאים לך?',
       inbound: 'אין מוקדם יותר היום?',
     });
-    await recordOffer(deps, conversationId, await findSlotsToOffer(deps), 30 * 60 * 1000);
+    await recordOffer(deps, conversationId, await offerFor(deps), 30 * 60 * 1000);
 
     await run(
       {
@@ -226,7 +237,7 @@ describe('a question while meeting times are on the table', () => {
     await recordOffer(
       deps,
       conversationId,
-      await findSlotsToOffer(deps),
+      await offerFor(deps),
       30 * 60 * 1000,
       new Date(Date.now() - 60 * 60 * 1000),
     );
@@ -257,7 +268,7 @@ describe('a question while meeting times are on the table', () => {
       priorReply: 'מעולה! 📅 אלה הזמנים הפנויים הקרובים של לידור — מה מתאים לך?',
       inbound: 'אף אחד לא מתאים לי, שלידור יתקשר אליי',
     });
-    await recordOffer(deps, conversationId, await findSlotsToOffer(deps), 30 * 60 * 1000);
+    await recordOffer(deps, conversationId, await offerFor(deps), 30 * 60 * 1000);
 
     const result = await run(
       {

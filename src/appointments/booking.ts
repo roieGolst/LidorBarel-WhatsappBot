@@ -16,8 +16,10 @@ import {
   availableSlots,
   OFFER_SLOT_COUNT,
   overlaps,
+  pickEarliestSlots,
   pickOfferSlots,
   type BusyBlock,
+  type OfferStrategy,
   type Slot,
   type SlotOptions,
 } from './availability.js';
@@ -92,15 +94,23 @@ export async function busyBlocks(deps: BookingDeps): Promise<BusyBlock[]> {
   return blocks;
 }
 
-/** Slots to offer a lead: morning, midday and evening across the next free days. */
+/**
+ * Slots to offer a lead. `spread` (the default) is morning, midday and evening
+ * across the next free days; `earliest` is the soonest times Lidor has — see
+ * `OfferStrategy` for who gets which.
+ */
 export async function findSlotsToOffer(
   deps: BookingDeps,
   count = OFFER_SLOT_COUNT,
   now: Date = new Date(),
+  strategy: OfferStrategy = 'spread',
 ): Promise<Slot[]> {
   const busy = await busyBlocks(deps);
   const free = availableSlots(busy, deps.slotOptions, now);
-  return pickOfferSlots(free, count, deps.slotOptions.timeZone);
+  const { timeZone } = deps.slotOptions;
+  return strategy === 'earliest'
+    ? pickEarliestSlots(free, count, timeZone)
+    : pickOfferSlots(free, count, timeZone);
 }
 
 /**

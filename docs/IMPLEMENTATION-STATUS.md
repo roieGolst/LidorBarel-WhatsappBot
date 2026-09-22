@@ -67,6 +67,7 @@ dangerous than plain gaps, because reviewers trust them.
 | ~~**D-8**~~ | **A deleted Monday item still counted as existing.** `items(ids: …)` returns deleted and archived items with `state` set; `itemExists` checked only the array length, so `syncLead`'s "recreate if deleted by hand" path was unreachable and its test passed only because the fake modelled semantics Monday does not have. Found by the live booking verification. **Fixed:** `state === 'active'` is required, with a test against Monday's real response shape. | `monday/client.ts` | Resolved. |
 | ~~**D-9**~~ | **The first screening message arrived above the welcome.** The opening sends the intro clip (welcome as its caption) and then the menu, in that order — but WhatsApp does not deliver in API order: a video is processed for seconds after Meta accepts it, while the text behind it is delivered at once. Found on the first production deploy (2026-09-20). **Fixed:** a turn now waits for a video's `delivered` status before sending what follows it, capped at 15 s so an offline phone cannot hold the turn; a clip Meta accepts and then fails to deliver falls back to its caption as text, like one it refuses outright. | `whatsapp/deliveryGate.ts` · `workflow/conversationTurn.ts` · `whatsapp/routes.ts` | Resolved. |
 | ~~**D-10**~~ | **The outbox judged "due" by the wrong clock.** A new event's `next_attempt_at` is stamped by Postgres (`now()`, microseconds) but `claimOutboxBatch` compared it to a JavaScript `Date`, which is truncated to the millisecond — so an event enqueued in the same millisecond read as not yet due and was skipped. Harmless in production (the worker catches it on its next poll), but it made the suite flaky on a fast machine and failed the first CI run on `main` (2026-09-20), which blocked that deploy. **Fixed:** the claim uses the database clock unless a time is passed. | `outbox/outbox.ts` | Resolved. |
+| ~~**D-11**~~ | **A time chosen in words was never booked, and the bot said it was.** Only a tapped list row matched a slot; "נלך על הכי מוקדם" / "כן בבקשה" fell to the reply-writer, which can only *talk* about the times — and told the person "נקבענו", then twenty minutes later "כבר סגור ומאושר" with a different hour, then re-sent the list. No item, no calendar event. Seen live 2026-09-22. **Fixed:** while an offer stands the classifier is shown it numbered and returns `chosenOfferedTime`; an unambiguous choice goes through the same booking path as a tap (re-checked, written to פעילות, canned confirmation). An ambiguous one ("בשלישי" with two Tuesday times) is answered with the times in view, and the writer is now forbidden from saying a meeting is set or proposing one time for a yes. | `workflow/classify.ts` · `workflow/conversationTurn.ts` · `workflow/generate.ts` | Resolved. |
 | **D-4** | **Unused scaffolding.** `outbox` table, `appointment_requests` table, all `appointment_*` stages, `messages.template_ref`, `campaign_referrals.form_id` / `.external_lead_id`, `setMondayItemId()` — all defined, none written or read by production code. | `src/db/schema.ts` | Not a bug; a reminder that schema presence ≠ implementation. |
 
 ---
@@ -147,6 +148,18 @@ live Monday account — `פעילות` item created and linked to the lead, Goog
 Calendar event written by Monday's sync, lead status projected — the same
 standard every earlier phase was closed to. The e2e test proves the flow against
 a fake Monday only.
+
+#### Score-based offers — 2026-09-22
+
+Which free times a lead is shown now follows their priority score. At **80 or
+more** — an immediate timeline plus a property ready to list plus booking intent
+or a finished screening, i.e. selling now — the offer is Lidor's **soonest** free
+times (at most three per day, so it still spans two days). Below that it stays
+the morning/midday/evening spread, which is about fitting the meeting into the
+lead's week. Requested by Roie after a live test showed a ready-now lead offered
+"today 14:00 / 18:00, tomorrow 09:00 / 13:00 / 18:00" while the calendar was
+entirely free. The threshold is `URGENT_OFFER_SCORE`; the same rule applies to
+the first offer, a re-offer after a taken slot, and the silence nudge.
 
 #### Post-qualification robustness — 2026-09-08 (tasks from one live conversation)
 
@@ -450,6 +463,7 @@ onward, so start them early.
 | ~~E-8~~ | ~~Google Cloud project, calendar credentials~~ **Dropped.** פעילות is bidirectionally synced with Lidor's calendar, so booking is a Monday write and availability is a Monday read. | — |
 | ~~E-10~~ | ✅ Done — `seller_followup_1` approved (`he`). Set `FOLLOWUP_TEMPLATE_NAME` in the environment. | — |
 | ~~E-11~~ | ✅ Done — `seller_followup_incomplete` approved (`he`). Set `FOLLOWUP_INCOMPLETE_TEMPLATE_NAME`. | — |
+| E-13 | **Calendar → board sync must be live for offered times to be real.** Availability is read from the פעילות board (E-8). If Lidor's Google Calendar is not actually syncing *into* that board on his Monday account, the board holds only what the bot wrote, and every business hour looks free — the times offered are then "not related to his real open slots" (reported 2026-09-22). Not a code path: verify by adding an event in his Google Calendar and confirming a פעילות item with the same start/end appears within minutes. Until it does, treat offered times as unverified. | Real availability |
 | E-12 | **Production server.** Everything so far ran on a laptop behind ngrok. The AWS stack and the step-by-step are in [GO-LIVE.md](GO-LIVE.md); the box, domain, S3 bucket and Meta webhook switch are operator work. | Real leads reaching the bot |
 | E-13 | **Uptime alerting.** Nothing tells anyone when the app is down. An external check on `/health` (see GO-LIVE §7). | Noticing an outage before Lidor does |
 

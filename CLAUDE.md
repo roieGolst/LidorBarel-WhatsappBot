@@ -157,8 +157,12 @@ Full list in [docs/PRODUCT-REQUIREMENTS.md](docs/PRODUCT-REQUIREMENTS.md) §3.
 - **Logging** (`src/logger.ts`): pino with redaction of `body`/`phone`/`text` etc.
   Transcripts and phone numbers are personal data and must not reach logs; read them via
   the (future) admin panel. `no-console` is an error — use the logger.
-- **A new inbound from someone whose last conversation is in a terminal stage starts a
-  fresh conversation** (`conversations.ts` `TERMINAL_STAGES`), not a reopen.
+- **One conversation row per contact, always** (`conversations.ts`
+  `findOrCreateConversation`): a non-ban terminal end is *reopened in place* with the
+  person's answers kept; an opt-out/ban end is reused untouched. There is no "fresh
+  conversation" and no reset in production — to re-test the opening from a number, delete
+  its `contacts` row (cascades). `DEV_RESET_TRIGGER` works only when `NODE_ENV` is not
+  `production`, which the prod compose file always sets.
 
 ### TypeScript / lint gotchas
 

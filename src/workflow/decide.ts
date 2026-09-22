@@ -1,3 +1,4 @@
+import type { OfferStrategy } from '../appointments/availability.js';
 import type {
   Conversation,
   ConversationStage,
@@ -91,6 +92,23 @@ export const HIGH_PRIORITY_SCORE = 60;
 
 export function isHighPriority(facts: KnownFacts): boolean {
   return (leadPriorityScore(facts) ?? 0) >= HIGH_PRIORITY_SCORE;
+}
+
+/**
+ * The score from which a lead is offered Lidor's *soonest* free times rather
+ * than a spread of the week. Reaching 80 takes an immediate timeline (40) plus a
+ * property ready to list (30) plus either booking intent or a finished
+ * screening — someone who has said, in every way the flow can ask, that they
+ * are selling now. For them the earliest slot is the right offer: each day
+ * before the meeting is a day for that to cool, and a selection of evenings
+ * next week reads as if there were no hurry. Everyone else gets the spread,
+ * which is about fitting the meeting into *their* week.
+ */
+export const URGENT_OFFER_SCORE = 80;
+
+/** Which free times to offer this lead, from what the flow knows of them. */
+export function offerStrategyFor(facts: KnownFacts): OfferStrategy {
+  return (leadPriorityScore(facts) ?? 0) >= URGENT_OFFER_SCORE ? 'earliest' : 'spread';
 }
 
 /**

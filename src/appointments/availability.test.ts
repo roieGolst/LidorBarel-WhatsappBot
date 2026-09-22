@@ -9,6 +9,8 @@ import {
   pickOfferSlots,
   type BusyBlock,
   type SlotOptions,
+  pickEarliestSlots,
+  EARLIEST_PER_DAY,
 } from './availability.js';
 
 const TZ = 'Asia/Jerusalem';
@@ -163,6 +165,39 @@ describe('the candidate grid', () => {
     const slots = availableSlots([], OPTIONS, NOW);
     const tomorrow = slots.filter((s) => localDay(s.start) === '2026-08-24');
     expect(localTime(tomorrow[0]!.start)).toBe('08:30');
+  });
+});
+
+describe('pickEarliestSlots', () => {
+  it('offers the soonest free times, capped per day so the list spans two days', () => {
+    // 09:00 local, 3h lead time → the first candidate on the half-hour grid is
+    // 12:00. A ready-now lead is shown that, not a 18:00 "evening option".
+    const slots = availableSlots([], OPTIONS, NOW);
+
+    const picked = pickEarliestSlots(slots, OFFER_SLOT_COUNT, TZ);
+
+    expect(picked.map((s) => `${localDay(s.start)} ${localTime(s.start)}`)).toEqual([
+      '2026-08-23 12:00',
+      '2026-08-23 12:30',
+      '2026-08-23 13:00',
+      '2026-08-24 08:30',
+      '2026-08-24 09:00',
+      '2026-08-24 09:30',
+    ]);
+    expect(EARLIEST_PER_DAY).toBe(3);
+  });
+
+  it('skips past a taken slot to the next free one', () => {
+    const busy = [block('2026-08-23T09:00:00Z', '2026-08-23T10:00:00Z')]; // 12:00–13:00 local
+    const slots = availableSlots(busy, OPTIONS, NOW);
+
+    const picked = pickEarliestSlots(slots, 2, TZ);
+
+    expect(picked.map((s) => localTime(s.start))).toEqual(['13:00', '13:30']);
+  });
+
+  it('returns what there is when fewer are free than wanted', () => {
+    expect(pickEarliestSlots([], OFFER_SLOT_COUNT, TZ)).toEqual([]);
   });
 });
 

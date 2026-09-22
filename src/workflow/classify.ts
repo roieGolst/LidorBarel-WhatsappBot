@@ -151,6 +151,15 @@ export const analysisSchema = z.object({
    * instead of re-offering the same list to someone who said no.
    */
   declinesOfferedTimes: z.boolean().default(false),
+  /**
+   * The 1-based number of the offered time the LATEST message picks, when the
+   * bot has just offered meeting times (listed in the "(המועדים שהוצעו: …)"
+   * context line) and the message chooses exactly one of them in words rather
+   * than by tapping — "הכי מוקדם", "13:30", "שלישי בבוקר", "השני". Present only
+   * when the choice is unambiguous. This is what lets a time chosen in words be
+   * booked, instead of being answered with prose that could only pretend to.
+   */
+  chosenOfferedTime: z.number().int().positive().optional(),
 });
 
 export type Analysis = z.infer<typeof analysisSchema>;
@@ -195,6 +204,7 @@ Return JSON with exactly these fields:
 - "asksQuestion": true when the message contains a real QUESTION or a concern that deserves an answer, IN ADDITION to whatever else it does. Set it even when the message also answers the pending screening question — e.g. "בשכונת נווה זאב, לידור יודע למכור שם?" both answers the neighborhood question AND asks something, so extract the neighborhood AND set "asksQuestion": true. Judge the LATEST message's OWN WORDS only: it must itself contain the question or concern. Set it FALSE for a bare answer ("לא", "כן, רוצה למכור", "רמות"), a greeting, or small talk — do NOT set it true because an EARLIER message asked something that was already answered.
 - "needsEscalation": true if the message shows anger, frustration, or something a bot should not handle alone.
 - "declinesOfferedTimes": true ONLY when the bot's previous message offered meeting times (a list of days and hours) and the LATEST message turns them ALL down or does not want to pick one — e.g. "אף אחד לא מתאים", "שלידור יתקשר אליי", "לא רוצה לקבוע עכשיו", "אני אחזור אליכם". A question about the times ("אין מוקדם יותר?", "יש משהו בערב?") or a request for a different time is NOT a decline — false. Otherwise false.
+- "chosenOfferedTime": ONLY when a context line "(המועדים שהוצעו: …)" lists numbered meeting times AND the LATEST message picks exactly ONE of them in words: the number (1-based) of that time. Match by explicit number ("השני", "אופציה 3"), by hour ("13:30", "ב-14:00"), by "the earliest/first/last" ("הכי מוקדם", "הראשון", "האחרון"), or by day/part of day when exactly one listed time fits ("שלישי בבוקר", "ביום רביעי"). If two or more listed times fit ("בשלישי" when Tuesday has two times), or the message asks a question, declines, or names a time that is NOT listed, OMIT it. Never guess.
 - "wantsBuyerProof": true if the seller is asking how the property will be marketed, whether there are ready/potential buyers, or what value/results the agent brings (e.g. "יש לך קונים?", "איך תשווק את הנכס?", "למה כדאי לעבוד איתך?", "מאיפה יגיעו הקונים?"). Otherwise false.
 - "wantsSocialProof": true ONLY if the LATEST message's OWN WORDS ask to see/hear testimonials, recommendations, reviews, or references from past clients (contains words like "ממליצים", "המלצות", "חוות דעת", "לקוחות מרוצים", "ביקורות", or asks to speak with someone who sold with him). Leads type fast on a phone, so ACCEPT obvious misspellings of these words — e.g. "המצלות", "המלצות?", "ממליצם" all mean "המלצות". A request scoped to a place ("יש המלצות מנווה זאב?") still counts. This is a per-message property of the latest message's text ALONE. Apply this hard rule: if the latest message contains an address, a room count, a floor, a size (מ"ר), or a price — and does NOT contain any testimonial/recommendation word — then wantsSocialProof MUST be false, no matter what earlier messages said. Likewise a bare "כן"/"אוקיי"/"טוב" with no testimonial word is false. Do NOT carry it over from earlier turns. Example: latest="רחוב רבין 12, 5 חדרים, קומה 2, 2.4 מיליון" → wantsSocialProof=false (it is property details). Example: latest="יש ממליצים?" → wantsSocialProof=true. Distinct from "wantsBuyerProof" (marketing/buyers). Otherwise false.
 
@@ -225,6 +235,13 @@ export interface ClassifyInput {
    * without it the model has no idea what day it is.
    */
   today?: string | undefined;
+  /**
+   * The meeting times currently on offer, numbered, in the words the person saw
+   * — e.g. `1) יום שלישי 13:30; 2) יום שלישי 17:00`. A list message stores only
+   * its body, so without this the model cannot tell which time "הכי מוקדם"
+   * refers to. Given only while an offer is standing.
+   */
+  offeredTimes?: string | undefined;
 }
 
 export interface ClassifyResult {
@@ -249,6 +266,9 @@ export async function classifyAndExtract(
   const todayContext = input.today
     ? [{ role: 'user' as const, content: `(היום: ${input.today})` }]
     : [];
+  const offeredTimesContext = input.offeredTimes
+    ? [{ role: 'user' as const, content: `(המועדים שהוצעו: ${input.offeredTimes})` }]
+    : [];
 
   const { text, usage } = await llm.complete({
     model,
@@ -257,6 +277,7 @@ export async function classifyAndExtract(
       ...(input.history ?? []),
       ...priorNotesContext,
       ...todayContext,
+      ...offeredTimesContext,
       { role: 'user', content: input.text },
     ],
     // Classification JSON is tiny; this is a generous ceiling, not a target.

@@ -280,6 +280,171 @@ describe('lead lifecycle: form submission to qualification', () => {
     expect(calendar.created[0]!.values[ACTIVITY_COLUMNS.start]).toBeDefined();
   });
 
+  it('books a consultation when the lead chooses a time in words, not by tapping', async () => {
+    // The live failure this covers: "נלך על הכי מוקדם" / "כן בבקשה" never
+    // matched a tapped row, so it fell to the reply-writer, which told the
+    // person "נקבענו" with nothing booked — then re-sent the list twenty minutes
+    // later with a different time. A choice in words must book like a tap.
+    const channel = new FakeChannel();
+    const calendar = new FakeCalendar();
+    const appointments = {
+      db,
+      monday: calendar as unknown as MondayClient,
+      slotOptions: { ...DEFAULT_SLOT_OPTIONS, timeZone: TZ },
+    };
+
+    const ingested = await ingestLead(
+      db,
+      { leadgenId: 'LEAD-WORDS', formId: FORM_ID },
+      INGEST_DEPS,
+    );
+    const conversationId = ingested.conversationId!;
+    await db.insert(messages).values({
+      conversationId,
+      direction: 'outbound',
+      body: 'האם הנכס משווק כרגע?',
+      providerMessageId: `out-${conversationId}`,
+    });
+    await db
+      .update(conversations)
+      .set({
+        stage: 'assessing_intent',
+        extracted: {
+          sellIntent: 'ready',
+          timeline: 'immediate',
+          neighborhood: 'רמות',
+          currentlyMarketed: 'no',
+          bookingIntent: true,
+        },
+      })
+      .where(eq(conversations.id, conversationId));
+    await ingestMessage(db, inbound('כן, אני רוצה להתקדם', 'wamid.WORDS-1'));
+
+    const offered = await createConversationWorkflow(
+      {
+        db,
+        llm: new FakeLlmClient([
+          JSON.stringify({
+            intent: 'ANSWER',
+            confidence: 0.9,
+            extracted: { seriousSeller: true, sellMotivation: 'עוברים דירה' },
+          }),
+        ]),
+        channel,
+        appointments,
+      },
+      checkpointer,
+    ).invoke(conversationId, { configurable: { thread_id: conversationId } });
+    expect(offered.stage).toBe('appointment_proposed');
+    const slots = await findSlotsToOffer(appointments);
+
+    // "The earliest one, please" — in words. The classifier, shown the numbered
+    // offer, resolves it to time #1.
+    await ingestMessage(db, inbound('נלך על הכי מוקדם', 'wamid.WORDS-2'));
+    const llm = new FakeLlmClient([
+      JSON.stringify({
+        intent: 'ANSWER',
+        confidence: 0.9,
+        extracted: {},
+        chosenOfferedTime: 1,
+      }),
+    ]);
+    const booked = await createConversationWorkflow(
+      { db, llm, channel, appointments },
+      checkpointer,
+    ).invoke(conversationId, { configurable: { thread_id: conversationId } });
+
+    // The classifier was shown the standing offer, numbered, in the words the
+    // person saw — without it "הכי מוקדם" could not be resolved.
+    const classifyRequest = llm.requests[0]!;
+    const contextLines = classifyRequest.messages
+      .map((m) => m.content)
+      .filter((c) => c.startsWith('(המועדים שהוצעו:'));
+    expect(contextLines).toHaveLength(1);
+    expect(contextLines[0]).toContain(`1) ${formatSlot(slots[0]!, TZ)}`);
+
+    // Booked exactly like a tap: the canned confirmation, the stage, the event.
+    expect(booked.action).toBe('confirm_booking');
+    expect(booked.stage).toBe('appointment_confirmed');
+    expect(channel.sent.at(-1)).toMatchObject({ kind: 'text' });
+    expect(booked.text).toContain(formatSlot(slots[0]!, TZ));
+    expect(calendar.created).toHaveLength(1);
+    // No reply-writer call: nothing was left for the model to make up.
+    expect(llm.requests).toHaveLength(1);
+  });
+
+  it('does not book when the words fit more than one offered time', async () => {
+    // "בשלישי" with two Tuesday times on offer: the classifier omits a choice,
+    // the turn answers with the times in view and leaves the offer standing.
+    const channel = new FakeChannel();
+    const calendar = new FakeCalendar();
+    const appointments = {
+      db,
+      monday: calendar as unknown as MondayClient,
+      slotOptions: { ...DEFAULT_SLOT_OPTIONS, timeZone: TZ },
+    };
+    const ingested = await ingestLead(
+      db,
+      { leadgenId: 'LEAD-AMBIG', formId: FORM_ID },
+      INGEST_DEPS,
+    );
+    const conversationId = ingested.conversationId!;
+    await db.insert(messages).values({
+      conversationId,
+      direction: 'outbound',
+      body: 'האם הנכס משווק כרגע?',
+      providerMessageId: `out-${conversationId}`,
+    });
+    await db
+      .update(conversations)
+      .set({
+        stage: 'assessing_intent',
+        extracted: {
+          sellIntent: 'ready',
+          timeline: 'immediate',
+          neighborhood: 'רמות',
+          currentlyMarketed: 'no',
+          bookingIntent: true,
+        },
+      })
+      .where(eq(conversations.id, conversationId));
+    await ingestMessage(db, inbound('כן', 'wamid.AMBIG-1'));
+    await createConversationWorkflow(
+      {
+        db,
+        llm: new FakeLlmClient([
+          JSON.stringify({
+            intent: 'ANSWER',
+            confidence: 0.9,
+            extracted: { seriousSeller: true, sellMotivation: 'עוברים' },
+          }),
+        ]),
+        channel,
+        appointments,
+      },
+      checkpointer,
+    ).invoke(conversationId, { configurable: { thread_id: conversationId } });
+
+    await ingestMessage(db, inbound('משהו בשלישי', 'wamid.AMBIG-2'));
+    const result = await createConversationWorkflow(
+      {
+        db,
+        llm: new FakeLlmClient([
+          // No chosenOfferedTime: ambiguous.
+          JSON.stringify({ intent: 'ANSWER', confidence: 0.9, extracted: {} }),
+          'יש לי בשלישי גם בבוקר וגם אחר הצהריים — איזה מהם מתאים לך?',
+        ]),
+        channel,
+        appointments,
+      },
+      checkpointer,
+    ).invoke(conversationId, { configurable: { thread_id: conversationId } });
+
+    expect(result.action).toBe('assist_booking');
+    expect(result.stage).toBe('appointment_proposed');
+    expect(calendar.created).toHaveLength(0);
+  });
+
   it('nudges a silent lead, then stops — and a reply cancels the sequence', async () => {
     // Requirement §2.3 and §2.6 end to end: the lead is contacted, ignores it,
     // gets nudged, then answers — after which nothing further is scheduled.

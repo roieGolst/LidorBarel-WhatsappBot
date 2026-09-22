@@ -44,6 +44,7 @@ Last updated: 2026-09-08
 | 5 | Offer real free times | `appointments/availability.ts` · `appointments/booking.ts` | `availability.test.ts` · `booking.test.ts` | ✅ |
 | 5 | Book into Lidor's calendar | `appointments/booking.ts` (`פעילות` → Monday sync) | `booking.test.ts` · `e2e/leadLifecycle.test.ts` · **verified live 2026-09-08** (IMPLEMENTATION-STATUS §Phase 6) | ✅ |
 | 4c | A projection deleted by hand is recreated | `monday/syncLead.ts` · `monday/client.ts` (`itemExists` checks `state`) | `client.test.ts` · `mondayProjection.test.ts` | ✅ |
+| 5 | A time chosen in words ("הכי מוקדם", "13:30") books like a tap; the writer never claims a booking | `workflow/classify.ts` (`chosenOfferedTime`, offer context line) · `workflow/conversationTurn.ts` (`bookChosenSlot`) · `workflow/generate.ts` (`assist_booking`) | `classify.test.ts` · `e2e/leadLifecycle.test.ts` (in words; ambiguous) | ✅ |
 | 5 | Never double-book | availability re-read at booking time | `booking.test.ts` (slot taken) | ✅ |
 | 5 | Never offer outside meeting hours or on Shabbat | `appointments/availability.ts` | `availability.test.ts` | ✅ |
 | 5 | Offered times cover morning / midday / evening, on a half-hour grid from 08:30 | `appointments/availability.ts` (`pickOfferSlots`) | `availability.test.ts` · `booking.test.ts` | ✅ |

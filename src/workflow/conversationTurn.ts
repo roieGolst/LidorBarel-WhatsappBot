@@ -34,6 +34,7 @@ import {
   recordOffer,
   type BookingDeps,
 } from '../appointments/booking.js';
+import type { Slot } from '../appointments/availability.js';
 import {
   NO_SLOTS_MESSAGE,
   SLOT_OFFER_BODY,
@@ -47,6 +48,7 @@ import {
   bookingConfirmation,
   isSlotLabel,
   matchSlot,
+  numberedOfferedTimes,
   offeredTimesContext,
   parseStoredSlots,
   sameSlots,
@@ -806,6 +808,102 @@ export function createConversationWorkflow(
       // fresh offer, in the same list shape, never as a screening answer.
       let staleSlotTap = false;
 
+      /**
+       * Books a time the person chose — by tapping a row, or (below, once the
+       * classifier has read it) in words — and replies. One path for both, so a
+       * choice made in words is booked exactly like a tap: re-checked against
+       * the calendar, written to the board, confirmed with the canned line.
+       *
+       * `chosen` undefined means a label that is not in the current offer (an old
+       * list, a re-offer that moved on), answered like a slot that was just taken.
+       */
+      const bookChosenSlot = async (chosen: Slot | undefined): Promise<TurnResult> => {
+        const appointments = deps.appointments!;
+        const outcome = chosen
+          ? await bookSlot(appointments, conversationId, chosen)
+          : undefined;
+
+        if (chosen && outcome?.booked) {
+          const text = bookingConfirmation(chosen, timeZone);
+          const { providerMessageId } = await send({
+            to: ctx.contactPhone,
+            conversation: ctx,
+            part: { kind: 'text', text },
+          });
+          await persist({
+            conversationId,
+            contactId: ctx.contactId,
+            contactPhone: ctx.contactPhone,
+            fromStage: ctx.stage,
+            toStage: 'appointment_confirmed',
+            action: 'confirm_booking',
+            extracted: ctx.known,
+            outbound: [{ body: text, providerMessageId }],
+          });
+          return {
+            stage: 'appointment_confirmed',
+            action: 'confirm_booking',
+            text,
+            sent: true,
+          };
+        }
+
+        // Taken between the offer and the choice (or chosen from a stale list).
+        // Apologise and offer what is left rather than leaving them with a
+        // booking that silently failed.
+        const body = chosen ? SLOT_TAKEN_MESSAGE : STALE_SLOT_MESSAGE;
+        const fresh = await findSlotsToOffer(appointments);
+        const parts: { part: OutboundPart; storeBody: string }[] = fresh.length
+          ? [
+              {
+                part: {
+                  kind: 'list' as const,
+                  body,
+                  buttonLabel: SLOT_OFFER_BUTTON,
+                  rows: slotListRows(fresh, timeZone),
+                },
+                storeBody: body,
+              },
+            ]
+          : [
+              {
+                part: { kind: 'text' as const, text: NO_SLOTS_MESSAGE },
+                storeBody: NO_SLOTS_MESSAGE,
+              },
+            ];
+
+        if (fresh.length) {
+          await recordOffer(appointments, conversationId, fresh, OFFER_HOLD_MS);
+        }
+
+        const outbound: OutboundMessageRecord[] = [];
+        for (const item of parts) {
+          const { providerMessageId } = await send({
+            to: ctx.contactPhone,
+            conversation: ctx,
+            part: item.part,
+          });
+          outbound.push({ body: item.storeBody, providerMessageId });
+        }
+        const toStage = fresh.length ? 'appointment_proposed' : 'qualified';
+        await persist({
+          conversationId,
+          contactId: ctx.contactId,
+          contactPhone: ctx.contactPhone,
+          fromStage: ctx.stage,
+          toStage,
+          action: 'offer_slots',
+          extracted: ctx.known,
+          outbound,
+        });
+        return {
+          stage: toStage,
+          action: 'offer_slots',
+          text: outbound.at(-1)?.body ?? '',
+          sent: true,
+        };
+      };
+
       if (ctx.stage === 'appointment_proposed' && deps.appointments) {
         currentOffer = await latestOffer(deps.db, conversationId);
         const chosen = currentOffer
@@ -820,91 +918,16 @@ export function createConversationWorkflow(
         const staleLabel = !chosen && isSlotLabel(ctx.currentText);
 
         if (chosen || staleLabel) {
-          const outcome = chosen
-            ? await bookSlot(deps.appointments, conversationId, chosen)
-            : undefined;
-
-          if (chosen && outcome?.booked) {
-            const text = bookingConfirmation(chosen, timeZone);
-            const { providerMessageId } = await send({
-              to: ctx.contactPhone,
-              conversation: ctx,
-              part: { kind: 'text', text },
-            });
-            await persist({
-              conversationId,
-              contactId: ctx.contactId,
-              contactPhone: ctx.contactPhone,
-              fromStage: ctx.stage,
-              toStage: 'appointment_confirmed',
-              action: 'confirm_booking',
-              extracted: ctx.known,
-              outbound: [{ body: text, providerMessageId }],
-            });
-            return {
-              stage: 'appointment_confirmed',
-              action: 'confirm_booking',
-              text,
-              sent: true,
-            };
-          }
-
-          // Taken between the offer and the tap (or tapped from a stale list).
-          // Apologise and offer what is left rather than leaving them with a
-          // booking that silently failed.
-          const body = chosen ? SLOT_TAKEN_MESSAGE : STALE_SLOT_MESSAGE;
-          const fresh = await findSlotsToOffer(deps.appointments);
-          const parts: { part: OutboundPart; storeBody: string }[] = fresh.length
-            ? [
-                {
-                  part: {
-                    kind: 'list' as const,
-                    body,
-                    buttonLabel: SLOT_OFFER_BUTTON,
-                    rows: slotListRows(fresh, timeZone),
-                  },
-                  storeBody: body,
-                },
-              ]
-            : [
-                {
-                  part: { kind: 'text' as const, text: NO_SLOTS_MESSAGE },
-                  storeBody: NO_SLOTS_MESSAGE,
-                },
-              ];
-
-          if (fresh.length) {
-            await recordOffer(deps.appointments, conversationId, fresh, OFFER_HOLD_MS);
-          }
-
-          const outbound: OutboundMessageRecord[] = [];
-          for (const item of parts) {
-            const { providerMessageId } = await send({
-              to: ctx.contactPhone,
-              conversation: ctx,
-              part: item.part,
-            });
-            outbound.push({ body: item.storeBody, providerMessageId });
-          }
-          const toStage = fresh.length ? 'appointment_proposed' : 'qualified';
-          await persist({
-            conversationId,
-            contactId: ctx.contactId,
-            contactPhone: ctx.contactPhone,
-            fromStage: ctx.stage,
-            toStage,
-            action: 'offer_slots',
-            extracted: ctx.known,
-            outbound,
-          });
-          return {
-            stage: toStage,
-            action: 'offer_slots',
-            text: outbound.at(-1)?.body ?? '',
-            sent: true,
-          };
+          return bookChosenSlot(chosen);
         }
       }
+
+      // The times currently on offer, if any — what a choice in words is
+      // resolved against, and what the classifier is shown.
+      const standingSlots: Slot[] =
+        ctx.stage === 'appointment_proposed' && currentOffer
+          ? parseStoredSlots(currentOffer.proposedSlots)
+          : [];
 
       // A meeting time tapped OUTSIDE the booking stage — a row from an old list,
       // after the meeting was booked, after a close, or once the offer lapsed. It
@@ -1345,8 +1368,30 @@ export function createConversationWorkflow(
                 ? { priorNotes: ctx.known.additionalNotes }
                 : {}),
               today: describeToday(new Date(), timeZone),
+              // While times are on offer the classifier sees them, so a choice
+              // made in words resolves to one of them (chosenOfferedTime).
+              ...(standingSlots.length
+                ? { offeredTimes: numberedOfferedTimes(standingSlots, timeZone) }
+                : {}),
             })
           ).analysis;
+
+      // A time chosen in words ("הכי מוקדם", "13:30", "שלישי בבוקר") while the
+      // offer stands. Booked exactly like a tap. Before this, such a reply fell
+      // to the reply-writer, which could only *talk* about the times — and once
+      // told the person "נקבענו" with nothing booked, then re-offered the list.
+      if (
+        deps.appointments &&
+        ctx.stage === 'appointment_proposed' &&
+        analysis.chosenOfferedTime !== undefined &&
+        analysis.confidence >= CONFIDENCE_THRESHOLD
+      ) {
+        const chosenInWords = standingSlots[analysis.chosenOfferedTime - 1];
+        if (chosenInWords) {
+          logger.info({ conversationId }, 'meeting time chosen in words — booking');
+          return bookChosenSlot(chosenInWords);
+        }
+      }
 
       // Answer validation (review req #1): drop an implausible free-text
       // neighborhood ("Opus 4.8") before it is trusted, so it is neither stored

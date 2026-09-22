@@ -164,6 +164,15 @@ export function offeredTimesContext(
   );
 }
 
+/**
+ * The standing offer as the classifier needs it: numbered, in the words the
+ * person saw, so a choice made in words ("הכי מוקדם", "13:30") can be resolved
+ * to one of these numbers and booked.
+ */
+export function numberedOfferedTimes(slots: readonly Slot[], timeZone: string): string {
+  return slots.map((slot, i) => `${i + 1}) ${formatSlot(slot, timeZone)}`).join('; ');
+}
+
 /** Restores slots from what was stored on the offer. */
 export function parseStoredSlots(raw: unknown): Slot[] {
   if (!Array.isArray(raw)) return [];

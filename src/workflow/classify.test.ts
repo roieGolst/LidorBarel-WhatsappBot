@@ -103,6 +103,44 @@ describe('classifyAndExtract', () => {
     expect(result.usage.model).toBe(CLASSIFIER_MODEL);
   });
 
+  it('shows the standing offer, numbered, and reads back the chosen time', async () => {
+    const llm = new FakeLlmClient([
+      '{"intent":"ANSWER","confidence":0.9,"extracted":{},"chosenOfferedTime":1}',
+    ]);
+
+    const result = await classifyAndExtract(llm, {
+      text: 'נלך על הכי מוקדם',
+      offeredTimes: '1) יום שלישי 13:30; 2) יום שלישי 17:00',
+    });
+
+    // The offer precedes the message, as a context line the prompt names.
+    const contents = llm.requests[0]!.messages.map((m) => m.content);
+    expect(contents.at(-2)).toBe(
+      '(המועדים שהוצעו: 1) יום שלישי 13:30; 2) יום שלישי 17:00)',
+    );
+    expect(contents.at(-1)).toBe('נלך על הכי מוקדם');
+    expect(result.analysis.chosenOfferedTime).toBe(1);
+  });
+
+  it('sends no offer line when none is standing, and the field is absent', async () => {
+    const llm = new FakeLlmClient(['{"intent":"FAQ","confidence":0.7}']);
+
+    const result = await classifyAndExtract(llm, { text: 'כמה זה עולה?' });
+
+    const contents = llm.requests[0]!.messages.map((m) => m.content);
+    expect(contents.some((c) => c.startsWith('(המועדים שהוצעו:'))).toBe(false);
+    expect(result.analysis.chosenOfferedTime).toBeUndefined();
+  });
+
+  it('rejects a non-positive chosen time rather than booking slot zero', () => {
+    const analysis = parseAnalysis(
+      '{"intent":"ANSWER","confidence":0.9,"chosenOfferedTime":0}',
+    );
+    // Schema violation → unparseable, so the caller falls back to UNCLEAR
+    // rather than booking a bogus index.
+    expect(analysis).toBeUndefined();
+  });
+
   it('defaults to the classifier model and puts the message last', async () => {
     const llm = new FakeLlmClient(['{"intent":"FAQ","confidence":0.7}']);
 

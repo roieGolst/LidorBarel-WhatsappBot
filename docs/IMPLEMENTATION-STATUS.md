@@ -149,6 +149,18 @@ Calendar event written by Monday's sync, lead status projected — the same
 standard every earlier phase was closed to. The e2e test proves the flow against
 a fake Monday only.
 
+#### Score-based offers — 2026-09-22
+
+Which free times a lead is shown now follows their priority score. At **80 or
+more** — an immediate timeline plus a property ready to list plus booking intent
+or a finished screening, i.e. selling now — the offer is Lidor's **soonest** free
+times (at most three per day, so it still spans two days). Below that it stays
+the morning/midday/evening spread, which is about fitting the meeting into the
+lead's week. Requested by Roie after a live test showed a ready-now lead offered
+"today 14:00 / 18:00, tomorrow 09:00 / 13:00 / 18:00" while the calendar was
+entirely free. The threshold is `URGENT_OFFER_SCORE`; the same rule applies to
+the first offer, a re-offer after a taken slot, and the silence nudge.
+
 #### Post-qualification robustness — 2026-09-08 (tasks from one live conversation)
 
 One real conversation, run end to end by the developer, went wrong four times

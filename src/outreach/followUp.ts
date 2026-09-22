@@ -23,6 +23,7 @@ import {
 } from '../appointments/booking.js';
 import { SLOT_OFFER_BUTTON, slotListRows } from '../appointments/slotMessages.js';
 import { APPOINTMENT_NUDGE_BODY, followUpMessage } from './followUpMessages.js';
+import { offerStrategyFor, type KnownFacts } from '../workflow/decide.js';
 import {
   decideFollowUp,
   scheduleNextFollowUp,
@@ -210,7 +211,12 @@ export async function sendFollowUp(
   // back to the ladder rather than promising times that do not exist.
   const reoffer =
     windowOpen && claimed.stage === 'appointment_proposed' && deps.appointments
-      ? await findSlotsToOffer(deps.appointments, undefined, now)
+      ? await findSlotsToOffer(
+          deps.appointments,
+          undefined,
+          now,
+          offerStrategyFor(claimed.extracted as KnownFacts),
+        )
       : [];
   if (reoffer.length > 0) {
     await recordOffer(deps.appointments!, conversationId, reoffer, OFFER_HOLD_MS, now);

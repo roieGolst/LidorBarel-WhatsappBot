@@ -6,6 +6,8 @@ import {
   decideTransition,
   HIGH_PRIORITY_SCORE,
   isHighPriority,
+  offerStrategyFor,
+  URGENT_OFFER_SCORE,
   leadPriorityScore,
   screensAllQuestions,
   type KnownFacts,
@@ -250,6 +252,32 @@ describe('decideTransition', () => {
         true,
       );
       expect(decision.addressFirst).toBeUndefined();
+    });
+  });
+
+  describe('offerStrategyFor', () => {
+    // A lead at 80+ has said in every way the flow asks that they are selling
+    // now; they get the soonest times. Everyone else gets a spread of the week.
+    it('offers the earliest times to a ready-now lead', () => {
+      const readyNow = {
+        timeline: 'immediate',
+        sellIntent: 'ready',
+        bookingIntent: true,
+      } as const;
+      expect(leadPriorityScore(readyNow)).toBeGreaterThanOrEqual(URGENT_OFFER_SCORE);
+      expect(offerStrategyFor(readyNow)).toBe('earliest');
+    });
+
+    it('offers a spread to a lead who is qualified but not in a hurry', () => {
+      // High priority (≥ 60, offered a meeting unasked) but below 80.
+      const withinMonth = { timeline: 'within_month', sellIntent: 'ready' } as const;
+      expect(isHighPriority(withinMonth)).toBe(true);
+      expect(leadPriorityScore(withinMonth)).toBeLessThan(URGENT_OFFER_SCORE);
+      expect(offerStrategyFor(withinMonth)).toBe('spread');
+    });
+
+    it('offers a spread when nothing is known', () => {
+      expect(offerStrategyFor({})).toBe('spread');
     });
   });
 

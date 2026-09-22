@@ -86,6 +86,25 @@ export const DEFAULT_SLOT_OPTIONS: Omit<SlotOptions, 'timeZone'> = {
 /** How many times an offer lists — two days of morning / midday / evening. */
 export const OFFER_SLOT_COUNT = 6;
 
+/**
+ * How the times in an offer are chosen from everything free.
+ *
+ * - `spread`: morning, midday and evening across the next free days
+ *   (`pickOfferSlots`) — variety, for a lead who is choosing when suits them.
+ * - `earliest`: the soonest free times (`pickEarliestSlots`) — for a lead whose
+ *   score says they are ready now, where every day before the meeting is a day
+ *   for the intent to cool. Which one applies is the workflow's call
+ *   (`offerStrategyFor` in `workflow/decide.ts`); this module only knows how.
+ */
+export type OfferStrategy = 'spread' | 'earliest';
+
+/**
+ * At most this many of the earliest slots come from one day, so an `earliest`
+ * offer is "13:30, 14:00, 14:30 today, then first thing tomorrow" rather than
+ * six back-to-back half-hours on one afternoon that read as a sales floor.
+ */
+export const EARLIEST_PER_DAY = 3;
+
 /** Whether two intervals overlap at all. */
 export function overlaps(a: Slot, b: BusyBlock): boolean {
   return a.start < b.end && b.start < a.end;
@@ -195,4 +214,27 @@ export function pickOfferSlots(
     if (!picked.includes(slot)) picked.push(slot);
   }
   return picked.sort((a, b) => a.start.getTime() - b.start.getTime());
+}
+
+/**
+ * Picks the soonest free times, at most `EARLIEST_PER_DAY` from any one day.
+ * `slots` arrive earliest-first from `availableSlots`, so this is a walk with a
+ * per-day cap, and the result is already in order.
+ */
+export function pickEarliestSlots(
+  slots: readonly Slot[],
+  count: number,
+  timeZone: string,
+): Slot[] {
+  const perDay = new Map<string, number>();
+  const picked: Slot[] = [];
+  for (const slot of slots) {
+    if (picked.length === count) break;
+    const day = localDate(slot.start, timeZone);
+    const taken = perDay.get(day) ?? 0;
+    if (taken >= EARLIEST_PER_DAY) continue;
+    perDay.set(day, taken + 1);
+    picked.push(slot);
+  }
+  return picked;
 }

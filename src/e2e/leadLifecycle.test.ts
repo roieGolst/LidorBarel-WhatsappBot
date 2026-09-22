@@ -261,8 +261,18 @@ describe('lead lifecycle: form submission to qualification', () => {
     const list = channel.sent.at(-1)!;
     expect(list.kind).toBe('list');
 
+    // This lead scores 85 (immediate 40 + ready 30 + booking 15): selling now,
+    // so the list is Lidor's SOONEST free times, not a spread of the week.
+    const slots = await findSlotsToOffer(appointments, undefined, undefined, 'earliest');
+    const spread = await findSlotsToOffer(appointments);
+    expect(list.kind === 'list' && list.rows.map((r) => r.title)).toEqual(
+      slots.map((slot) => formatSlot(slot, TZ)),
+    );
+    expect(list.kind === 'list' && list.rows.map((r) => r.title)).not.toEqual(
+      spread.map((slot) => formatSlot(slot, TZ)),
+    );
+
     // They tap one. The tapped row arrives as its title text.
-    const slots = await findSlotsToOffer(appointments);
     const picked = formatSlot(slots[0]!, TZ);
     await ingestMessage(db, inbound(picked, 'wamid.BOOK-2'));
 
@@ -336,7 +346,8 @@ describe('lead lifecycle: form submission to qualification', () => {
       checkpointer,
     ).invoke(conversationId, { configurable: { thread_id: conversationId } });
     expect(offered.stage).toBe('appointment_proposed');
-    const slots = await findSlotsToOffer(appointments);
+    // Scores 85, so the offer was the earliest times.
+    const slots = await findSlotsToOffer(appointments, undefined, undefined, 'earliest');
 
     // "The earliest one, please" — in words. The classifier, shown the numbered
     // offer, resolves it to time #1.

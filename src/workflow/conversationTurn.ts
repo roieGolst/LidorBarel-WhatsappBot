@@ -62,6 +62,7 @@ import { classifyAndExtract, WORKFLOW_OWNED_FIELDS, type Analysis } from './clas
 import { isAffirmative, isNegative } from './confirmation.js';
 import {
   CONFIDENCE_THRESHOLD,
+  offerStrategyFor,
   decideMainMenu,
   decideTransition,
   screensAllQuestions,
@@ -852,7 +853,12 @@ export function createConversationWorkflow(
         // Apologise and offer what is left rather than leaving them with a
         // booking that silently failed.
         const body = chosen ? SLOT_TAKEN_MESSAGE : STALE_SLOT_MESSAGE;
-        const fresh = await findSlotsToOffer(appointments);
+        const fresh = await findSlotsToOffer(
+          appointments,
+          undefined,
+          undefined,
+          offerStrategyFor(ctx.known),
+        );
         const parts: { part: OutboundPart; storeBody: string }[] = fresh.length
           ? [
               {
@@ -1707,7 +1713,12 @@ export function createConversationWorkflow(
       // handoff — promising times that do not exist would be worse than saying
       // he will call.
       if (decision.action === 'offer_slots' && deps.appointments) {
-        const offeredSlots = await findSlotsToOffer(deps.appointments);
+        const offeredSlots = await findSlotsToOffer(
+          deps.appointments,
+          undefined,
+          undefined,
+          offerStrategyFor(ctx.known),
+        );
 
         if (offeredSlots.length > 0) {
           await recordOffer(
@@ -1743,7 +1754,12 @@ export function createConversationWorkflow(
         // with the real times in view — the transcript does not hold them — and
         // the list is sent again only when the standing offer has lapsed or the
         // calendar moved, so the person can always still tap a row.
-        const fresh = await findSlotsToOffer(deps.appointments);
+        const fresh = await findSlotsToOffer(
+          deps.appointments,
+          undefined,
+          undefined,
+          offerStrategyFor(ctx.known),
+        );
         if (fresh.length === 0) {
           plan.push({
             part: { kind: 'text', text: NO_SLOTS_MESSAGE },

@@ -28,6 +28,7 @@ import type { DeliveryGate, DeliveryOutcome } from '../whatsapp/deliveryGate.js'
 import { guardedSend } from '../whatsapp/guardedSend.js';
 import {
   bookSlot,
+  bookedAppointment,
   findSlotsToOffer,
   latestOffer,
   OFFER_HOLD_MS,
@@ -46,6 +47,10 @@ import {
   STALE_SLOT_MESSAGE,
   alreadyBookedMessage,
   bookingConfirmation,
+  formatSlot,
+  rescheduleConfirmation,
+  rescheduleKeptMessage,
+  rescheduleOfferBody,
   isSlotLabel,
   matchSlot,
   numberedOfferedTimes,
@@ -63,6 +68,7 @@ import { isAffirmative, isNegative } from './confirmation.js';
 import {
   CONFIDENCE_THRESHOLD,
   offerStrategyFor,
+  POST_SCREENING_STAGES,
   decideMainMenu,
   decideTransition,
   screensAllQuestions,
@@ -87,6 +93,8 @@ import {
   MAIN_MENU,
   mainMenuChoiceFor,
   OFF_TOPIC_REDIRECT_MESSAGE,
+  RESTART_CONFIRM_BOOKED_MESSAGE,
+  RESTART_CONFIRM_MESSAGE,
   RESTART_DECLINED_MESSAGE,
   screeningAnswerFor,
   screeningQuestionFor,
@@ -249,6 +257,12 @@ export interface TurnContext {
   priorMalicious: boolean;
   /** The bot's most recent outbound text, to dedupe a throttle notice. */
   lastOutboundText?: string;
+  /**
+   * The consultation this lead has booked, if any — the start of the approved
+   * appointment. Loaded so every branch can honour it: a restart says it stays,
+   * a meeting request offers to move it, and no path can book a second one.
+   */
+  bookedSlot?: Slot;
 }
 
 export interface TurnResult {
@@ -305,6 +319,11 @@ export async function loadContext(
   }
   const texts = unanswered.map((m) => m.body?.trim() ?? '').filter((t) => t.length > 0);
   const currentText = texts.join('\n');
+
+  const booked = await bookedAppointment(db, conversationId);
+  const bookedSlot: Slot | undefined = booked
+    ? { start: booked.selectedSlot, end: booked.selectedSlotEnd }
+    : undefined;
   const batchPhotoCount = unanswered.filter(
     (m) => m.mediaType === 'image' && m.mediaUrl,
   ).length;
@@ -356,6 +375,7 @@ export async function loadContext(
     // No prior outbound message means the bot has not spoken yet.
     isFirstResponse: !turns.some((turn) => turn.role === 'assistant'),
     optedOut: await isOptedOut(db, contact.phone),
+    ...(bookedSlot ? { bookedSlot } : {}),
     currentText,
     currentMessageId: latest.providerMessageId ?? '',
     ...(currentMedia ? { currentMedia } : {}),
@@ -624,6 +644,16 @@ export function createConversationWorkflow(
   });
 
   /** The interactive re-ask for a "go back" — the pending question after undo. */
+  /**
+   * The "start over?" question. A lead with a meeting booked is told it stays:
+   * a restart re-runs the questions, it never cancels a meeting Lidor now has in
+   * his calendar (that is a reschedule, offered when they ask for a meeting).
+   */
+  const restartConfirmationFor = (ctx: TurnContext, tz: string): string =>
+    ctx.stage === 'appointment_confirmed' && ctx.bookedSlot
+      ? RESTART_CONFIRM_BOOKED_MESSAGE(formatSlot(ctx.bookedSlot, tz))
+      : RESTART_CONFIRM_MESSAGE;
+
   const backPart = (
     ctx: TurnContext,
     extracted: KnownFacts,
@@ -694,22 +724,45 @@ export function createConversationWorkflow(
       return { stage: gate.nextStage, text: gate.text, action: gate.action, sent: true };
     }
 
-    // restart / back — reset the facts and re-show the menu or re-ask the question.
-    const reset =
-      gate.kind === 'restart'
-        ? {
-            part: {
-              kind: 'list' as const,
-              body: MAIN_MENU.body,
-              buttonLabel: MAIN_MENU.buttonLabel,
-              rows: [...MAIN_MENU.rows],
-            },
-            storeBody: MAIN_MENU.body,
-            toStage: 'engaged' as ConversationStage,
-            extracted: {} as KnownFacts,
-          }
-        : { ...backPart(ctx, gate.extracted), extracted: gate.extracted };
-    const action = gate.kind === 'restart' ? 'restart' : 'go_back';
+    // restart / back.
+    //
+    // A typed "restart" always asks first: it discards everything the person
+    // answered, and the word is short enough to be sent by mistake or in another
+    // sense. "back" asks only once the flow is complete — mid-screening it is the
+    // documented way to change the previous answer and undoing one answer is
+    // cheap; after qualification or a booking it would silently regress the
+    // stage and delete a fact, which is what happened live on 2026-09-22 (a
+    // booked lead typed "חזור", landed on the menu, and was re-screened and
+    // re-offered times). The question is the same one a menu re-tap gets, so an
+    // explicit yes resumes through the one restart path — which never touches a
+    // booked meeting (see the restart-confirmed branch).
+    const mustConfirm =
+      gate.kind === 'restart' ||
+      (POST_SCREENING_STAGES as readonly string[]).includes(ctx.stage);
+    if (mustConfirm) {
+      const text = restartConfirmationFor(ctx, timeZone);
+      const { providerMessageId } = await send({
+        to: ctx.contactPhone,
+        conversation: ctx,
+        part: { kind: 'text', text },
+      });
+      await persist({
+        ...base,
+        toStage: ctx.stage,
+        action: 'confirm_restart',
+        extracted: {
+          ...ctx.known,
+          awaitingRestartConfirm: true,
+          pendingRestartChoice: 'check_fit',
+        },
+        outbound: [{ body: text, providerMessageId }],
+      });
+      return { stage: ctx.stage, action: 'confirm_restart', text, sent: true };
+    }
+
+    // Only a mid-screening "back" reaches here: undo the last answer and re-ask.
+    const reset = { ...backPart(ctx, gate.extracted), extracted: gate.extracted };
+    const action = 'go_back';
     const { providerMessageId } = await send({
       to: ctx.contactPhone,
       conversation: ctx,
@@ -825,7 +878,9 @@ export function createConversationWorkflow(
           : undefined;
 
         if (chosen && outcome?.booked) {
-          const text = bookingConfirmation(chosen, timeZone);
+          const text = outcome.rescheduled
+            ? rescheduleConfirmation(chosen, timeZone)
+            : bookingConfirmation(chosen, timeZone);
           const { providerMessageId } = await send({
             to: ctx.contactPhone,
             conversation: ctx,
@@ -1527,6 +1582,26 @@ export function createConversationWorkflow(
         );
       }
 
+      // A lead whose consultation is booked and who asks for a meeting again —
+      // from the menu or in words — is offered to MOVE it, never re-screened and
+      // never booked twice. Turning the new times down keeps the meeting; the
+      // generic decline would have dropped a booked lead to `qualified`.
+      if (ctx.bookedSlot && deps.appointments) {
+        const asksForMeeting =
+          menuChoice === 'book_meeting' ||
+          (validated.confidence >= CONFIDENCE_THRESHOLD &&
+            validated.extracted.bookingIntent === true);
+        if (ctx.stage === 'appointment_confirmed' && asksForMeeting) {
+          decision = {
+            nextStage: 'appointment_proposed',
+            action: 'offer_reschedule',
+            escalate: false,
+          };
+        } else if (decision.action === 'decline_slots') {
+          decision = { ...decision, nextStage: 'appointment_confirmed' };
+        }
+      }
+
       // A changed answer is being checked with the person: it is held aside,
       // never merged, until they confirm it.
       if (decision.pendingChange) {
@@ -1706,7 +1781,9 @@ export function createConversationWorkflow(
                   ctx.known.wantsExclusivityFollowup,
               )
             : decision.action === 'decline_slots'
-              ? SLOTS_DECLINED_MESSAGE
+              ? ctx.bookedSlot
+                ? rescheduleKeptMessage(ctx.bookedSlot, timeZone)
+                : SLOTS_DECLINED_MESSAGE
               : cannedReplyFor(decision.action);
       // A qualified lead who asked for a meeting is offered Lidor's real free
       // times. If he has nothing free in the horizon the turn falls back to the
@@ -1748,6 +1825,34 @@ export function createConversationWorkflow(
           });
           // Nothing was offered, so the conversation is not waiting on a choice.
           decision = { ...decision, nextStage: 'qualified' };
+        }
+      } else if (
+        decision.action === 'offer_reschedule' &&
+        deps.appointments &&
+        ctx.bookedSlot
+      ) {
+        const fresh = await findSlotsToOffer(
+          deps.appointments,
+          undefined,
+          undefined,
+          offerStrategyFor(ctx.known),
+        );
+        if (fresh.length === 0) {
+          const text = alreadyBookedMessage(ctx.bookedSlot, timeZone);
+          plan.push({ part: { kind: 'text', text }, storeBody: text });
+          decision = { ...decision, nextStage: 'appointment_confirmed' };
+        } else {
+          await recordOffer(deps.appointments, conversationId, fresh, OFFER_HOLD_MS);
+          const body = rescheduleOfferBody(ctx.bookedSlot, timeZone);
+          plan.push({
+            part: {
+              kind: 'list',
+              body,
+              buttonLabel: SLOT_OFFER_BUTTON,
+              rows: slotListRows(fresh, timeZone),
+            },
+            storeBody: body,
+          });
         }
       } else if (decision.action === 'assist_booking' && deps.appointments) {
         // A question or aside while times are on the table. The reply is written

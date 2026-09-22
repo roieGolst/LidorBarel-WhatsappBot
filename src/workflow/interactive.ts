@@ -110,6 +110,16 @@ export const INTENT_QUESTION =
 export const RESTART_CONFIRM_MESSAGE =
   'כבר אספתי את כל הפרטים שצריך והם אצל לידור 🙂 בטוח שתרצה שנתחיל את התהליך מחדש?';
 
+/**
+ * The same question for a lead whose consultation is already booked. Says
+ * outright that the meeting stays: a restart re-runs the questions, it never
+ * cancels a meeting Lidor has in his calendar. Moving it is a different request
+ * ("אפשר לשנות את הפגישה?"), answered with new times.
+ */
+export const RESTART_CONFIRM_BOOKED_MESSAGE = (when: string): string =>
+  `הפרטים שלך כבר אצל לידור והפגישה שלכם קבועה ל${when} ✅ ` +
+  'התחלה מחדש תאסוף את הפרטים שוב, אבל הפגישה נשארת. בטוח שתרצה להתחיל מחדש?';
+
 /** Sent when the person declines the restart — nothing changes, no pressure. */
 export const RESTART_DECLINED_MESSAGE =
   'מעולה, אז משאיר הכול כמו שהוא. הפרטים אצל לידור והוא יחזור אליך בהקדם 🙏';

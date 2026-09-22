@@ -53,7 +53,8 @@ export type TurnAction =
   | 'assist_qualified' // a question/comment after qualifying → a real reply, not an ack
   | 'about_lidor' // main-menu "about me" → introduce Lidor, ask nothing
   | 'answer_aside' // answer a question asked alongside an answer, before continuing
-  | 'confirm_restart'; // already-complete lead re-opened a flow → confirm before redoing it
+  | 'confirm_restart' // already-complete lead re-opened a flow → confirm before redoing it
+  | 'offer_reschedule'; // a booked lead asked for a meeting → offer to MOVE the one they have
 
 export interface Decision {
   nextStage: ConversationStage;

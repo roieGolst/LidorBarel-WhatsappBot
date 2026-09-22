@@ -45,6 +45,7 @@ Last updated: 2026-09-08
 | 5 | Book into Lidor's calendar | `appointments/booking.ts` (`פעילות` → Monday sync) | `booking.test.ts` · `e2e/leadLifecycle.test.ts` · **verified live 2026-09-08** (IMPLEMENTATION-STATUS §Phase 6) | ✅ |
 | 4c | A projection deleted by hand is recreated | `monday/syncLead.ts` · `monday/client.ts` (`itemExists` checks `state`) | `client.test.ts` · `mondayProjection.test.ts` | ✅ |
 | 5 | A time chosen in words ("הכי מוקדם", "13:30") books like a tap; the writer never claims a booking | `workflow/classify.ts` (`chosenOfferedTime`, offer context line) · `workflow/conversationTurn.ts` (`bookChosenSlot`) · `workflow/generate.ts` (`assist_booking`) | `classify.test.ts` · `e2e/leadLifecycle.test.ts` (in words; ambiguous) | ✅ |
+| 5 | A booked lead is never re-screened or booked twice; asking for a meeting offers to MOVE the one they have, on the same פעילות item | `workflow/conversationTurn.ts` (`offer_reschedule`) · `appointments/booking.ts` (`bookSlot` update path) | `stageMatrix.test.ts` (every input at `appointment_confirmed`; reschedule replay) | ✅ (calendar propagation: E-14) |
 | 5 | Never double-book | availability re-read at booking time | `booking.test.ts` (slot taken) | ✅ |
 | 5 | Never offer outside meeting hours or on Shabbat | `appointments/availability.ts` | `availability.test.ts` | ✅ |
 | 5 | A lead scoring 80+ (selling now) is offered Lidor's **soonest** free times, at most three per day; everyone else the spread | `workflow/decide.ts` (`URGENT_OFFER_SCORE`, `offerStrategyFor`) · `appointments/availability.ts` (`pickEarliestSlots`) · every `findSlotsToOffer` call (turn, re-offer, nudge) | `decide.test.ts` · `availability.test.ts` · `e2e/leadLifecycle.test.ts` (list rows are the earliest) | ✅ |
@@ -86,6 +87,8 @@ Last updated: 2026-09-08
 | Crash mid-turn resumes without re-sending | `workflow/checkpointer.ts` | `checkpointer.test.ts` |
 | Turns for one conversation never interleave | `queue/conversationQueue.ts` (job-id coalescing) | `conversationWorker.test.ts` |
 | A turn's messages arrive in the order sent, even behind a video | `whatsapp/deliveryGate.ts` · `workflow/conversationTurn.ts` (`ct_awaitDelivery`) · `whatsapp/routes.ts` | `deliveryGate.test.ts` · `conversationTurn.test.ts` · `routes.test.ts` |
+| A typed restart, and a "back" after qualification, ask before discarding anything | `workflow/conversationTurn.ts` (`handleGate` → `confirm_restart`) | `stageMatrix.test.ts` · `conversationTurn.test.ts` |
+| Every live stage × every deterministic input holds the four structural rules (no throw, no fact loss post-qualification, booking survives, booked lead never regressed) | `workflow/stageMatrix.test.ts` | itself — 110 cells |
 | Banned words never reach the customer | `workflow/validate.ts` | `validate.test.ts` |
 
 ---

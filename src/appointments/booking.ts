@@ -1,4 +1,4 @@
-import { desc, eq } from 'drizzle-orm';
+import { and, desc, eq } from 'drizzle-orm';
 import type { Database } from '../db/client.js';
 import { getConversationById } from '../db/repositories/conversations.js';
 import { appointmentRequests, conversations } from '../db/schema.js';
@@ -14,6 +14,7 @@ import {
 import { enqueueOutboxEvent } from '../outbox/outbox.js';
 import {
   availableSlots,
+  DEFAULT_SLOT_OPTIONS,
   OFFER_SLOT_COUNT,
   overlaps,
   pickEarliestSlots,
@@ -153,6 +154,49 @@ export async function recordOffer(
   return row!.id;
 }
 
+const DEFAULT_DURATION_MS = DEFAULT_SLOT_OPTIONS.durationMs;
+
+/**
+ * The consultation this conversation has booked: the approved appointment with
+ * its board item. `undefined` when none — the common case.
+ */
+export async function bookedAppointment(
+  db: Database,
+  conversationId: string,
+): Promise<
+  | {
+      id: string;
+      selectedSlot: Date;
+      selectedSlotEnd: Date;
+      mondayActivityItemId: string;
+    }
+  | undefined
+> {
+  const [row] = await db
+    .select({
+      id: appointmentRequests.id,
+      selectedSlot: appointmentRequests.selectedSlot,
+      mondayActivityItemId: appointmentRequests.mondayActivityItemId,
+    })
+    .from(appointmentRequests)
+    .where(
+      and(
+        eq(appointmentRequests.conversationId, conversationId),
+        eq(appointmentRequests.status, 'approved'),
+      ),
+    )
+    .orderBy(desc(appointmentRequests.updatedAt))
+    .limit(1);
+  if (!row?.selectedSlot || !row.mondayActivityItemId) return undefined;
+  return {
+    id: row.id,
+    selectedSlot: row.selectedSlot,
+    // The end is not stored; every consultation is the standard duration.
+    selectedSlotEnd: new Date(row.selectedSlot.getTime() + DEFAULT_DURATION_MS),
+    mondayActivityItemId: row.mondayActivityItemId,
+  };
+}
+
 /** The most recent offer made to a conversation, if any. */
 export async function latestOffer(
   db: Database,
@@ -181,7 +225,14 @@ export async function latestOffer(
 }
 
 export type BookingOutcome =
-  | { booked: true; appointmentId: string; activityItemId: string; slot: Slot }
+  | {
+      booked: true;
+      appointmentId: string;
+      activityItemId: string;
+      slot: Slot;
+      /** True when an existing consultation was moved rather than a new one made. */
+      rescheduled: boolean;
+    }
   | { booked: false; reason: 'slot_taken' | 'no_offer' | 'conversation_missing' };
 
 /**
@@ -214,7 +265,14 @@ export async function bookSlot(
     .limit(1);
   if (!offer) return { booked: false, reason: 'no_offer' };
 
-  const busy = await busyBlocks(deps);
+  // A lead who already has a consultation is MOVING it, not adding one. The
+  // existing board item is updated in place — never deleted and re-created,
+  // because deleting a פעילות item does not remove its calendar event
+  // (docs/MONDAY-MAPPING.md) — and its own time is not "busy" for this check.
+  const existing = await bookedAppointment(deps.db, conversationId);
+  const busy = (await busyBlocks(deps)).filter(
+    (block) => !existing || block.start.getTime() !== existing.selectedSlot.getTime(),
+  );
   if (busy.some((block) => overlaps(chosen, block))) {
     logger.info({ conversationId }, 'chosen slot was taken before booking');
     return { booked: false, reason: 'slot_taken' };
@@ -234,13 +292,26 @@ export async function bookSlot(
     };
   }
 
-  const activityItemId = await deps.monday.createItem(
-    ACTIVITY_BOARD_ID,
-    'פגישת ייעוץ',
-    columnValues,
-  );
+  let activityItemId: string;
+  if (existing) {
+    activityItemId = existing.mondayActivityItemId;
+    await deps.monday.updateItem(ACTIVITY_BOARD_ID, activityItemId, columnValues);
+  } else {
+    activityItemId = await deps.monday.createItem(
+      ACTIVITY_BOARD_ID,
+      'פגישת ייעוץ',
+      columnValues,
+    );
+  }
 
   await deps.db.transaction(async (tx) => {
+    // The moved appointment's old request is closed so exactly one is approved.
+    if (existing && existing.id !== offer.id) {
+      await tx
+        .update(appointmentRequests)
+        .set({ status: 'expired', updatedAt: now })
+        .where(eq(appointmentRequests.id, existing.id));
+    }
     await tx
       .update(appointmentRequests)
       .set({
@@ -262,6 +333,15 @@ export async function bookSlot(
     await enqueueOutboxEvent(tx, conversationId);
   });
 
-  logger.info({ conversationId, activityItemId }, 'consultation booked');
-  return { booked: true, appointmentId: offer.id, activityItemId, slot: chosen };
+  logger.info(
+    { conversationId, activityItemId, rescheduled: Boolean(existing) },
+    existing ? 'consultation moved' : 'consultation booked',
+  );
+  return {
+    booked: true,
+    appointmentId: offer.id,
+    activityItemId,
+    slot: chosen,
+    rescheduled: Boolean(existing),
+  };
 }

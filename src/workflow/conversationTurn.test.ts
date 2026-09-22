@@ -1027,8 +1027,10 @@ describe('conversationTurn', () => {
       expect(contact?.doNotContact).toBe(true);
     });
 
-    it('restart clears the answers and re-shows the main menu', async () => {
-      const llm = new FakeLlmClient([]);
+    it('restart asks first, and only a yes clears the answers and re-runs the flow', async () => {
+      // It used to wipe at once. The word is short enough to be sent by mistake
+      // or in another sense, and what it discards is everything the person
+      // typed — so it is confirmed like a menu re-tap, through the same path.
       const channel = new FakeChannel();
       const { conversationId } = await seed({
         inbound: 'התחל מחדש',
@@ -1037,15 +1039,35 @@ describe('conversationTurn', () => {
         priorReply: 'האם הנכס משווק כרגע?',
       });
 
-      const result = await workflow({ db, llm, channel }).invoke(
+      const asked = await workflow({ db, llm: new FakeLlmClient([]), channel }).invoke(
         conversationId,
         config(conversationId),
       );
 
-      expect(result.action).toBe('restart');
-      expect(channel.sent[0]?.kind).toBe('list');
-      const conversation = await getConversationById(db, conversationId);
-      expect(conversation?.extracted).toEqual({});
+      expect(asked.action).toBe('confirm_restart');
+      expect(asked.text).toBe(RESTART_CONFIRM_MESSAGE);
+      let conversation = await getConversationById(db, conversationId);
+      expect(conversation?.extracted).toMatchObject({
+        neighborhood: 'רמות',
+        awaitingRestartConfirm: true,
+      });
+
+      // A yes restarts the fit check from its first question, answers gone.
+      await db.insert(messages).values({
+        conversationId,
+        direction: 'inbound',
+        body: 'כן',
+        providerMessageId: `in-${conversationId}-yes`,
+        createdAt: new Date(),
+      });
+      const restarted = await workflow({
+        db,
+        llm: new FakeLlmClient([]),
+        channel,
+      }).invoke(conversationId, config(conversationId));
+      expect(restarted.action).toBe('restart_confirmed');
+      conversation = await getConversationById(db, conversationId);
+      expect((conversation?.extracted as KnownFacts).neighborhood).toBeUndefined();
     });
 
     it('back undoes the last answer and re-asks that question', async () => {

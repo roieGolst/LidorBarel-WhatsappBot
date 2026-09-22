@@ -72,6 +72,31 @@ export function alreadyBookedMessage(slot: Slot | undefined, timeZone: string): 
 
 export const SLOT_OFFER_BUTTON = 'בחירת מועד';
 
+/**
+ * Offered to a lead with a meeting booked who asks for a meeting again: the one
+ * they have, and new times to move it to. Nothing changes until they pick one.
+ */
+export function rescheduleOfferBody(current: Slot, timeZone: string): string {
+  return (
+    `הפגישה שלך עם לידור קבועה ל${formatSlot(current, timeZone)} ` +
+    `(${formatDate(current, timeZone)}) ✅ רוצה להזיז אותה? אלה המועדים הפנויים — ` +
+    'בחירה תעביר את הפגישה למועד החדש, ובלי בחירה היא נשארת כמו שהיא.'
+  );
+}
+
+/** Sent when a lead with a meeting turns the new times down: nothing moved. */
+export function rescheduleKeptMessage(current: Slot, timeZone: string): string {
+  return `אין בעיה, הפגישה נשארת ל${formatSlot(current, timeZone)} ✅ נתראה!`;
+}
+
+/** The confirmation when an existing consultation was moved. */
+export function rescheduleConfirmation(slot: Slot, timeZone: string): string {
+  return (
+    `הפגישה הועברה ל${formatSlot(slot, timeZone)} (${formatDate(slot, timeZone)}) ✅ ` +
+    'לידור יתקשר אליך בשעה החדשה.'
+  );
+}
+
 /** Sent when Lidor has nothing free in the horizon. */
 export const NO_SLOTS_MESSAGE =
   'העברתי את הפרטים ללידור והוא יחזור אליך בהקדם לתאם מועד שנוח לך 🙏';

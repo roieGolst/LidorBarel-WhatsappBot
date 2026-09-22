@@ -176,11 +176,11 @@ The integration is Monday's built-in one and cannot be changed.
 
 Consequences, stated as rules:
 
-- **The bot never deletes a `פעילות` item.** Booking only creates, which is
-  verified. A future cancel/reschedule flow must *update* the item (status, time)
-  rather than delete it — and must first verify that updates propagate at all,
-  because that was assumed in plan v5 alongside deletion, and deletion turned out
-  not to.
+- **The bot never deletes a `פעילות` item.** Booking creates (verified live).
+  Rescheduling (2026-09-22) *updates* the same item's start/end in place —
+  **whether an update propagates to the calendar event is not yet verified**;
+  it was assumed in plan v5 alongside deletion, and deletion turned out not to.
+  Tracked as E-14 in IMPLEMENTATION-STATUS; verify once on a real booking.
 - **Never make a real booking to test.** Every real booking is a real calendar
   event that only a human can remove. The e2e test uses a fake Monday for this
   reason; the one live verification is done and recorded, and does not need

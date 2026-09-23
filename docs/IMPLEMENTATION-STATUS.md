@@ -159,13 +159,19 @@ cover the property as the person describes it, the reason for selling and any
 timing constraint, and what matters most to them — so the pre-call brief has
 something to say beyond four button taps. It is a conversation, not a form:
 
-- It ends as soon as the property details and the motivation are both known.
-- It is **skipped outright for a lead who asked for a meeting** — they said what
-  they want; times are offered straight after Q4.
-- A lead who is plainly ready now (score ≥ 80) and answers in a few words
-  (`TERSE_WORDS`) is closed after one question — every further question is a
-  chance for that to cool, and a person who writes "כן" is telling you how
-  much they want to type. A lead who writes at length is given room.
+- It ends as soon as the property details and the motivation are both known,
+  and is not run at all when the person said those things unprompted during
+  screening.
+- **A lead who asked for a meeting still gets it, shortened** — a meeting
+  request is intent, not context. At most two questions
+  (`DISCOVERY_MAX_BOOKING`), written in *preparation* mode: framed as getting
+  Lidor ready for the call, never as qualification, persuasion or a pitch; times
+  are offered the moment the property and the reason are known.
+- A lead who answers in a few words (`TERSE_WORDS`) and has either asked for a
+  meeting or is plainly ready now (score ≥ 80) is offered times after one
+  substantive answer — every further question is a chance for that to cool, and
+  a person who writes "כן" is telling you how much they want to type. A lead
+  who writes at length is given room.
 - A contentless answer is asked again with a fresh, context-aware question
   while questions remain; after the third the flow proceeds rather than nags.
 - The question-writer is told which question this is, what is known and what

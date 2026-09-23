@@ -6,6 +6,7 @@ import {
   decideTransition,
   HIGH_PRIORITY_SCORE,
   DISCOVERY_MAX,
+  DISCOVERY_MAX_BOOKING,
   isHighPriority,
   offerStrategyFor,
   URGENT_OFFER_SCORE,
@@ -149,22 +150,121 @@ describe('decideTransition', () => {
       expect(decision.nextStage).toBe('qualified');
     });
 
-    it('skips discovery altogether for a lead who asked for a meeting', () => {
-      // They said what they want. Every further question is a chance to cool.
+    describe('a lead who asked for a meeting gets a shortened discovery, then times', () => {
+      // A meeting request is intent, not context. One or two practical
+      // questions — the property, the reason — framed as preparing the call,
+      // and times the moment enough is known.
+      const asked: KnownFacts = {
+        sellIntent: 'ready',
+        neighborhood: 'רמות',
+        timeline: 'immediate',
+        currentlyMarketed: 'no',
+        bookingIntent: true,
+      };
+
+      it('is still asked a first question after Q4', () => {
+        const decision = decideTransition(
+          'screening_currently_marketed',
+          analysis({ extracted: { currentlyMarketed: 'no' } }),
+          {
+            sellIntent: 'ready',
+            neighborhood: 'רמות',
+            timeline: 'immediate',
+            bookingIntent: true,
+          },
+          true,
+          true,
+        );
+        expect(decision.action).toBe('ask_intent');
+        expect(decision.nextStage).toBe('assessing_intent');
+      });
+
+      it('is offered times after one terse, substantive answer', () => {
+        const decision = decideTransition(
+          'assessing_intent',
+          analysis({ extracted: { sellMotivation: 'עוברים דירה' } }),
+          { ...asked, discoveryCount: 1 },
+          true,
+          true,
+          true,
+        );
+        expect(decision.action).toBe('offer_slots');
+        expect(decision.bookingSuggested).toBeUndefined();
+      });
+
+      it('is offered times as soon as the property and the reason are known', () => {
+        const decision = decideTransition(
+          'assessing_intent',
+          analysis({ extracted: { additionalNotes: '4 חדרים, קומה 2' } }),
+          { ...asked, discoveryCount: 1, sellMotivation: 'עוברים דירה' },
+          true,
+          true,
+          false,
+        );
+        expect(decision.action).toBe('offer_slots');
+      });
+
+      it('gets a second question when the first answer was long but thin', () => {
+        const decision = decideTransition(
+          'assessing_intent',
+          analysis({ extracted: { sellMotivation: 'עוברים דירה' } }),
+          { ...asked, discoveryCount: 1 },
+          true,
+          true,
+          false,
+        );
+        expect(decision.action).toBe('ask_intent');
+      });
+
+      it('is offered times after the second question no matter what', () => {
+        const decision = decideTransition(
+          'assessing_intent',
+          analysis({ extracted: { sellMotivation: 'עוברים' } }),
+          { ...asked, discoveryCount: DISCOVERY_MAX_BOOKING },
+          true,
+          true,
+          false,
+        );
+        expect(decision.action).toBe('offer_slots');
+      });
+
+      it('asks once more after a contentless answer, then offers', () => {
+        const again = decideTransition(
+          'assessing_intent',
+          analysis(),
+          { ...asked, discoveryCount: 1 },
+          true,
+          true,
+        );
+        expect(again.action).toBe('ask_intent');
+        const done = decideTransition(
+          'assessing_intent',
+          analysis(),
+          { ...asked, discoveryCount: DISCOVERY_MAX_BOOKING },
+          true,
+          true,
+        );
+        expect(done.action).toBe('offer_slots');
+      });
+    });
+
+    it('asks nothing of a lead who said it all unprompted', () => {
+      // The property and the reason came up during screening; asking again
+      // would be the redundant question the flow exists to avoid.
       const decision = decideTransition(
         'screening_currently_marketed',
         analysis({ extracted: { currentlyMarketed: 'no' } }),
         {
           sellIntent: 'ready',
           neighborhood: 'רמות',
-          timeline: 'immediate',
-          bookingIntent: true,
+          timeline: 'within_month',
+          additionalNotes: 'רגר 15, 4 חדרים',
+          sellMotivation: 'עוברים דירה',
         },
         true,
-        true,
       );
-      expect(decision.action).toBe('offer_slots');
-      expect(decision.nextStage).toBe('appointment_proposed');
+      expect(decision.action).not.toBe('ask_intent');
+      expect(decision.nextStage).toBe('qualified');
     });
 
     it('closes a ready-now lead who answers in a few words after one question', () => {
@@ -286,10 +386,9 @@ describe('decideTransition', () => {
         { ...booked, sellIntent: 'ready', neighborhood: 'נווה זאב' },
         true,
       );
-      // They asked for a meeting, so discovery is skipped: with the last
-      // answer in, the flow completes (handoff here — booking is not wired).
-      expect(decision.action).toBe('proceed_qualified');
-      expect(decision.qualified).toBe(true);
+      // They asked for a meeting — intent, not context: a shortened discovery
+      // (preparation for the call) still runs before times are offered.
+      expect(decision.action).toBe('ask_intent');
     });
   });
 

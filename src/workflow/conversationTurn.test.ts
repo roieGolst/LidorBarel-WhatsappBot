@@ -1,5 +1,6 @@
 import { eq } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { DEFAULT_SLOT_OPTIONS } from '../appointments/availability.js';
 import type { Database } from '../db/client.js';
 import {
   findContactById,
@@ -18,6 +19,7 @@ import { recordOptOut } from '../db/repositories/optOuts.js';
 import { conversations, messages, optOuts } from '../db/schema.js';
 import { setupTestDatabase, truncateAll } from '../db/testing.js';
 import { FakeLlmClient } from '../llm/fake.js';
+import type { MondayClient } from '../monday/client.js';
 import type { PostgresSaver } from '@langchain/langgraph-checkpoint-postgres';
 import type { DeliveryGate, DeliveryOutcome } from '../whatsapp/deliveryGate.js';
 import { FakeChannel } from '../whatsapp/fakeChannel.js';
@@ -791,6 +793,71 @@ describe('conversationTurn', () => {
     const conversation = await getConversationById(db, conversationId);
     expect(conversation?.qualified).toBe(true);
     expect((conversation?.extracted as KnownFacts).discoveryCount).toBe(2);
+  });
+
+  it('a lead who asked for a meeting gets one preparation question, then times', async () => {
+    // A meeting request is intent, not context. After Q4 the bot asks one
+    // practical question — written in PREPARATION mode, never as qualification —
+    // and a terse, substantive answer is followed by real times, not a second
+    // question.
+    const calendar = {
+      created: [] as { name: string }[],
+      listItems: () => Promise.resolve([]),
+      createItem: (_b: string, name: string) => {
+        calendar.created.push({ name });
+        return Promise.resolve('activity-1');
+      },
+    };
+    const appointments = {
+      db,
+      monday: calendar as unknown as MondayClient,
+      slotOptions: { ...DEFAULT_SLOT_OPTIONS, timeZone: 'Asia/Jerusalem' },
+    };
+
+    // Turn 1: Q4 answered by a lead who tapped "book a meeting" earlier.
+    const llm1 = new FakeLlmClient([
+      '{"intent":"ANSWER","confidence":0.9,"extracted":{"currentlyMarketed":"no"}}',
+      'כדי שלידור יגיע מוכן — מה הסיבה למכירה, ומה מצב הדירה?',
+    ]);
+    const { conversationId } = await seed({
+      inbound: 'לא',
+      stage: 'screening_currently_marketed',
+      extracted: { neighborhood: 'רמות', timeline: 'immediate', bookingIntent: true },
+      priorReply: 'האם הנכס משווק כרגע?',
+    });
+    const step1 = await workflow({
+      db,
+      llm: llm1,
+      channel: new FakeChannel(),
+      appointments,
+    }).invoke(conversationId, config(conversationId));
+    expect(step1.action).toBe('ask_intent');
+    const instruction = llm1.requests[1]!.messages.at(-1)!.content;
+    expect(instruction).toContain('Discovery question 1 of at most 2');
+    expect(instruction).toContain('Mode: PREPARATION');
+    expect(instruction).toContain('assumed from the meeting request');
+
+    // Turn 2: three words. Enough — times are offered, nothing more is asked.
+    const llm2 = new FakeLlmClient([
+      '{"intent":"ANSWER","confidence":0.9,"extracted":{"seriousSeller":true,"sellMotivation":"עוברים דירה"}}',
+    ]);
+    await recordInboundMessage(db, {
+      conversationId,
+      providerMessageId: `in2-${conversationId}`,
+      body: 'עוברים דירה, משופצת',
+      createdAt: new Date(),
+    });
+    const channel2 = new FakeChannel();
+    const step2 = await workflow({
+      db,
+      llm: llm2,
+      channel: channel2,
+      appointments,
+    }).invoke(conversationId, config(conversationId));
+    expect(step2.action).toBe('offer_slots');
+    expect(step2.stage).toBe('appointment_proposed');
+    expect(channel2.sent.at(-1)?.kind).toBe('list');
+    expect(llm2.requests).toHaveLength(1); // classify only — no second question written
   });
 
   it('does not forward a lead who is only price-checking', async () => {

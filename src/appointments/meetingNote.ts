@@ -37,11 +37,23 @@ const MARKETED: Record<string, string> = {
   with_agent: 'משווק דרך מתווך אחר',
 };
 
+/**
+ * What the model wrote about the conversation for Lidor (`meetingBrief.ts`):
+ * the property as described, what the person asked or worried about, and the
+ * one thing to lead with on the call. Optional — the note stands without it.
+ */
+export interface MeetingBrief {
+  property: string;
+  concerns: string[];
+  focus: string;
+}
+
 export interface ActivityNoteInput {
   contact: Pick<Contact, 'name' | 'phone'>;
   facts: KnownFacts;
   /** The lead's priority score as last projected, if scored. */
   priorityScore: number | null;
+  brief?: MeetingBrief | undefined;
 }
 
 /**
@@ -72,7 +84,17 @@ export function activityNote(headline: string, input: ActivityNoteInput): string
   if (answers.length > 0) parts.push(answers.join(' · '));
 
   if (input.priorityScore !== null) parts.push(`ציון רצינות: ${input.priorityScore}`);
-  if (facts.additionalNotes) parts.push(`פרטי הנכס: ${facts.additionalNotes}`);
+
+  // The brief's property line supersedes the stored notes: it was written with
+  // both the notes and the transcript in view. Without a brief, the notes stand.
+  const { brief } = input;
+  if (brief?.property) parts.push(`הנכס: ${brief.property}`);
+  else if (facts.additionalNotes) parts.push(`הנכס: ${facts.additionalNotes}`);
+  if (brief && brief.concerns.length > 0) {
+    parts.push(`שאלות וחששות: ${brief.concerns.join('; ')}`);
+  }
+  if (brief?.focus) parts.push(`פוקוס לסגירה: ${brief.focus}`);
+
   if (facts.bookingIntent) parts.push('ביקש/ה פגישה ביוזמתו/ה');
 
   return parts.join(' | ');

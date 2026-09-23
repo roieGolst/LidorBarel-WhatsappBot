@@ -25,7 +25,7 @@ import {
   type Slot,
   type SlotOptions,
 } from './availability.js';
-import { activityItemName, meetingNote } from './meetingNote.js';
+import { activityItemName, meetingNote, type MeetingBrief } from './meetingNote.js';
 
 /**
  * Offering and booking consultation calls.
@@ -254,6 +254,10 @@ export async function bookSlot(
   conversationId: string,
   chosen: Slot,
   now: Date = new Date(),
+  options: {
+    /** The model-written brief for the note, when the caller could write one. */
+    brief?: MeetingBrief | undefined;
+  } = {},
 ): Promise<BookingOutcome> {
   const logger = getLogger();
 
@@ -307,6 +311,7 @@ export async function bookSlot(
     slot: chosen,
     timeZone: deps.slotOptions.timeZone,
     rescheduled: Boolean(existing),
+    brief: options.brief,
   });
 
   // The item's name is the calendar event's title, so it carries the person's

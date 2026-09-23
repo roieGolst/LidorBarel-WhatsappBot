@@ -359,6 +359,12 @@ describe('lead lifecycle: form submission to qualification', () => {
         extracted: {},
         chosenOfferedTime: 1,
       }),
+      // The pre-call brief, written once the time is chosen.
+      JSON.stringify({
+        property: '4 חדרים ברמות',
+        concerns: ['שאל מתי אפשר להיפגש'],
+        focus: 'להגיע עם הערכת שווי ראשונית',
+      }),
     ]);
     const booked = await createConversationWorkflow(
       { db, llm, channel, appointments },
@@ -380,8 +386,11 @@ describe('lead lifecycle: form submission to qualification', () => {
     expect(channel.sent.at(-1)).toMatchObject({ kind: 'text' });
     expect(booked.text).toContain(formatSlot(slots[0]!, TZ));
     expect(calendar.created).toHaveLength(1);
-    // No reply-writer call: nothing was left for the model to make up.
-    expect(llm.requests).toHaveLength(1);
+    // Two model calls: the classifier, then the brief for Lidor — and no
+    // reply-writer call, since nothing was left for the model to make up.
+    expect(llm.requests).toHaveLength(2);
+    const note = calendar.created[0]!.values[ACTIVITY_COLUMNS.description];
+    expect(note).toContain('פוקוס לסגירה: להגיע עם הערכת שווי ראשונית');
   });
 
   it('does not book when the words fit more than one offered time', async () => {

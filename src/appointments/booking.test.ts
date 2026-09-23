@@ -236,6 +236,21 @@ describe('bookSlot', () => {
     expect(note).not.toContain('\n');
   });
 
+  it('puts the caller’s brief into the description column', async () => {
+    const fake = new FakeMonday();
+    const conversationId = await seedLead('555');
+    const slot = await offerAndPick(fake, conversationId);
+
+    await bookSlot(deps(fake), conversationId, slot, NOW, {
+      brief: { property: '4 חדרים', concerns: ['העמלה'], focus: 'שקיפות על העמלה' },
+    });
+
+    const note = fake.created[0]!.values[ACTIVITY_COLUMNS.description];
+    expect(note).toContain('הנכס: 4 חדרים');
+    expect(note).toContain('שאלות וחששות: העמלה');
+    expect(note).toContain('פוקוס לסגירה: שקיפות על העמלה');
+  });
+
   it('moving a meeting updates the same item, and re-names it', async () => {
     const fake = new FakeMonday();
     const conversationId = await seedLead('555', null);

@@ -157,10 +157,16 @@ A booked consultation's activity item is now `פגישת ייעוץ עם <name>`
 name is the calendar event's title; it used to read just "פגישת ייעוץ") and
 carries a note in `תיאור חופשי` — a text column Lidor mapped into the calendar
 event's description — with the name, phone, the four answers in Hebrew, the
-priority score and the property details: everything he would otherwise open the
-lead to find, readable in Google Calendar before the call. The same naming and a
-matching note apply to the exclusivity-callback reminder. Deterministic, no
-model call; written with the item, so it is in the event from the first sync.
+priority score, and a **pre-call brief the model writes from the transcript**:
+the property as the person described it, their questions and concerns (fees,
+timing, another agent, a partner who must agree…), and the one thing Lidor
+should lead with to close — everything he would otherwise open the lead to
+find, readable in Google Calendar before the call. The brief is one Haiku call
+per booking or move (`meetingBrief.ts`), its tokens booked against the
+confirmation message; it never throws, so an outage means a note without the
+brief, never a failed booking. The same naming and a facts-only note apply to
+the exclusivity-callback reminder. Written with the item, so it is in the event
+from the first sync.
 
 #### The stage × input audit — 2026-09-22
 

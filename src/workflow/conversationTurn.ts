@@ -35,6 +35,7 @@ import {
   recordOffer,
   type BookingDeps,
 } from '../appointments/booking.js';
+import { generateMeetingBrief } from '../appointments/meetingBrief.js';
 import type { Slot } from '../appointments/availability.js';
 import {
   NO_SLOTS_MESSAGE,
@@ -528,6 +529,15 @@ export function createConversationWorkflow(
     }) => classifyAndExtract(deps.llm, args),
   );
 
+  // The pre-call brief for Lidor, written when a consultation is booked or
+  // moved. Its own task so a resumed turn does not write it twice. Never
+  // rejects (see meetingBrief.ts): the booking must not depend on it.
+  const meetingBrief = task(
+    'ct_meetingBrief',
+    (args: { history: LlmMessage[]; facts: KnownFacts }) =>
+      generateMeetingBrief(deps.llm, args),
+  );
+
   const generate = task(
     'ct_generate',
     (args: {
@@ -873,8 +883,15 @@ export function createConversationWorkflow(
        */
       const bookChosenSlot = async (chosen: Slot | undefined): Promise<TurnResult> => {
         const appointments = deps.appointments!;
+        // The brief is written from the whole transcript, including this pick,
+        // and goes out with the booking in the calendar event's description.
+        const written = chosen
+          ? await meetingBrief({ history: ctx.turns, facts: ctx.known })
+          : {};
         const outcome = chosen
-          ? await bookSlot(appointments, conversationId, chosen)
+          ? await bookSlot(appointments, conversationId, chosen, undefined, {
+              brief: written.brief,
+            })
           : undefined;
 
         if (chosen && outcome?.booked) {
@@ -894,7 +911,22 @@ export function createConversationWorkflow(
             toStage: 'appointment_confirmed',
             action: 'confirm_booking',
             extracted: ctx.known,
-            outbound: [{ body: text, providerMessageId }],
+            // The brief's tokens are booked against the confirmation, so the
+            // cost of a booking is visible like any other model call.
+            outbound: [
+              {
+                body: text,
+                providerMessageId,
+                ...(written.usage
+                  ? {
+                      llmModel: written.usage.model,
+                      inputTokens: written.usage.inputTokens,
+                      outputTokens: written.usage.outputTokens,
+                      cacheReadTokens: written.usage.cacheReadTokens,
+                    }
+                  : {}),
+              },
+            ],
           });
           return {
             stage: 'appointment_confirmed',

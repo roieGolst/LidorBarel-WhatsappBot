@@ -160,7 +160,7 @@ No schema changes needed.
 | Column ID | Type | Title | Bot writes |
 |---|---|---|---|
 | *(item name)* | — | — | `פגישת ייעוץ עם <name>` / `חזרה ללקוח — סיום בלעדיות עם <name>` — **this is the calendar event's title.** Mirrors what Monday's own Emails & Activities automation names its items. Bare kind when the name is unknown. |
-| `text_mm7fdakx` | text | תיאור חופשי | the **note**: name, phone, the screening answers in Hebrew, priority score, property details (`meetingNote.ts`). **Mapped by Lidor into the calendar event's description** (2026-09-23), so this is what he reads in Google Calendar before the call. One line (a `text` column), written with the item so it is in the event from the first sync. |
+| `text_mm7fdakx` | text | תיאור חופשי | the **note**: name, phone, the screening answers in Hebrew, priority score, then the model-written **brief** — the property as described, the person's questions and concerns, and the one focus point for closing (`meetingNote.ts`, `meetingBrief.ts`). **Mapped by Lidor into the calendar event's description** (2026-09-23), so this is what he reads in Google Calendar before the call. One line (a `text` column), written with the item so it is in the event from the first sync. |
 | `color_mkpc9t27` | status | סוג פעילות | `0` פגישת ייעוץ (a booked consultation) · `4` שיחת הכרות (the exclusivity callback reminder) |
 | `activity_start_time` | date | זמן התחלה | slot start |
 | `activity_end_time` | date | זמן סיום | slot end |

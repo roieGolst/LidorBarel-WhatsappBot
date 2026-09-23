@@ -5,9 +5,10 @@ import { DEFAULT_SLOT_OPTIONS } from '../appointments/availability.js';
 import {
   bookedAppointment,
   findSlotsToOffer,
+  latestOffer,
   recordOffer,
 } from '../appointments/booking.js';
-import { formatSlot } from '../appointments/slotMessages.js';
+import { formatSlot, parseStoredSlots } from '../appointments/slotMessages.js';
 import type { Database } from '../db/client.js';
 import { upsertContactByPhone } from '../db/repositories/contacts.js';
 import {
@@ -351,9 +352,12 @@ describe('the paths that went wrong live, replayed', () => {
       formatSlot({ start: booked.selectedSlot, end: booked.selectedSlotEnd }, TZ),
     );
 
-    // They pick a different time.
-    const slots = await findSlotsToOffer(deps);
-    const newSlot = slots.find(
+    // They pick a different time — from the offer the bot actually recorded
+    // (a ready-now lead is offered the earliest times, not the spread).
+    const standing = parseStoredSlots(
+      (await latestOffer(db, conversationId))!.proposedSlots,
+    );
+    const newSlot = standing.find(
       (s) => s.start.getTime() !== booked.selectedSlot.getTime(),
     )!;
     await recordInboundMessage(db, {

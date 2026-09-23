@@ -10,6 +10,9 @@ import {
   sameSlots,
   slotListRows,
   numberedOfferedTimes,
+  acceptsProposedTime,
+  resolveSlotChoice,
+  slotMentionedIn,
 } from './slotMessages.js';
 import { findBannedTerms } from '../workflow/validate.js';
 import {
@@ -175,5 +178,137 @@ describe('numberedOfferedTimes', () => {
     expect(numberedOfferedTimes(slots, TZ)).toBe(
       '1) יום שלישי 13:30; 2) יום שלישי 17:00',
     );
+  });
+});
+
+describe('resolveSlotChoice — a time chosen in words, resolved in code', () => {
+  // Wednesday 23 Sep 2026 (Israel, UTC+3). "Now" is 15:49 local.
+  const NOW = new Date('2026-09-23T12:49:00Z');
+  const at = (iso: string) => ({
+    start: new Date(iso),
+    end: new Date(new Date(iso).getTime() + 45 * 60_000),
+  });
+  const slots = [
+    at('2026-09-23T16:00:00Z'), // יום רביעי 19:00 (today)
+    at('2026-09-23T16:30:00Z'), // יום רביעי 19:30
+    at('2026-09-24T05:30:00Z'), // יום חמישי 08:30 (tomorrow)
+    at('2026-09-24T09:00:00Z'), // יום חמישי 12:00
+    at('2026-09-24T16:00:00Z'), // יום חמישי 19:00
+    at('2026-09-27T05:30:00Z'), // יום ראשון 08:30
+  ];
+  const pick = (text: string) => resolveSlotChoice(text, slots, TZ, NOW);
+
+  it('"הכי מוקדם היום" is the first time today — the live case', () => {
+    expect(pick('הכי מוקדם היום')).toBe(slots[0]);
+    expect(pick('הכי מוקדם')).toBe(slots[0]);
+    expect(pick('המוקדם ביותר בבקשה')).toBe(slots[0]);
+  });
+
+  it('"היום" with nothing today is not a choice', () => {
+    const tomorrowOnly = slots.slice(2);
+    expect(resolveSlotChoice('הכי מוקדם היום', tomorrowOnly, TZ, NOW)).toBeUndefined();
+  });
+
+  it('tomorrow, morning, evening, latest', () => {
+    expect(pick('מחר בבוקר')).toBe(slots[2]);
+    expect(pick('מחר בערב')).toBe(slots[4]);
+    expect(pick('הכי מאוחר מחר')).toBe(slots[4]);
+    expect(pick('בערב')).toBeUndefined(); // 19:00 today, 19:30 today, 19:00 tomorrow
+  });
+
+  it('an hour — unique, or narrowed by a day', () => {
+    expect(pick('19:30')).toBe(slots[1]);
+    expect(pick('ב-19:30')).toBe(slots[1]);
+    expect(pick('19:00')).toBeUndefined(); // today and tomorrow
+    expect(pick('19:00 היום')).toBe(slots[0]);
+    expect(pick('חמישי 19:00')).toBe(slots[4]);
+    expect(pick('בשעה 12')).toBe(slots[3]);
+  });
+
+  it('an ordinal is a row, a weekday is a day', () => {
+    expect(pick('השני')).toBe(slots[1]);
+    expect(pick('אופציה 3')).toBe(slots[2]);
+    expect(pick('3')).toBe(slots[2]);
+    expect(pick('ראשון')).toBe(slots[5]); // Sunday, the only one
+    expect(pick('יום חמישי')).toBeUndefined(); // three on Thursday
+    expect(pick('חמישי בבוקר')).toBe(slots[2]);
+  });
+
+  it('a question or a no is never a choice', () => {
+    expect(pick('יש משהו ב-19:30?')).toBeUndefined();
+    expect(pick('הכי מוקדם?')).toBeUndefined();
+    expect(pick('לא, 19:30 לא מתאים לי')).toBeUndefined();
+    expect(pick('אין לי היום')).toBeUndefined();
+  });
+
+  it('anything it cannot resolve uniquely is left alone', () => {
+    expect(pick('מה שנוח לך')).toBeUndefined();
+    expect(pick('')).toBeUndefined();
+  });
+});
+
+describe('slotMentionedIn — the one time the bot itself talked about', () => {
+  const NOW = new Date('2026-09-23T12:49:00Z');
+  const at = (iso: string) => ({
+    start: new Date(iso),
+    end: new Date(new Date(iso).getTime() + 45 * 60_000),
+  });
+  const slots = [
+    at('2026-09-23T16:00:00Z'),
+    at('2026-09-24T05:30:00Z'),
+    at('2026-09-24T16:00:00Z'),
+  ];
+
+  it('finds the slot a "want me to reserve 19:00 today?" refers to', () => {
+    expect(
+      slotMentionedIn(
+        'היום הזמן הכי מוקדם שיש זה 19:00, רוצה שאני אשריין לך את זה?',
+        slots,
+        TZ,
+        NOW,
+      ),
+    ).toBe(slots[0]);
+  });
+
+  it('is nothing when two times were mentioned, or none', () => {
+    expect(
+      slotMentionedIn('יש 08:30 מחר או 19:00 היום — מה עדיף?', slots, TZ, NOW),
+    ).toBeUndefined();
+    expect(
+      slotMentionedIn('אלה המועדים הפנויים — מה מתאים לך?', slots, TZ, NOW),
+    ).toBeUndefined();
+  });
+
+  it('is nothing when the hour is on two days and the message names neither', () => {
+    expect(slotMentionedIn('אפשר ב-19:00, מתאים?', slots, TZ, NOW)).toBeUndefined();
+  });
+});
+
+describe('acceptsProposedTime', () => {
+  it('is a short yes to what was just proposed', () => {
+    for (const yes of [
+      'כן',
+      'כן!',
+      'אישרתי כבר!!',
+      'סגור',
+      'מתאים לי',
+      'מאשר',
+      'יאללה',
+      'ok',
+    ]) {
+      expect(acceptsProposedTime(yes), yes).toBe(true);
+    }
+  });
+
+  it('is not a no, a question, or a sentence that merely contains a yes', () => {
+    for (const no of [
+      'לא',
+      'לא מתאים',
+      'כן?',
+      'כן אבל רק אם זה לא יותר מחצי שעה ואני לא בטוח',
+      '',
+    ]) {
+      expect(acceptsProposedTime(no), no).toBe(false);
+    }
   });
 });

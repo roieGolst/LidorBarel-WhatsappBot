@@ -349,9 +349,10 @@ describe('lead lifecycle: form submission to qualification', () => {
     // Scores 85, so the offer was the earliest times.
     const slots = await findSlotsToOffer(appointments, undefined, undefined, 'earliest');
 
-    // "The earliest one, please" — in words. The classifier, shown the numbered
-    // offer, resolves it to time #1.
-    await ingestMessage(db, inbound('נלך על הכי מוקדם', 'wamid.WORDS-2'));
+    // A choice in words that code cannot resolve ("the one you suggested
+    // first" — no hour, no ordinal, no day). The classifier, shown the
+    // numbered offer, resolves it to time #1.
+    await ingestMessage(db, inbound('בוא נלך על מה שהצעת בהתחלה', 'wamid.WORDS-2'));
     const llm = new FakeLlmClient([
       JSON.stringify({
         intent: 'ANSWER',

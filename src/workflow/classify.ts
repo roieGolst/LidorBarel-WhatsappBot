@@ -108,6 +108,9 @@ export const extractedSchema = z.object({
   // How many discovery questions have been asked after the four screening
   // questions (workflow-owned; see `DISCOVERY_MAX` in decide.ts).
   discoveryCount: z.number().int().nonnegative().optional(),
+  // Consecutive written (model) replies while times are on offer without a
+  // pick (workflow-owned; see `ASSIST_BOOKING_MAX` in decide.ts).
+  assistBookingStreak: z.number().int().nonnegative().optional(),
 });
 
 /** Extraction fields owned by the workflow, never accepted from the model. */
@@ -121,6 +124,7 @@ export const WORKFLOW_OWNED_FIELDS = [
   'pendingFactChange',
   'intentAssessed',
   'discoveryCount',
+  'assistBookingStreak',
 ] as const satisfies readonly (keyof z.infer<typeof extractedSchema>)[];
 
 export const analysisSchema = z.object({

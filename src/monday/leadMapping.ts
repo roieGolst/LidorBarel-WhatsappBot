@@ -180,6 +180,12 @@ export const ACTIVITY_COLUMNS = {
   status: 'activity_status',
   contact: 'board_relation_mkpcs6ky',
   location: 'location_mkpchxzd',
+  /**
+   * `תיאור חופשי` — a text column Lidor mapped into the calendar event's
+   * description (2026-09-23). What the bot writes here is what he reads in
+   * Google Calendar before the call. A `text` column: one line, plain string.
+   */
+  description: 'text_mm7fdakx',
 } as const;
 
 /** `סוג פעילות` label ids. The bot only ever books a consultation. */

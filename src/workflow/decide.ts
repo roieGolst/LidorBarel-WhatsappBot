@@ -53,7 +53,8 @@ export type TurnAction =
   | 'assist_qualified' // a question/comment after qualifying → a real reply, not an ack
   | 'about_lidor' // main-menu "about me" → introduce Lidor, ask nothing
   | 'answer_aside' // answer a question asked alongside an answer, before continuing
-  | 'confirm_restart'; // already-complete lead re-opened a flow → confirm before redoing it
+  | 'confirm_restart' // already-complete lead re-opened a flow → confirm before redoing it
+  | 'offer_reschedule'; // a booked lead asked for a meeting → offer to MOVE the one they have
 
 export interface Decision {
   nextStage: ConversationStage;
@@ -106,9 +107,81 @@ export function isHighPriority(facts: KnownFacts): boolean {
  */
 export const URGENT_OFFER_SCORE = 80;
 
+/** A lead who has said, in every way the flow asks, that they are selling now. */
+export function isReadyNow(facts: KnownFacts): boolean {
+  return (leadPriorityScore(facts) ?? 0) >= URGENT_OFFER_SCORE;
+}
+
+/**
+ * The most discovery questions asked after screening. Three is a conversation;
+ * more is an interrogation, and every one is a chance for the lead to go quiet.
+ */
+export const DISCOVERY_MAX = 3;
+
+/**
+ * The cap for a lead who asked for a meeting. They have said what they want;
+ * what remains is enough context for the call — the property, the reason —
+ * asked as preparation, never as a further sell. Two, and fewer when they are
+ * terse or have already said it.
+ */
+export const DISCOVERY_MAX_BOOKING = 2;
+
+/**
+ * A message of a few words. Screening answers are button taps and always
+ * short, so this is only read where free text is expected — the discovery
+ * answers — as the signal that this person does not want to type.
+ */
+export const TERSE_WORDS = 5;
+
+export function isTerseAnswer(text: string): boolean {
+  const words = text
+    .trim()
+    .split(/\s+/)
+    .filter((w) => w.length > 0);
+  return words.length > 0 && words.length <= TERSE_WORDS;
+}
+
+/**
+ * What the discovery question-writer is told: which question this is, of how
+ * many, in what mode; what is already known; and what is still missing — so it
+ * asks for the most useful gap rather than a fixed script, and prepares a call
+ * rather than qualifies when the person has already asked for the meeting.
+ * The answers themselves stay in Hebrew.
+ */
+export function discoveryContext(facts: KnownFacts): string {
+  const booking = facts.bookingIntent === true;
+  const number = (facts.discoveryCount ?? 0) + 1;
+  const cap = booking ? DISCOVERY_MAX_BOOKING : DISCOVERY_MAX;
+  const known = [
+    facts.neighborhood ? `neighbourhood: ${facts.neighborhood}` : undefined,
+    facts.additionalNotes ? `property details: ${facts.additionalNotes}` : undefined,
+    facts.sellMotivation ? `reason for selling: ${facts.sellMotivation}` : undefined,
+    facts.timeline
+      ? booking
+        ? `timeline: ${facts.timeline} (assumed from the meeting request — confirm only in passing, if at all)`
+        : `timeline: ${facts.timeline}`
+      : undefined,
+  ].filter((line): line is string => line !== undefined);
+  const missing = [
+    facts.additionalNotes
+      ? undefined
+      : 'property specifics (address, rooms, floor, condition, asking price)',
+    facts.sellMotivation ? undefined : 'the reason for selling and any timing constraint',
+    'any constraint or concern Lidor should know before the call (who else decides, what matters most)',
+  ].filter((line): line is string => line !== undefined);
+  return (
+    `Discovery question ${number} of at most ${cap}. ` +
+    (booking
+      ? 'Mode: PREPARATION — this person already asked for a meeting; meeting times are offered right after this. Brief and practical, framed as preparing Lidor for the call, never as qualification, persuasion or a pitch. '
+      : 'Mode: DISCOVERY. ') +
+    `Known: ${known.length > 0 ? known.join('; ') : 'nothing beyond the four screening answers'}. ` +
+    `Still missing, most useful first: ${missing.join('; ')}.`
+  );
+}
+
 /** Which free times to offer this lead, from what the flow knows of them. */
 export function offerStrategyFor(facts: KnownFacts): OfferStrategy {
-  return (leadPriorityScore(facts) ?? 0) >= URGENT_OFFER_SCORE ? 'earliest' : 'spread';
+  return isReadyNow(facts) ? 'earliest' : 'spread';
 }
 
 /**
@@ -184,6 +257,12 @@ export function decideTransition(
   known: KnownFacts = {},
   screenAll = false,
   canBook = false,
+  /**
+   * Whether the latest message was a short one — a few words. Judged by the
+   * turn (the decision never sees text). A terse, ready-now lead is closed,
+   * not questioned further; see `nextScreeningStep`.
+   */
+  terseAnswer = false,
 ): Decision {
   // Whether the reply needs the stronger model. Frustration pushes to Sonnet;
   // screening answers stay on Haiku (§7).
@@ -363,7 +442,15 @@ export function decideTransition(
   //    same question, whose buttons are already in front of the person — the flow
   //    never dead-ends on "rephrase".
   return alsoAnswering(
-    nextScreeningStep(current, facts, screenAll, escalate, intentSubstance, canBook),
+    nextScreeningStep(
+      current,
+      facts,
+      screenAll,
+      escalate,
+      intentSubstance,
+      canBook,
+      terseAnswer,
+    ),
     analysis,
   );
 }
@@ -482,6 +569,7 @@ function nextScreeningStep(
   escalate: boolean,
   intentHasSubstance = false,
   canBook = false,
+  terseAnswer = false,
 ): Decision {
   if (screenAll && facts.sellIntent === undefined) {
     return { nextStage: 'screening_sell_intent', action: 'ask_sell_intent', escalate };
@@ -499,31 +587,53 @@ function nextScreeningStep(
       escalate,
     };
   }
-  // Intent check — asked once after the four questions. `seriousSeller` is
-  // evaluated ONLY here, at the intent stage: a value the classifier may have set
-  // earlier (e.g. from a screening-button answer) must not short-circuit the flow
-  // before the question is even asked. Escalated to the stronger model so the
-  // question is context-aware — it acknowledges what the seller already shared and
-  // only asks for what is genuinely missing, rather than a blind fixed script.
+  // Discovery — after the four questions, a short conversation (a few
+  // model-written questions) so Lidor walks into the call knowing the property,
+  // the reason for selling and what this person cares about, not just four
+  // button taps. `seriousSeller` is evaluated ONLY here: a value the classifier
+  // may have set earlier (e.g. from a screening-button answer) must not
+  // short-circuit the flow before a question is even asked.
+  //
+  // It is a conversation, not a form: it ends as soon as it has done its job
+  // (the property and the reason are known), and it is not run at all when the
+  // person already said those things unprompted. A lead who asked for a meeting
+  // still gets it — a meeting request is intent, not context — but shortened
+  // and framed as preparing the call rather than qualifying them, and cut to a
+  // single question when they answer in a few words: every further question is
+  // a chance for that to cool, and a person who writes "כן" is telling you how
+  // much they want to type. So is a lead who is plainly ready now. A lead who
+  // writes at length is given room: they are sharing.
   //
   // Once passed it stays passed (`intentAssessed`): a lead who comes back, or
-  // re-answers one screening question, is not asked for their property details
-  // a second time.
+  // re-answers one screening question, is not asked for their details again.
+  const asked = facts.discoveryCount ?? 0;
+  const cap = facts.bookingIntent === true ? DISCOVERY_MAX_BOOKING : DISCOVERY_MAX;
+  const essentialsKnown =
+    facts.additionalNotes !== undefined && facts.sellMotivation !== undefined;
   if (current !== 'assessing_intent') {
-    if (facts.intentAssessed !== true) {
+    if (facts.intentAssessed !== true && !essentialsKnown) {
       return { nextStage: 'assessing_intent', action: 'ask_intent', escalate: true };
     }
+    // They said it all unprompted. Clearly just price-checking is still held;
+    // otherwise nothing is asked twice.
+    if (facts.intentAssessed !== true && facts.seriousSeller === false) {
+      return { nextStage: 'engaged', action: 'low_intent_hold', escalate };
+    }
   } else {
-    // Evaluating the intent-check answer. Clearly just price-checking → do not
-    // forward to Lidor; leave the door open.
+    // Clearly just price-checking → do not forward to Lidor; leave the door open.
     if (facts.seriousSeller === false) {
       return { nextStage: 'engaged', action: 'low_intent_hold', escalate };
     }
-    // The answer carried no real detail or intent (a bare "כן", filler, an
-    // acknowledgement) — do NOT forward an empty "got your details" handoff. Ask
-    // once more for the specifics that help Lidor prepare; the model-written
-    // question is context-aware, so this is a fresh, natural nudge, not a repeat.
+    const closeNow = terseAnswer && (facts.bookingIntent === true || isReadyNow(facts));
     if (!intentHasSubstance) {
+      // A bare "כן", filler, an acknowledgement: not forwarded as "got your
+      // details". Asked again — a fresh, context-aware question, not a repeat —
+      // while there are questions left; then the flow proceeds with what it has
+      // rather than nagging.
+      if (asked < cap) {
+        return { nextStage: 'assessing_intent', action: 'ask_intent', escalate: true };
+      }
+    } else if (!closeNow && !essentialsKnown && asked < cap) {
       return { nextStage: 'assessing_intent', action: 'ask_intent', escalate: true };
     }
   }

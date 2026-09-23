@@ -159,6 +159,8 @@ No schema changes needed.
 
 | Column ID | Type | Title | Bot writes |
 |---|---|---|---|
+| *(item name)* | — | — | `פגישת ייעוץ עם <name>` / `חזרה ללקוח — סיום בלעדיות עם <name>` — **this is the calendar event's title.** Mirrors what Monday's own Emails & Activities automation names its items. Bare kind when the name is unknown. |
+| `text_mm7fdakx` | text | תיאור חופשי | the **note**: name, phone, the screening answers in Hebrew, priority score, then the model-written **brief** — the property as described, the person's questions and concerns, and the one focus point for closing (`meetingNote.ts`, `meetingBrief.ts`). **Mapped by Lidor into the calendar event's description** (2026-09-23), so this is what he reads in Google Calendar before the call. One line (a `text` column), written with the item so it is in the event from the first sync. |
 | `color_mkpc9t27` | status | סוג פעילות | `0` פגישת ייעוץ (a booked consultation) · `4` שיחת הכרות (the exclusivity callback reminder) |
 | `activity_start_time` | date | זמן התחלה | slot start |
 | `activity_end_time` | date | זמן סיום | slot end |
@@ -168,6 +170,20 @@ No schema changes needed.
 | `location_mkpchxzd` | location | מיקום | — |
 | `activity_owner` | people | Owner | — |
 
+### Why the booking is a `פעילות` item and not an Emails & Activities entry
+
+Considered on 2026-09-23, when the calendar events read only "פגישת ייעוץ".
+The API (introspected, version 2025-04) has `create_timeline_item` and
+`delete_timeline_item` and **no update** for timeline items, so a reschedule
+through E&A would be delete + create — and a deleted entry's calendar event
+stays (below). An E&A entry only reaches the calendar through the board anyway
+(the "activity created in E&A → create a `פעילות` item" automation), so it adds a
+hop and removes the ability to move a meeting. The board item is kept, and made
+to carry what the E&A path would have: the person's name in the item name (= the
+event title) and the details in an update. **Logging the meeting in E&A as well
+would double-create** through that automation; do not add it without disabling
+the automation.
+
 ### ⚠️ Deleting a `פעילות` item does NOT remove its Calendar event
 
 Verified 2026-09-08: two test items were deleted through the API (confirmed
@@ -176,11 +192,11 @@ The integration is Monday's built-in one and cannot be changed.
 
 Consequences, stated as rules:
 
-- **The bot never deletes a `פעילות` item.** Booking only creates, which is
-  verified. A future cancel/reschedule flow must *update* the item (status, time)
-  rather than delete it — and must first verify that updates propagate at all,
-  because that was assumed in plan v5 alongside deletion, and deletion turned out
-  not to.
+- **The bot never deletes a `פעילות` item.** Booking creates (verified live).
+  Rescheduling (2026-09-22) *updates* the same item's start/end in place —
+  **whether an update propagates to the calendar event is not yet verified**;
+  it was assumed in plan v5 alongside deletion, and deletion turned out not to.
+  Tracked as E-14 in IMPLEMENTATION-STATUS; verify once on a real booking.
 - **Never make a real booking to test.** Every real booking is a real calendar
   event that only a human can remove. The e2e test uses a fake Monday for this
   reason; the one live verification is done and recorded, and does not need

@@ -1,5 +1,6 @@
-import { desc, eq } from 'drizzle-orm';
+import { and, desc, eq } from 'drizzle-orm';
 import type { Database } from '../db/client.js';
+import { findContactById } from '../db/repositories/contacts.js';
 import { getConversationById } from '../db/repositories/conversations.js';
 import { appointmentRequests, conversations } from '../db/schema.js';
 import { getLogger } from '../logger.js';
@@ -14,6 +15,7 @@ import {
 import { enqueueOutboxEvent } from '../outbox/outbox.js';
 import {
   availableSlots,
+  DEFAULT_SLOT_OPTIONS,
   OFFER_SLOT_COUNT,
   overlaps,
   pickEarliestSlots,
@@ -23,6 +25,7 @@ import {
   type Slot,
   type SlotOptions,
 } from './availability.js';
+import { activityItemName, meetingNote, type MeetingBrief } from './meetingNote.js';
 
 /**
  * Offering and booking consultation calls.
@@ -153,6 +156,52 @@ export async function recordOffer(
   return row!.id;
 }
 
+const DEFAULT_DURATION_MS = DEFAULT_SLOT_OPTIONS.durationMs;
+
+/** The activity's kind, as the item name begins — "פגישת ייעוץ עם <name>". */
+export const CONSULTATION_ITEM_NAME = 'פגישת ייעוץ';
+
+/**
+ * The consultation this conversation has booked: the approved appointment with
+ * its board item. `undefined` when none — the common case.
+ */
+export async function bookedAppointment(
+  db: Database,
+  conversationId: string,
+): Promise<
+  | {
+      id: string;
+      selectedSlot: Date;
+      selectedSlotEnd: Date;
+      mondayActivityItemId: string;
+    }
+  | undefined
+> {
+  const [row] = await db
+    .select({
+      id: appointmentRequests.id,
+      selectedSlot: appointmentRequests.selectedSlot,
+      mondayActivityItemId: appointmentRequests.mondayActivityItemId,
+    })
+    .from(appointmentRequests)
+    .where(
+      and(
+        eq(appointmentRequests.conversationId, conversationId),
+        eq(appointmentRequests.status, 'approved'),
+      ),
+    )
+    .orderBy(desc(appointmentRequests.updatedAt))
+    .limit(1);
+  if (!row?.selectedSlot || !row.mondayActivityItemId) return undefined;
+  return {
+    id: row.id,
+    selectedSlot: row.selectedSlot,
+    // The end is not stored; every consultation is the standard duration.
+    selectedSlotEnd: new Date(row.selectedSlot.getTime() + DEFAULT_DURATION_MS),
+    mondayActivityItemId: row.mondayActivityItemId,
+  };
+}
+
 /** The most recent offer made to a conversation, if any. */
 export async function latestOffer(
   db: Database,
@@ -181,7 +230,14 @@ export async function latestOffer(
 }
 
 export type BookingOutcome =
-  | { booked: true; appointmentId: string; activityItemId: string; slot: Slot }
+  | {
+      booked: true;
+      appointmentId: string;
+      activityItemId: string;
+      slot: Slot;
+      /** True when an existing consultation was moved rather than a new one made. */
+      rescheduled: boolean;
+    }
   | { booked: false; reason: 'slot_taken' | 'no_offer' | 'conversation_missing' };
 
 /**
@@ -198,11 +254,17 @@ export async function bookSlot(
   conversationId: string,
   chosen: Slot,
   now: Date = new Date(),
+  options: {
+    /** The model-written brief for the note, when the caller could write one. */
+    brief?: MeetingBrief | undefined;
+  } = {},
 ): Promise<BookingOutcome> {
   const logger = getLogger();
 
   const conversation = await getConversationById(deps.db, conversationId);
   if (!conversation) return { booked: false, reason: 'conversation_missing' };
+  const contact = await findContactById(deps.db, conversation.contactId);
+  if (!contact) return { booked: false, reason: 'conversation_missing' };
 
   const [offer] = await deps.db
     .select()
@@ -214,7 +276,14 @@ export async function bookSlot(
     .limit(1);
   if (!offer) return { booked: false, reason: 'no_offer' };
 
-  const busy = await busyBlocks(deps);
+  // A lead who already has a consultation is MOVING it, not adding one. The
+  // existing board item is updated in place — never deleted and re-created,
+  // because deleting a פעילות item does not remove its calendar event
+  // (docs/MONDAY-MAPPING.md) — and its own time is not "busy" for this check.
+  const existing = await bookedAppointment(deps.db, conversationId);
+  const busy = (await busyBlocks(deps)).filter(
+    (block) => !existing || block.start.getTime() !== existing.selectedSlot.getTime(),
+  );
   if (busy.some((block) => overlaps(chosen, block))) {
     logger.info({ conversationId }, 'chosen slot was taken before booking');
     return { booked: false, reason: 'slot_taken' };
@@ -233,14 +302,44 @@ export async function bookSlot(
       item_ids: [Number(conversation.mondayItemId)],
     };
   }
+  // The meeting note goes out with the item, in the column mapped into the
+  // calendar event's description — so it is in the event from the first sync.
+  columnValues[ACTIVITY_COLUMNS.description] = meetingNote({
+    contact,
+    facts: conversation.extracted ?? {},
+    priorityScore: conversation.priorityScore,
+    slot: chosen,
+    timeZone: deps.slotOptions.timeZone,
+    rescheduled: Boolean(existing),
+    brief: options.brief,
+  });
 
-  const activityItemId = await deps.monday.createItem(
-    ACTIVITY_BOARD_ID,
-    'פגישת ייעוץ',
-    columnValues,
-  );
+  // The item's name is the calendar event's title, so it carries the person's
+  // name. Set on a move too: an item made before the name was known is fixed.
+  const itemName = activityItemName(CONSULTATION_ITEM_NAME, contact);
+  let activityItemId: string;
+  if (existing) {
+    activityItemId = existing.mondayActivityItemId;
+    await deps.monday.updateItem(ACTIVITY_BOARD_ID, activityItemId, {
+      ...columnValues,
+      name: itemName,
+    });
+  } else {
+    activityItemId = await deps.monday.createItem(
+      ACTIVITY_BOARD_ID,
+      itemName,
+      columnValues,
+    );
+  }
 
   await deps.db.transaction(async (tx) => {
+    // The moved appointment's old request is closed so exactly one is approved.
+    if (existing && existing.id !== offer.id) {
+      await tx
+        .update(appointmentRequests)
+        .set({ status: 'expired', updatedAt: now })
+        .where(eq(appointmentRequests.id, existing.id));
+    }
     await tx
       .update(appointmentRequests)
       .set({
@@ -262,6 +361,15 @@ export async function bookSlot(
     await enqueueOutboxEvent(tx, conversationId);
   });
 
-  logger.info({ conversationId, activityItemId }, 'consultation booked');
-  return { booked: true, appointmentId: offer.id, activityItemId, slot: chosen };
+  logger.info(
+    { conversationId, activityItemId, rescheduled: Boolean(existing) },
+    existing ? 'consultation moved' : 'consultation booked',
+  );
+  return {
+    booked: true,
+    appointmentId: offer.id,
+    activityItemId,
+    slot: chosen,
+    rescheduled: Boolean(existing),
+  };
 }

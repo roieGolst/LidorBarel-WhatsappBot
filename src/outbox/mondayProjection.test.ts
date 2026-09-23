@@ -349,7 +349,9 @@ describe('the exclusivity callback reminder', () => {
       conversationId,
     );
 
-    const reminder = fake.created.find((item) => item.name === CALLBACK_ITEM_NAME);
+    const reminder = fake.created.find((item) =>
+      item.name.startsWith(CALLBACK_ITEM_NAME),
+    );
     expect(reminder).toBeDefined();
     // Linked to the lead item created moments before, in the same pass, and
     // remembered on the conversation so it is never filed twice.
@@ -376,9 +378,9 @@ describe('the exclusivity callback reminder', () => {
     await syncLead({ db, monday: monday(fake) }, conversationId);
     await syncLead({ db, monday: monday(fake) }, conversationId);
 
-    expect(fake.created.filter((item) => item.name === CALLBACK_ITEM_NAME)).toHaveLength(
-      1,
-    );
+    expect(
+      fake.created.filter((item) => item.name.startsWith(CALLBACK_ITEM_NAME)),
+    ).toHaveLength(1);
   });
 
   it('is not filed when the end is unknown or the lead declined a follow-up', async () => {
@@ -395,6 +397,8 @@ describe('the exclusivity callback reminder', () => {
     await syncLead({ db, monday: monday(fake) }, vague.conversationId);
     await syncLead({ db, monday: monday(fake) }, declined.conversationId);
 
-    expect(fake.created.some((item) => item.name === CALLBACK_ITEM_NAME)).toBe(false);
+    expect(fake.created.some((item) => item.name.startsWith(CALLBACK_ITEM_NAME))).toBe(
+      false,
+    );
   });
 });

@@ -1,3 +1,5 @@
+import type { Contact } from '../db/repositories/contacts.js';
+import { activityItemName, callbackNote } from './meetingNote.js';
 import type { Database } from '../db/client.js';
 import {
   setExclusivityCallbackItemId,
@@ -55,6 +57,8 @@ export function callbackStart(exclusivityEndsOn: string, timeZone: string): Date
 export function callbackColumnValues(
   start: Date,
   leadItemId: string | null,
+  /** The note for `תיאור חופשי` — the calendar event's description. */
+  note?: string,
 ): Record<string, unknown> {
   const values: Record<string, unknown> = {
     [ACTIVITY_COLUMNS.type]: { index: ACTIVITY_TYPE.introCall },
@@ -65,6 +69,7 @@ export function callbackColumnValues(
     ),
   };
   if (leadItemId) values[ACTIVITY_COLUMNS.contact] = { item_ids: [Number(leadItemId)] };
+  if (note) values[ACTIVITY_COLUMNS.description] = note;
   return values;
 }
 
@@ -84,8 +89,13 @@ export interface CallbackDeps {
  */
 export async function ensureExclusivityCallback(
   deps: CallbackDeps,
-  conversation: Pick<Conversation, 'id' | 'mondayItemId' | 'exclusivityCallbackItemId'>,
+  conversation: Pick<
+    Conversation,
+    'id' | 'mondayItemId' | 'exclusivityCallbackItemId' | 'priorityScore'
+  >,
   facts: KnownFacts,
+  /** Whose reminder it is — named in the item and described in the event. */
+  contact: Pick<Contact, 'name' | 'phone'>,
 ): Promise<string | undefined> {
   if (conversation.exclusivityCallbackItemId)
     return conversation.exclusivityCallbackItemId;
@@ -94,8 +104,17 @@ export async function ensureExclusivityCallback(
   const start = callbackStart(facts.exclusivityEndsOn, deps.timeZone);
   const itemId = await deps.monday.createItem(
     ACTIVITY_BOARD_ID,
-    CALLBACK_ITEM_NAME,
-    callbackColumnValues(start, conversation.mondayItemId),
+    activityItemName(CALLBACK_ITEM_NAME, contact),
+    callbackColumnValues(
+      start,
+      conversation.mondayItemId,
+      callbackNote({
+        contact,
+        facts,
+        priorityScore: conversation.priorityScore,
+        exclusivityEndsOn: facts.exclusivityEndsOn,
+      }),
+    ),
   );
   await setExclusivityCallbackItemId(deps.db, conversation.id, itemId);
 

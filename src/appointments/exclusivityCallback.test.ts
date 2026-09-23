@@ -124,6 +124,8 @@ describe('ensureExclusivityCallback', () => {
     }
   }
 
+  const CONTACT = { name: 'רועי גולסט', phone: '+972501234567' };
+
   const exclusive: KnownFacts = {
     currentlyMarketed: 'with_agent',
     exclusivityEndsAt: 'מחר',
@@ -149,10 +151,14 @@ describe('ensureExclusivityCallback', () => {
     const conversationId = await seedLead();
     const conversation = (await getConversationById(db, conversationId))!;
 
-    const first = await ensureExclusivityCallback(deps, conversation, exclusive);
+    const first = await ensureExclusivityCallback(deps, conversation, exclusive, CONTACT);
     expect(first).toBe('activity-1');
     expect(fake.created).toHaveLength(1);
-    expect(fake.created[0]!.name).toBe(CALLBACK_ITEM_NAME);
+    expect(fake.created[0]!.name).toBe(`${CALLBACK_ITEM_NAME} עם רועי גולסט`);
+    // The event's description: who, how to reach them, and when to call.
+    const note = fake.created[0]!.values[ACTIVITY_COLUMNS.description];
+    expect(note).toContain('+972501234567');
+    expect(note).toContain('2026-09-09');
     expect(fake.created[0]!.values[ACTIVITY_COLUMNS.contact]).toEqual({
       item_ids: [777],
     });
@@ -160,7 +166,7 @@ describe('ensureExclusivityCallback', () => {
     // A later projection of the same lead sees the record and does nothing.
     const again = (await getConversationById(db, conversationId))!;
     expect(again.exclusivityCallbackItemId).toBe('activity-1');
-    const second = await ensureExclusivityCallback(deps, again, exclusive);
+    const second = await ensureExclusivityCallback(deps, again, exclusive, CONTACT);
     expect(second).toBe('activity-1');
     expect(fake.created).toHaveLength(1);
   });
@@ -174,6 +180,7 @@ describe('ensureExclusivityCallback', () => {
       { db, monday: fake as unknown as MondayClient, timeZone: TZ },
       conversation,
       { currentlyMarketed: 'no' },
+      CONTACT,
     );
 
     expect(result).toBeUndefined();

@@ -68,6 +68,8 @@ dangerous than plain gaps, because reviewers trust them.
 | ~~**D-9**~~ | **The first screening message arrived above the welcome.** The opening sends the intro clip (welcome as its caption) and then the menu, in that order — but WhatsApp does not deliver in API order: a video is processed for seconds after Meta accepts it, while the text behind it is delivered at once. Found on the first production deploy (2026-09-20). **Fixed:** a turn now waits for a video's `delivered` status before sending what follows it, capped at 15 s so an offline phone cannot hold the turn; a clip Meta accepts and then fails to deliver falls back to its caption as text, like one it refuses outright. | `whatsapp/deliveryGate.ts` · `workflow/conversationTurn.ts` · `whatsapp/routes.ts` | Resolved. |
 | ~~**D-10**~~ | **The outbox judged "due" by the wrong clock.** A new event's `next_attempt_at` is stamped by Postgres (`now()`, microseconds) but `claimOutboxBatch` compared it to a JavaScript `Date`, which is truncated to the millisecond — so an event enqueued in the same millisecond read as not yet due and was skipped. Harmless in production (the worker catches it on its next poll), but it made the suite flaky on a fast machine and failed the first CI run on `main` (2026-09-20), which blocked that deploy. **Fixed:** the claim uses the database clock unless a time is passed. | `outbox/outbox.ts` | Resolved. |
 | ~~**D-11**~~ | **A time chosen in words was never booked, and the bot said it was.** Only a tapped list row matched a slot; "נלך על הכי מוקדם" / "כן בבקשה" fell to the reply-writer, which can only *talk* about the times — and told the person "נקבענו", then twenty minutes later "כבר סגור ומאושר" with a different hour, then re-sent the list. No item, no calendar event. Seen live 2026-09-22. **Fixed:** while an offer stands the classifier is shown it numbered and returns `chosenOfferedTime`; an unambiguous choice goes through the same booking path as a tap (re-checked, written to פעילות, canned confirmation). An ambiguous one ("בשלישי" with two Tuesday times) is answered with the times in view, and the writer is now forbidden from saying a meeting is set or proposing one time for a yes. | `workflow/classify.ts` · `workflow/conversationTurn.ts` · `workflow/generate.ts` | Resolved. |
+| ~~**D-12**~~ | **"חזור" / "התחל מחדש" acted at once, at any stage.** A lead with a booked meeting typed "חזור": the last answer was deleted, the stage fell to `engaged`, the menu appeared, and "פגישה" then re-screened them and offered times again — as if nothing had been booked. Seen live 2026-09-22. **Fixed:** a typed restart always asks first; "back" asks once the flow is complete (mid-screening it still undoes the last answer at once — that is what it is for). Both go through the existing restart-confirmation path, and a booked lead is told the meeting stays. | `workflow/conversationTurn.ts` (`handleGate`) | Resolved. |
+| ~~**D-13**~~ | **A booked lead could be booked again.** Every path that reached `offer_slots` after a booking — a restart, a "פגישה" from the menu after D-12 — would have created a *second* פעילות item (and a second calendar event, which deleting an item does not remove — MONDAY-MAPPING). **Fixed:** a lead with an approved consultation who asks for a meeting is offered to **move** it (`offer_reschedule`); a pick updates the *same* board item in place and closes the old request; turning the new times down keeps the meeting. ⚠️ **Update propagation to Google Calendar is not yet verified live** (MONDAY-MAPPING says to verify before relying on it) — see E-14. | `appointments/booking.ts` (`bookSlot`, `bookedAppointment`) · `workflow/conversationTurn.ts` | Resolved in code; E-14 open. |
 | **D-4** | **Unused scaffolding.** `outbox` table, `appointment_requests` table, all `appointment_*` stages, `messages.template_ref`, `campaign_referrals.form_id` / `.external_lead_id`, `setMondayItemId()` — all defined, none written or read by production code. | `src/db/schema.ts` | Not a bug; a reminder that schema presence ≠ implementation. |
 
 ---
@@ -148,6 +150,64 @@ live Monday account — `פעילות` item created and linked to the lead, Goog
 Calendar event written by Monday's sync, lead status projected — the same
 standard every earlier phase was closed to. The e2e test proves the flow against
 a fake Monday only.
+
+#### Discovery after screening — 2026-09-23
+
+The single intent check after the four questions is now a short **discovery
+conversation**: up to three model-written questions (`DISCOVERY_MAX`) that
+cover the property as the person describes it, the reason for selling and any
+timing constraint, and what matters most to them — so the pre-call brief has
+something to say beyond four button taps. It is a conversation, not a form:
+
+- It ends as soon as the property details and the motivation are both known,
+  and is not run at all when the person said those things unprompted during
+  screening.
+- **A lead who asked for a meeting still gets it, shortened** — a meeting
+  request is intent, not context. At most two questions
+  (`DISCOVERY_MAX_BOOKING`), written in *preparation* mode: framed as getting
+  Lidor ready for the call, never as qualification, persuasion or a pitch; times
+  are offered the moment the property and the reason are known.
+- A lead who answers in a few words (`TERSE_WORDS`) and has either asked for a
+  meeting or is plainly ready now (score ≥ 80) is offered times after one
+  substantive answer — every further question is a chance for that to cool, and
+  a person who writes "כן" is telling you how much they want to type. A lead
+  who writes at length is given room.
+- A contentless answer is asked again with a fresh, context-aware question
+  while questions remain; after the third the flow proceeds rather than nags.
+- The question-writer is told which question this is, what is known and what
+  is missing (`discoveryContext`), never a fixed script.
+
+`discoveryCount` is a workflow-owned fact — the classifier cannot set it.
+
+#### The calendar event names the person — 2026-09-23
+
+A booked consultation's activity item is now `פגישת ייעוץ עם <name>` (the item
+name is the calendar event's title; it used to read just "פגישת ייעוץ") and
+carries a note in `תיאור חופשי` — a text column Lidor mapped into the calendar
+event's description — with the name, phone, the four answers in Hebrew, the
+priority score, and a **pre-call brief the model writes from the transcript**:
+the property as the person described it, their questions and concerns (fees,
+timing, another agent, a partner who must agree…), and the one thing Lidor
+should lead with to close — everything he would otherwise open the lead to
+find, readable in Google Calendar before the call. The brief is one Haiku call
+per booking or move (`meetingBrief.ts`), its tokens booked against the
+confirmation message; it never throws, so an outage means a note without the
+brief, never a failed booking. The same naming and a facts-only note apply to
+the exclusivity-callback reminder. Written with the item, so it is in the event
+from the first sync.
+
+#### The stage × input audit — 2026-09-22
+
+`src/workflow/stageMatrix.test.ts` walks every live stage against every input
+the bot resolves without a model (both control words, the four menu taps, a
+stale time label, yes, no) plus one free-text message the fake model reads as
+UNCLEAR — 110 cells — and asserts four rules on each: the turn never throws;
+after qualification no single turn deletes a collected answer; a booked
+consultation survives on the same board item with no second one created; and a
+booked lead is never sent back to screening or the menu. D-12 and D-13 both fail
+it on the code before their fix. It is the deterministic answer to "try every
+path of the graph": what a prompt does on real Hebrew is still only testable
+live, but a *structural* regression of this kind cannot now reach `main`.
 
 #### Score-based offers — 2026-09-22
 
@@ -463,6 +523,8 @@ onward, so start them early.
 | ~~E-8~~ | ~~Google Cloud project, calendar credentials~~ **Dropped.** פעילות is bidirectionally synced with Lidor's calendar, so booking is a Monday write and availability is a Monday read. | — |
 | ~~E-10~~ | ✅ Done — `seller_followup_1` approved (`he`). Set `FOLLOWUP_TEMPLATE_NAME` in the environment. | — |
 | ~~E-11~~ | ✅ Done — `seller_followup_incomplete` approved (`he`). Set `FOLLOWUP_INCOMPLETE_TEMPLATE_NAME`. | — |
+| ~~E-15~~ | ✅ Done — `תיאור חופשי` (`text_mm7fdakx`) exists on פעילות and is mapped into the calendar event's description; the bot fills it on every booking, move and reminder. | — |
+| E-14 | **A moved consultation must move in Google Calendar.** Rescheduling updates the פעילות item's start/end (never deletes it). MONDAY-MAPPING recorded that deletion does *not* propagate to the calendar and that update propagation was assumed, not verified. Verify once, on a real booking Lidor is willing to move: change a time through the bot, confirm the calendar event moved. | Reschedule correctness |
 | E-13 | **Calendar → board sync must be live for offered times to be real.** Availability is read from the פעילות board (E-8). If Lidor's Google Calendar is not actually syncing *into* that board on his Monday account, the board holds only what the bot wrote, and every business hour looks free — the times offered are then "not related to his real open slots" (reported 2026-09-22). Not a code path: verify by adding an event in his Google Calendar and confirming a פעילות item with the same start/end appears within minutes. Until it does, treat offered times as unverified. | Real availability |
 | E-12 | **Production server.** Everything so far ran on a laptop behind ngrok. The AWS stack and the step-by-step are in [GO-LIVE.md](GO-LIVE.md); the box, domain, S3 bucket and Meta webhook switch are operator work. | Real leads reaching the bot |
 | E-13 | **Uptime alerting.** Nothing tells anyone when the app is down. An external check on `/health` (see GO-LIVE §7). | Noticing an outage before Lidor does |

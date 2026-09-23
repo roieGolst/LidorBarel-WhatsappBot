@@ -1,5 +1,6 @@
 import { and, desc, eq } from 'drizzle-orm';
 import type { Database } from '../db/client.js';
+import { findContactById } from '../db/repositories/contacts.js';
 import { getConversationById } from '../db/repositories/conversations.js';
 import { appointmentRequests, conversations } from '../db/schema.js';
 import { getLogger } from '../logger.js';
@@ -24,6 +25,7 @@ import {
   type Slot,
   type SlotOptions,
 } from './availability.js';
+import { activityItemName, meetingNote } from './meetingNote.js';
 
 /**
  * Offering and booking consultation calls.
@@ -156,6 +158,9 @@ export async function recordOffer(
 
 const DEFAULT_DURATION_MS = DEFAULT_SLOT_OPTIONS.durationMs;
 
+/** The activity's kind, as the item name begins — "פגישת ייעוץ עם <name>". */
+export const CONSULTATION_ITEM_NAME = 'פגישת ייעוץ';
+
 /**
  * The consultation this conversation has booked: the approved appointment with
  * its board item. `undefined` when none — the common case.
@@ -254,6 +259,8 @@ export async function bookSlot(
 
   const conversation = await getConversationById(deps.db, conversationId);
   if (!conversation) return { booked: false, reason: 'conversation_missing' };
+  const contact = await findContactById(deps.db, conversation.contactId);
+  if (!contact) return { booked: false, reason: 'conversation_missing' };
 
   const [offer] = await deps.db
     .select()
@@ -292,14 +299,20 @@ export async function bookSlot(
     };
   }
 
+  // The item's name is the calendar event's title, so it carries the person's
+  // name. Set on a move too: an item made before the name was known is fixed.
+  const itemName = activityItemName(CONSULTATION_ITEM_NAME, contact);
   let activityItemId: string;
   if (existing) {
     activityItemId = existing.mondayActivityItemId;
-    await deps.monday.updateItem(ACTIVITY_BOARD_ID, activityItemId, columnValues);
+    await deps.monday.updateItem(ACTIVITY_BOARD_ID, activityItemId, {
+      ...columnValues,
+      name: itemName,
+    });
   } else {
     activityItemId = await deps.monday.createItem(
       ACTIVITY_BOARD_ID,
-      'פגישת ייעוץ',
+      itemName,
       columnValues,
     );
   }
@@ -332,6 +345,25 @@ export async function bookSlot(
     // is queued in the same transaction as the state change (NN-4).
     await enqueueOutboxEvent(tx, conversationId);
   });
+
+  // The meeting note: everything Lidor would otherwise open the lead to find.
+  // Best effort — the booking is already written on both sides, and a failed
+  // note must not fail the turn that confirms it to the person.
+  try {
+    await deps.monday.createUpdate(
+      activityItemId,
+      meetingNote({
+        contact,
+        facts: conversation.extracted ?? {},
+        priorityScore: conversation.priorityScore,
+        slot: chosen,
+        timeZone: deps.slotOptions.timeZone,
+        rescheduled: Boolean(existing),
+      }),
+    );
+  } catch (error) {
+    logger.warn({ conversationId, activityItemId, error }, 'meeting note not posted');
+  }
 
   logger.info(
     { conversationId, activityItemId, rescheduled: Boolean(existing) },

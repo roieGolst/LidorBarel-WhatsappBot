@@ -159,6 +159,8 @@ No schema changes needed.
 
 | Column ID | Type | Title | Bot writes |
 |---|---|---|---|
+| *(item name)* | — | — | `פגישת ייעוץ עם <name>` / `חזרה ללקוח — סיום בלעדיות עם <name>` — **this is the calendar event's title.** Mirrors what Monday's own Emails & Activities automation names its items. Bare kind when the name is unknown. |
+| *(update)* | — | — | the **meeting note**: name, phone, the screening answers in Hebrew, priority score, property details (`meetingNote.ts`). Best effort — a failed note never fails the booking. |
 | `color_mkpc9t27` | status | סוג פעילות | `0` פגישת ייעוץ (a booked consultation) · `4` שיחת הכרות (the exclusivity callback reminder) |
 | `activity_start_time` | date | זמן התחלה | slot start |
 | `activity_end_time` | date | זמן סיום | slot end |
@@ -167,6 +169,20 @@ No schema changes needed.
 | `integration_mkpcssjf` | integration | Google Calendar event | ❌ written by Monday |
 | `location_mkpchxzd` | location | מיקום | — |
 | `activity_owner` | people | Owner | — |
+
+### Why the booking is a `פעילות` item and not an Emails & Activities entry
+
+Considered on 2026-09-23, when the calendar events read only "פגישת ייעוץ".
+The API (introspected, version 2025-04) has `create_timeline_item` and
+`delete_timeline_item` and **no update** for timeline items, so a reschedule
+through E&A would be delete + create — and a deleted entry's calendar event
+stays (below). An E&A entry only reaches the calendar through the board anyway
+(the "activity created in E&A → create a `פעילות` item" automation), so it adds a
+hop and removes the ability to move a meeting. The board item is kept, and made
+to carry what the E&A path would have: the person's name in the item name (= the
+event title) and the details in an update. **Logging the meeting in E&A as well
+would double-create** through that automation; do not add it without disabling
+the automation.
 
 ### ⚠️ Deleting a `פעילות` item does NOT remove its Calendar event
 

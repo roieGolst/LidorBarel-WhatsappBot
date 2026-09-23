@@ -116,6 +116,9 @@ class FakeCalendar {
     this.created.push({ name, values });
     return Promise.resolve(`activity-${++this.counter}`);
   }
+  createUpdate() {
+    return Promise.resolve();
+  }
 }
 
 describe('lead lifecycle: form submission to qualification', () => {

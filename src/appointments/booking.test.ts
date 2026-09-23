@@ -2,8 +2,11 @@ import { eq } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import type { Database } from '../db/client.js';
 import { upsertContactByPhone } from '../db/repositories/contacts.js';
-import { findOrCreateConversation } from '../db/repositories/conversations.js';
-import { appointmentRequests, conversations, outbox } from '../db/schema.js';
+import {
+  findOrCreateConversation,
+  getConversationById,
+} from '../db/repositories/conversations.js';
+import { appointmentRequests, contacts, conversations, outbox } from '../db/schema.js';
 import { setupTestDatabase, truncateAll } from '../db/testing.js';
 import type { MondayClient } from '../monday/client.js';
 import { ACTIVITY_COLUMNS, ACTIVITY_TYPE } from '../monday/leadMapping.js';
@@ -44,6 +47,16 @@ class FakeMonday {
     this.created.push({ board, name, values });
     return Promise.resolve(`activity-${++this.counter}`);
   }
+  updates: { itemId: string; body: string }[] = [];
+  createUpdate(itemId: string, body: string) {
+    this.updates.push({ itemId, body });
+    return Promise.resolve();
+  }
+  updated: { itemId: string; values: Record<string, unknown> }[] = [];
+  updateItem(_board: string, itemId: string, values: Record<string, unknown>) {
+    this.updated.push({ itemId, values });
+    return Promise.resolve();
+  }
   /**
    * Adds a commitment exactly as Monday returns one: UTC in `value`, and
    * account-local in `text`, three hours ahead. The mismatch is the point — the
@@ -79,10 +92,15 @@ const deps = (fake: FakeMonday) => ({
 });
 
 let phoneCounter = 0;
-async function seedLead(mondayItemId: string | null = '555'): Promise<string> {
+async function seedLead(
+  mondayItemId: string | null = '555',
+  // `null` is "no name known"; `undefined` would take the default.
+  name: string | null = 'רועי גולסט',
+): Promise<string> {
   const contact = await upsertContactByPhone(db, {
     phone: `+9725088888${String(phoneCounter++).padStart(2, '0')}`,
     entryPoint: 'meta_lead_form',
+    ...(name ? { name } : {}),
   });
   const { conversation } = await findOrCreateConversation(db, contact.id);
   await db
@@ -178,6 +196,87 @@ describe('bookSlot', () => {
       index: ACTIVITY_TYPE.consultation,
     });
     expect(created.values[ACTIVITY_COLUMNS.contact]).toEqual({ item_ids: [555] });
+  });
+
+  it('names the item — the calendar event title — after the person', async () => {
+    const fake = new FakeMonday();
+    const conversationId = await seedLead('555', 'רועי גולסט');
+    const slot = await offerAndPick(fake, conversationId);
+
+    await bookSlot(deps(fake), conversationId, slot, NOW);
+
+    expect(fake.created[0]!.name).toBe('פגישת ייעוץ עם רועי גולסט');
+  });
+
+  it('falls back to the bare kind when the person’s name is unknown', async () => {
+    const fake = new FakeMonday();
+    const conversationId = await seedLead('555', null);
+    const slot = await offerAndPick(fake, conversationId);
+
+    await bookSlot(deps(fake), conversationId, slot, NOW);
+
+    expect(fake.created[0]!.name).toBe('פגישת ייעוץ');
+  });
+
+  it('posts a meeting note on the item with what the bot learned', async () => {
+    const fake = new FakeMonday();
+    const conversationId = await seedLead('555');
+    await db
+      .update(conversations)
+      .set({
+        extracted: { neighborhood: 'רמות', sellIntent: 'ready', timeline: 'immediate' },
+        priorityScore: 70,
+      })
+      .where(eq(conversations.id, conversationId));
+    const slot = await offerAndPick(fake, conversationId);
+
+    await bookSlot(deps(fake), conversationId, slot, NOW);
+
+    expect(fake.updates).toHaveLength(1);
+    expect(fake.updates[0]!.itemId).toBe('activity-1');
+    expect(fake.updates[0]!.body).toContain('רועי גולסט');
+    expect(fake.updates[0]!.body).toContain('שכונה: רמות');
+    expect(fake.updates[0]!.body).toContain('ציון רצינות: 70');
+  });
+
+  it('still books when the note cannot be posted', async () => {
+    // The booking is already written on both sides; a failed note must not
+    // fail the turn that confirms the meeting to the person.
+    const fake = new FakeMonday();
+    fake.createUpdate = () => Promise.reject(new Error('updates down'));
+    const conversationId = await seedLead('555');
+    const slot = await offerAndPick(fake, conversationId);
+
+    const outcome = await bookSlot(deps(fake), conversationId, slot, NOW);
+
+    expect(outcome.booked).toBe(true);
+    expect(fake.created).toHaveLength(1);
+  });
+
+  it('moving a meeting updates the same item, and re-names it', async () => {
+    const fake = new FakeMonday();
+    const conversationId = await seedLead('555', null);
+    const first = await offerAndPick(fake, conversationId);
+    await bookSlot(deps(fake), conversationId, first, NOW);
+    expect(fake.created[0]!.name).toBe('פגישת ייעוץ');
+
+    // The name became known since; a fresh offer and a different time.
+    await db
+      .update(contacts)
+      .set({ name: 'רועי גולסט' })
+      .where(eq(contacts.id, (await getConversationById(db, conversationId))!.contactId));
+    const slots = await findSlotsToOffer(deps(fake), undefined, NOW);
+    const second = slots.find((s) => s.start.getTime() !== first.start.getTime())!;
+    await recordOffer(deps(fake), conversationId, [second], 30 * 60 * 1000, NOW);
+
+    const outcome = await bookSlot(deps(fake), conversationId, second, NOW);
+
+    expect(outcome.booked && outcome.rescheduled).toBe(true);
+    expect(fake.created).toHaveLength(1);
+    expect(fake.updated).toHaveLength(1);
+    expect(fake.updated[0]!.itemId).toBe('activity-1');
+    expect(fake.updated[0]!.values['name']).toBe('פגישת ייעוץ עם רועי גולסט');
+    expect(fake.updates.at(-1)!.body).toContain('הועברה');
   });
 
   it('books without a link when the lead has no board item yet', async () => {

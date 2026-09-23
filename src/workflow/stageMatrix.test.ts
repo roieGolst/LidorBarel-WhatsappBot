@@ -84,6 +84,9 @@ class FakeCalendar {
     this.created.push({ name, values });
     return Promise.resolve(`activity-${++this.counter}`);
   }
+  createUpdate() {
+    return Promise.resolve();
+  }
   updateItem(_board: string, itemId: string, values: Record<string, unknown>) {
     this.updated.push({ itemId, values });
     return Promise.resolve();

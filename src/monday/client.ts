@@ -133,6 +133,19 @@ export class MondayClient {
     return data.create_item.id;
   }
 
+  /**
+   * Posts an update (a note) on an item. Used for the meeting note on a booked
+   * consultation: the item's columns are dates and labels, and the calendar
+   * integration shows the item's *name*; what Lidor should know before the call
+   * lives in the update, where it reads as prose.
+   */
+  async createUpdate(itemId: string, body: string): Promise<void> {
+    await this.request(
+      `mutation($item:ID!,$body:String!){ create_update(item_id:$item,body:$body){ id } }`,
+      { item: itemId, body },
+    );
+  }
+
   /** Sets several column values at once. */
   async updateItem(
     boardId: string,

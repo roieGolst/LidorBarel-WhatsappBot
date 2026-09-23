@@ -1,3 +1,5 @@
+import type { Contact } from '../db/repositories/contacts.js';
+import { activityItemName } from './meetingNote.js';
 import type { Database } from '../db/client.js';
 import {
   setExclusivityCallbackItemId,
@@ -86,6 +88,8 @@ export async function ensureExclusivityCallback(
   deps: CallbackDeps,
   conversation: Pick<Conversation, 'id' | 'mondayItemId' | 'exclusivityCallbackItemId'>,
   facts: KnownFacts,
+  /** Whose reminder it is — named in the item, and so in the calendar event. */
+  contact: Pick<Contact, 'name'> = { name: null },
 ): Promise<string | undefined> {
   if (conversation.exclusivityCallbackItemId)
     return conversation.exclusivityCallbackItemId;
@@ -94,7 +98,7 @@ export async function ensureExclusivityCallback(
   const start = callbackStart(facts.exclusivityEndsOn, deps.timeZone);
   const itemId = await deps.monday.createItem(
     ACTIVITY_BOARD_ID,
-    CALLBACK_ITEM_NAME,
+    activityItemName(CALLBACK_ITEM_NAME, contact),
     callbackColumnValues(start, conversation.mondayItemId),
   );
   await setExclusivityCallbackItemId(deps.db, conversation.id, itemId);

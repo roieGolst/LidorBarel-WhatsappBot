@@ -151,6 +151,17 @@ Calendar event written by Monday's sync, lead status projected — the same
 standard every earlier phase was closed to. The e2e test proves the flow against
 a fake Monday only.
 
+#### The calendar event names the person — 2026-09-23
+
+A booked consultation's activity item is now `פגישת ייעוץ עם <name>` (the item
+name is the calendar event's title; it used to read just "פגישת ייעוץ") and
+carries a meeting note as an update: name, phone, the four answers in Hebrew,
+the priority score and the property details — everything Lidor would otherwise
+open the lead to find. The same naming applies to the exclusivity-callback
+reminder. Deterministic, no model call; a failed note never fails the booking.
+Whether the calendar integration copies anything beyond the title into the
+event's description is a Monday-side setting, unverified — see E-15.
+
 #### The stage × input audit — 2026-09-22
 
 `src/workflow/stageMatrix.test.ts` walks every live stage against every input
@@ -478,6 +489,7 @@ onward, so start them early.
 | ~~E-8~~ | ~~Google Cloud project, calendar credentials~~ **Dropped.** פעילות is bidirectionally synced with Lidor's calendar, so booking is a Monday write and availability is a Monday read. | — |
 | ~~E-10~~ | ✅ Done — `seller_followup_1` approved (`he`). Set `FOLLOWUP_TEMPLATE_NAME` in the environment. | — |
 | ~~E-11~~ | ✅ Done — `seller_followup_incomplete` approved (`he`). Set `FOLLOWUP_INCOMPLETE_TEMPLATE_NAME`. | — |
+| E-15 | **What the calendar event's description holds.** The board's Google Calendar integration sets the event title from the item name (verified: hand-made and bot-made items alike). Whether it maps any column into the event *description* is a recipe setting on the פעילות board. If it does, a long-text column the bot fills with the meeting note would put the summary in the event itself; until then the note is on the item, one click from the event. Check the recipe, and the description of an event created today. | Summary visible in the calendar |
 | E-14 | **A moved consultation must move in Google Calendar.** Rescheduling updates the פעילות item's start/end (never deletes it). MONDAY-MAPPING recorded that deletion does *not* propagate to the calendar and that update propagation was assumed, not verified. Verify once, on a real booking Lidor is willing to move: change a time through the bot, confirm the calendar event moved. | Reschedule correctness |
 | E-13 | **Calendar → board sync must be live for offered times to be real.** Availability is read from the פעילות board (E-8). If Lidor's Google Calendar is not actually syncing *into* that board on his Monday account, the board holds only what the bot wrote, and every business hour looks free — the times offered are then "not related to his real open slots" (reported 2026-09-22). Not a code path: verify by adding an event in his Google Calendar and confirming a פעילות item with the same start/end appears within minutes. Until it does, treat offered times as unverified. | Real availability |
 | E-12 | **Production server.** Everything so far ran on a laptop behind ngrok. The AWS stack and the step-by-step are in [GO-LIVE.md](GO-LIVE.md); the box, domain, S3 bucket and Meta webhook switch are operator work. | Real leads reaching the bot |

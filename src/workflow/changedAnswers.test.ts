@@ -86,6 +86,9 @@ class FakeCalendar {
     this.created.push({ name, values });
     return Promise.resolve(`activity-${++this.counter}`);
   }
+  createUpdate() {
+    return Promise.resolve();
+  }
 }
 
 function appointments(calendar = new FakeCalendar()) {

@@ -127,6 +127,7 @@ export async function syncLead(
       { db: deps.db, monday: deps.monday, timeZone: deps.timeZone ?? DEFAULT_TIME_ZONE },
       { ...conversation, mondayItemId: itemId },
       projection.facts,
+      projection.contact,
     );
 
     logger.info({ conversationId, itemId }, 'created Monday lead');
@@ -144,6 +145,7 @@ export async function syncLead(
     { db: deps.db, monday: deps.monday, timeZone: deps.timeZone ?? DEFAULT_TIME_ZONE },
     conversation,
     projection.facts,
+    projection.contact,
   );
   logger.info({ conversationId, itemId: existingId }, 'updated Monday lead');
   return { synced: true, itemId: existingId, created: false };

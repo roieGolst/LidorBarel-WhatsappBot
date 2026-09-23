@@ -35,7 +35,7 @@ export function formatSlot(slot: Slot, timeZone: string): string {
 }
 
 /** The date, for the row's secondary line — so two "יום ראשון" cannot be confused. */
-function formatDate(slot: Slot, timeZone: string): string {
+export function formatDate(slot: Slot, timeZone: string): string {
   return new Intl.DateTimeFormat('he-IL', {
     timeZone,
     day: 'numeric',

@@ -202,6 +202,29 @@ Consequences, stated as rules:
   reason; the one live verification is done and recorded, and does not need
   repeating.
 
+### ⚠️ The calendar → board recipe must map the event description to `תיאור חופשי`
+
+Seen 2026-09-23, the first booking after the description column was added: the
+bot created the item with `סוג פעילות = פגישת ייעוץ` (index 0) and the note in
+`תיאור חופשי`; 0.4 s later the integration user (`user_id -4` in the activity
+log) rewrote `סוג פעילות` with the **note text**, creating a new status label
+(index 8, then 9 after the reschedule — and earlier, `<div style="display:none">
+סיכום 1,2,3`, HTML straight from a calendar event). A status column written with
+free text grows a label per value. The bot re-asserts index 0 on every move
+and is overwritten again within a second, so this cannot be fixed in code: the
+inbound (calendar → board) recipe's *Description* field must point at
+`תיאור חופשי`, not at `סוג פעילות`. After fixing it, delete the stray labels
+(Edit Labels) and set the affected items' type back to `פגישת ייעוץ`.
+
+### ⚠️ A connect-boards column reads as empty unless you ask for its typed value
+
+`column_values { text value }` returns `null` for `איש קשר` (`board_relation`)
+**even when it is linked** (API 2025-04, seen 2026-09-23 — and misread as "the
+link never sticks" for an hour). Read it as
+`column_values { ... on BoardRelationValue { linked_item_ids display_value } }`.
+The write format `{"item_ids": [<id>]}` is fine. The activity log records no
+entry for relation writes either, so it is no help here.
+
 ### Two API traps, both found by verifying a booking live
 
 - **Relation columns are unreadable through the generic query.** For

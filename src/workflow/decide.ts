@@ -127,6 +127,14 @@ export const DISCOVERY_MAX = 3;
 export const DISCOVERY_MAX_BOOKING = 2;
 
 /**
+ * How many written replies in a row the bot gives while times are on offer
+ * and the person keeps not picking one. Live, the writer proposed a time and
+ * asked for a confirmation four times running. After this many, the reply is
+ * the list and a plain ask to tap — no model.
+ */
+export const ASSIST_BOOKING_MAX = 2;
+
+/**
  * A message of a few words. Screening answers are button taps and always
  * short, so this is only read where free text is expected — the discovery
  * answers — as the signal that this person does not want to type.

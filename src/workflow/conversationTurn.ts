@@ -53,8 +53,12 @@ import {
   rescheduleKeptMessage,
   rescheduleOfferBody,
   isSlotLabel,
+  acceptsProposedTime,
   matchSlot,
   numberedOfferedTimes,
+  resolveSlotChoice,
+  slotMentionedIn,
+  SLOT_PICK_FROM_LIST_MESSAGE,
   offeredTimesContext,
   parseStoredSlots,
   sameSlots,
@@ -68,6 +72,7 @@ import { classifyAndExtract, WORKFLOW_OWNED_FIELDS, type Analysis } from './clas
 import { isAffirmative, isNegative } from './confirmation.js';
 import {
   CONFIDENCE_THRESHOLD,
+  ASSIST_BOOKING_MAX,
   offerStrategyFor,
   POST_SCREENING_STAGES,
   discoveryContext,
@@ -905,6 +910,8 @@ export function createConversationWorkflow(
             conversation: ctx,
             part: { kind: 'text', text },
           });
+          // A pick ends the written-reply streak (see ASSIST_BOOKING_MAX).
+          const { assistBookingStreak: _ended, ...known } = ctx.known;
           await persist({
             conversationId,
             contactId: ctx.contactId,
@@ -912,7 +919,7 @@ export function createConversationWorkflow(
             fromStage: ctx.stage,
             toStage: 'appointment_confirmed',
             action: 'confirm_booking',
-            extracted: ctx.known,
+            extracted: known,
             // The brief's tokens are booked against the confirmation, so the
             // cost of a booking is visible like any other model call.
             outbound: [
@@ -1001,28 +1008,51 @@ export function createConversationWorkflow(
 
       if (ctx.stage === 'appointment_proposed' && deps.appointments) {
         currentOffer = await latestOffer(deps.db, conversationId);
-        const chosen = currentOffer
-          ? matchSlot(
-              ctx.currentText,
-              parseStoredSlots(currentOffer.proposedSlots),
-              timeZone,
-            )
-          : undefined;
+        const offered = currentOffer ? parseStoredSlots(currentOffer.proposedSlots) : [];
+        // Resolved in code, in this order: the tapped row's label; a choice in
+        // words ("הכי מוקדם היום", "19:00", "השני", "מחר בבוקר"); a yes to the
+        // one time the bot's own last message talked about. None of these may
+        // depend on a model: live, the classifier missed all three in a row and
+        // the writer asked for a confirmation it could not act on, four times
+        // (D-14). What this cannot resolve uniquely goes to the model as before.
+        const chosen =
+          matchSlot(ctx.currentText, offered, timeZone) ??
+          resolveSlotChoice(ctx.currentText, offered, timeZone) ??
+          (acceptsProposedTime(ctx.currentText) && ctx.lastOutboundText
+            ? slotMentionedIn(ctx.lastOutboundText, offered, timeZone)
+            : undefined);
         // A slot label that is not in the current offer — an old list, or a
         // re-offer that moved on. Same answer as a slot that was just taken.
         const staleLabel = !chosen && isSlotLabel(ctx.currentText);
 
         if (chosen || staleLabel) {
+          if (chosen && !matchSlot(ctx.currentText, offered, timeZone)) {
+            logger.info({ conversationId }, 'meeting time resolved from words — booking');
+          }
           return bookChosenSlot(chosen);
         }
       }
 
       // The times currently on offer, if any — what a choice in words is
-      // resolved against, and what the classifier is shown.
+      // resolved against, and what the classifier is shown. If the bot's own
+      // last message talked about one of them, the classifier is told which,
+      // so a "כן, מתאים" resolves to it.
       const standingSlots: Slot[] =
         ctx.stage === 'appointment_proposed' && currentOffer
           ? parseStoredSlots(currentOffer.proposedSlots)
           : [];
+      const offeredTimesForClassifier = (slots: Slot[]): string => {
+        const listed = numberedOfferedTimes(slots, timeZone);
+        const proposed = ctx.lastOutboundText
+          ? slotMentionedIn(ctx.lastOutboundText, slots, timeZone)
+          : undefined;
+        const index = proposed
+          ? slots.findIndex((s) => s.start.getTime() === proposed.start.getTime()) + 1
+          : 0;
+        return index > 0
+          ? `${listed}; הבוט הציע בהודעתו הקודמת את מספר ${index}`
+          : listed;
+      };
 
       // A meeting time tapped OUTSIDE the booking stage — a row from an old list,
       // after the meeting was booked, after a close, or once the offer lapsed. It
@@ -1466,7 +1496,7 @@ export function createConversationWorkflow(
               // While times are on offer the classifier sees them, so a choice
               // made in words resolves to one of them (chosenOfferedTime).
               ...(standingSlots.length
-                ? { offeredTimes: numberedOfferedTimes(standingSlots, timeZone) }
+                ? { offeredTimes: offeredTimesForClassifier(standingSlots) }
                 : {}),
             })
           ).analysis;
@@ -1660,6 +1690,9 @@ export function createConversationWorkflow(
           ? { neighborhoodCandidate: clarifyNeighborhood, neighborhoodClarified: true }
           : {};
       const knownForPersist: KnownFacts = { ...ctx.known };
+      // The written-reply streak counts only consecutive assist_booking turns.
+      if (decision.action !== 'assist_booking')
+        delete knownForPersist.assistBookingStreak;
       if (
         clarifyNeighborhood === undefined &&
         (validated.extracted.neighborhood !== undefined ||
@@ -1907,19 +1940,30 @@ export function createConversationWorkflow(
           });
           decision = { ...decision, nextStage: 'qualified' };
         } else {
-          const reply = await generate({
-            action: decision.action,
-            escalate: decision.escalate,
-            history: ctx.turns,
-            context: offeredTimesContext(fresh, timeZone, new Date()),
-          });
-          regenerated = reply.regenerated;
-          fellBack = reply.fellBack;
-          plan.push({
-            part: { kind: 'text', text: reply.text },
-            storeBody: reply.text,
-            usage: reply.usage,
-          });
+          const streak = ctx.known.assistBookingStreak ?? 0;
+          if (streak >= ASSIST_BOOKING_MAX) {
+            // Twice the writer answered and twice the person did not pick. A
+            // third written reply is the loop seen live; the list and a plain
+            // ask to tap instead, no model.
+            plan.push({
+              part: { kind: 'text', text: SLOT_PICK_FROM_LIST_MESSAGE },
+              storeBody: SLOT_PICK_FROM_LIST_MESSAGE,
+            });
+          } else {
+            const reply = await generate({
+              action: decision.action,
+              escalate: decision.escalate,
+              history: ctx.turns,
+              context: offeredTimesContext(fresh, timeZone, new Date()),
+            });
+            regenerated = reply.regenerated;
+            fellBack = reply.fellBack;
+            plan.push({
+              part: { kind: 'text', text: reply.text },
+              storeBody: reply.text,
+              usage: reply.usage,
+            });
+          }
 
           const standing = currentOffer
             ? parseStoredSlots(currentOffer.proposedSlots)
@@ -1927,8 +1971,14 @@ export function createConversationWorkflow(
           const holdLapsed =
             !currentOffer?.holdExpiresAt ||
             currentOffer.holdExpiresAt.getTime() <= Date.now();
-          if (holdLapsed || !sameSlots(fresh, standing)) {
+          const changed = holdLapsed || !sameSlots(fresh, standing);
+          if (changed) {
             await recordOffer(deps.appointments, conversationId, fresh, OFFER_HOLD_MS);
+          }
+          // The list goes out again when the offer changed — and from the
+          // second written reply on regardless, so a tap is always one message
+          // away rather than buried under prose.
+          if (changed || streak >= 1) {
             plan.push({
               part: {
                 kind: 'list',
@@ -2096,6 +2146,9 @@ export function createConversationWorkflow(
           ...(decision.qualified === true ? { intentAssessed: true } : {}),
           ...(decision.action === 'ask_intent'
             ? { discoveryCount: (ctx.known.discoveryCount ?? 0) + 1 }
+            : {}),
+          ...(decision.action === 'assist_booking'
+            ? { assistBookingStreak: (ctx.known.assistBookingStreak ?? 0) + 1 }
             : {}),
           // Photos sent alongside text in this burst.
           ...(ctx.batchPhotoCount > 0

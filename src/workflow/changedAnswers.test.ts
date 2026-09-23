@@ -10,6 +10,7 @@ import {
 } from '../appointments/booking.js';
 import {
   formatSlot,
+  SLOT_PICK_FROM_LIST_MESSAGE,
   SLOT_REOFFER_BODY,
   SLOT_SUGGEST_BODY,
   SLOTS_DECLINED_MESSAGE,
@@ -168,6 +169,106 @@ const offerFor = (deps: BookingDeps) =>
 
 const facts = async (conversationId: string): Promise<KnownFacts> =>
   (await getConversationById(db, conversationId))!.extracted as KnownFacts;
+
+describe('a time chosen in words while times are on the table (D-14)', () => {
+  // Live: "הכי מוקדם היום" → the writer proposed 19:00 and asked "want me to
+  // reserve?"; "כן" → asked again; "אישרתי כבר!!" → asked again. Four times.
+  // The choice must be resolved in code, never left to a model.
+  const BRIEF = '{"property":"","concerns":[],"focus":"להגיע עם הערכה"}';
+
+  it('"הכי מוקדם" books the first offered time without a classifier call', async () => {
+    const deps = appointments();
+    const channel = new FakeChannel();
+    const conversationId = await seed({
+      stage: 'appointment_proposed',
+      priorReply: 'מעולה! 📅 אלה הזמנים הפנויים הקרובים של לידור — מה מתאים לך?',
+      inbound: 'הכי מוקדם',
+    });
+    const offered = await offerFor(deps);
+    await recordOffer(deps, conversationId, offered, 30 * 60 * 1000);
+
+    // Only the pre-call brief is queued: a classify call would fail loudly.
+    const llm = new FakeLlmClient([BRIEF]);
+    const result = await run({ db, llm, channel, appointments: deps }, conversationId);
+
+    expect(result.action).toBe('confirm_booking');
+    expect(result.text).toContain(formatSlot(offered[0]!, TZ));
+    expect(llm.requests).toHaveLength(1);
+    expect(llm.requests[0]!.system).toContain('brief');
+  });
+
+  it('"כן" to the one time the bot itself proposed books that time', async () => {
+    const deps = appointments();
+    const offeredFirst = (await offerFor(deps))[0]!;
+    const conversationId = await seed({
+      stage: 'appointment_proposed',
+      // The writer's live reply, verbatim shape: one time, and a question.
+      priorReply: `הזמן הכי מוקדם שיש זה ${formatSlot(offeredFirst, TZ)}, רוצה שאני אשריין לך את זה?`,
+      inbound: 'אישרתי כבר!!',
+    });
+    await recordOffer(deps, conversationId, await offerFor(deps), 30 * 60 * 1000);
+
+    const llm = new FakeLlmClient([BRIEF]);
+    const result = await run(
+      { db, llm, channel: new FakeChannel(), appointments: deps },
+      conversationId,
+    );
+
+    expect(result.action).toBe('confirm_booking');
+    expect(result.text).toContain(formatSlot(offeredFirst, TZ));
+    expect(llm.requests).toHaveLength(1);
+  });
+
+  it('after two written replies without a pick, the third is the list and a plain ask', async () => {
+    const deps = appointments();
+    const channel = new FakeChannel();
+    const conversationId = await seed({
+      stage: 'appointment_proposed',
+      known: { ...COMPLETE, assistBookingStreak: 2 },
+      priorReply: 'מעולה, אז נשארים על היום 19:00 - זה הזמן שמתאים לך? 👍',
+      inbound: 'מה שנוח לך',
+    });
+    await recordOffer(deps, conversationId, await offerFor(deps), 30 * 60 * 1000);
+
+    // Only the classifier is queued: a written reply would fail loudly.
+    const llm = new FakeLlmClient([
+      '{"intent":"UNCLEAR","confidence":0.3,"extracted":{}}',
+    ]);
+    const result = await run({ db, llm, channel, appointments: deps }, conversationId);
+
+    expect(result.action).toBe('assist_booking');
+    expect(channel.sent.map((m) => m.kind)).toEqual(['text', 'list']);
+    expect(channel.sent[0]).toMatchObject({
+      kind: 'text',
+      text: SLOT_PICK_FROM_LIST_MESSAGE,
+    });
+    expect(llm.requests).toHaveLength(1);
+    expect((await facts(conversationId)).assistBookingStreak).toBe(3);
+  });
+
+  it('the streak resets on any other turn', async () => {
+    const deps = appointments();
+    const conversationId = await seed({
+      stage: 'appointment_proposed',
+      known: { ...COMPLETE, assistBookingStreak: 2 },
+      priorReply: 'זה הזמן שמתאים לך?',
+      inbound: 'השני',
+    });
+    await recordOffer(deps, conversationId, await offerFor(deps), 30 * 60 * 1000);
+
+    await run(
+      {
+        db,
+        llm: new FakeLlmClient([BRIEF]),
+        channel: new FakeChannel(),
+        appointments: deps,
+      },
+      conversationId,
+    );
+
+    expect((await facts(conversationId)).assistBookingStreak).toBeUndefined();
+  });
+});
 
 describe('a question while meeting times are on the table', () => {
   const asksForEarlier =

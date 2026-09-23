@@ -151,6 +151,28 @@ Calendar event written by Monday's sync, lead status projected — the same
 standard every earlier phase was closed to. The e2e test proves the flow against
 a fake Monday only.
 
+#### Discovery after screening — 2026-09-23
+
+The single intent check after the four questions is now a short **discovery
+conversation**: up to three model-written questions (`DISCOVERY_MAX`) that
+cover the property as the person describes it, the reason for selling and any
+timing constraint, and what matters most to them — so the pre-call brief has
+something to say beyond four button taps. It is a conversation, not a form:
+
+- It ends as soon as the property details and the motivation are both known.
+- It is **skipped outright for a lead who asked for a meeting** — they said what
+  they want; times are offered straight after Q4.
+- A lead who is plainly ready now (score ≥ 80) and answers in a few words
+  (`TERSE_WORDS`) is closed after one question — every further question is a
+  chance for that to cool, and a person who writes "כן" is telling you how
+  much they want to type. A lead who writes at length is given room.
+- A contentless answer is asked again with a fresh, context-aware question
+  while questions remain; after the third the flow proceeds rather than nags.
+- The question-writer is told which question this is, what is known and what
+  is missing (`discoveryContext`), never a fixed script.
+
+`discoveryCount` is a workflow-owned fact — the classifier cannot set it.
+
 #### The calendar event names the person — 2026-09-23
 
 A booked consultation's activity item is now `פגישת ייעוץ עם <name>` (the item

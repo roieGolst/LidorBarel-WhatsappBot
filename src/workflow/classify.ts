@@ -105,6 +105,9 @@ export const extractedSchema = z.object({
   // Set once the intent check has been passed, so a lead who comes back (or
   // re-answers one question) is not asked for their property details again.
   intentAssessed: z.boolean().optional(),
+  // How many discovery questions have been asked after the four screening
+  // questions (workflow-owned; see `DISCOVERY_MAX` in decide.ts).
+  discoveryCount: z.number().int().nonnegative().optional(),
 });
 
 /** Extraction fields owned by the workflow, never accepted from the model. */
@@ -117,6 +120,7 @@ export const WORKFLOW_OWNED_FIELDS = [
   'neighborhoodClarified',
   'pendingFactChange',
   'intentAssessed',
+  'discoveryCount',
 ] as const satisfies readonly (keyof z.infer<typeof extractedSchema>)[];
 
 export const analysisSchema = z.object({

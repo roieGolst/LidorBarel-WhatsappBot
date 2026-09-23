@@ -5,6 +5,7 @@ import {
   decideMainMenu,
   decideTransition,
   HIGH_PRIORITY_SCORE,
+  DISCOVERY_MAX,
   isHighPriority,
   offerStrategyFor,
   URGENT_OFFER_SCORE,
@@ -114,26 +115,89 @@ describe('decideTransition', () => {
       expect(decision.nextStage).toBe('assessing_intent');
     });
 
-    it('qualifies a serious seller', () => {
+    it('keeps discovering after a serious but thin first answer', () => {
+      // One question in, motivation known but nothing about the property: a
+      // second discovery question, not a handoff on four button taps.
       const decision = decideTransition(
         'assessing_intent',
-        analysis({ extracted: { seriousSeller: true } }),
-        answered,
+        analysis({ extracted: { seriousSeller: true, sellMotivation: 'עוברים דירה' } }),
+        { ...answered, discoveryCount: 1 },
+        true,
+      );
+      expect(decision.action).toBe('ask_intent');
+      expect(decision.nextStage).toBe('assessing_intent');
+    });
+
+    it('qualifies once the property and the reason for selling are both known', () => {
+      const decision = decideTransition(
+        'assessing_intent',
+        analysis({ extracted: { additionalNotes: 'רחוב רגר 5, קומה 2, 4 חדרים' } }),
+        { ...answered, discoveryCount: 2, sellMotivation: 'עוברים דירה' },
         true,
       );
       expect(decision.nextStage).toBe('qualified');
       expect(decision.qualified).toBe(true);
     });
 
-    it('qualifies when the intent answer adds real property detail', () => {
+    it('stops at the third question and proceeds with what it has', () => {
       const decision = decideTransition(
         'assessing_intent',
-        analysis({ extracted: { additionalNotes: 'רחוב רגר 5, קומה 2, 4 חדרים' } }),
-        answered,
+        analysis({ extracted: { additionalNotes: 'קומה 2' } }),
+        { ...answered, discoveryCount: DISCOVERY_MAX },
         true,
       );
       expect(decision.nextStage).toBe('qualified');
-      expect(decision.qualified).toBe(true);
+    });
+
+    it('skips discovery altogether for a lead who asked for a meeting', () => {
+      // They said what they want. Every further question is a chance to cool.
+      const decision = decideTransition(
+        'screening_currently_marketed',
+        analysis({ extracted: { currentlyMarketed: 'no' } }),
+        {
+          sellIntent: 'ready',
+          neighborhood: 'רמות',
+          timeline: 'immediate',
+          bookingIntent: true,
+        },
+        true,
+        true,
+      );
+      expect(decision.action).toBe('offer_slots');
+      expect(decision.nextStage).toBe('appointment_proposed');
+    });
+
+    it('closes a ready-now lead who answers in a few words after one question', () => {
+      // Immediate + ready = 70 before the answer; with a serious, motivated
+      // reply they are at 80+. Terse: they are telling you how much they want
+      // to type. Offer the meeting, do not ask a second question.
+      const readyNow: KnownFacts = {
+        sellIntent: 'ready',
+        neighborhood: 'רמות',
+        timeline: 'immediate',
+        currentlyMarketed: 'no',
+        discoveryCount: 1,
+      };
+      const terse = decideTransition(
+        'assessing_intent',
+        analysis({ extracted: { seriousSeller: true, sellMotivation: 'עוברים' } }),
+        readyNow,
+        true,
+        true,
+        true,
+      );
+      expect(terse.action).toBe('offer_slots');
+
+      // The same lead writing at length is given room for another question.
+      const talkative = decideTransition(
+        'assessing_intent',
+        analysis({ extracted: { seriousSeller: true, sellMotivation: 'עוברים' } }),
+        readyNow,
+        true,
+        true,
+        false,
+      );
+      expect(talkative.action).toBe('ask_intent');
     });
 
     it('does not forward a price-checker — holds them instead', () => {
@@ -155,6 +219,17 @@ describe('decideTransition', () => {
       expect(decision.action).toBe('ask_intent');
       expect(decision.nextStage).toBe('assessing_intent');
       expect(decision.qualified).toBeUndefined();
+    });
+
+    it('does not nag: an empty answer after the last question proceeds', () => {
+      const decision = decideTransition(
+        'assessing_intent',
+        analysis(),
+        { ...answered, discoveryCount: DISCOVERY_MAX },
+        true,
+      );
+      expect(decision.action).not.toBe('ask_intent');
+      expect(decision.nextStage).toBe('qualified');
     });
 
     it('still asks the intent question when seriousSeller was set before it was asked', () => {
@@ -211,7 +286,10 @@ describe('decideTransition', () => {
         { ...booked, sellIntent: 'ready', neighborhood: 'נווה זאב' },
         true,
       );
-      expect(decision.action).toBe('ask_intent');
+      // They asked for a meeting, so discovery is skipped: with the last
+      // answer in, the flow completes (handoff here — booking is not wired).
+      expect(decision.action).toBe('proceed_qualified');
+      expect(decision.qualified).toBe(true);
     });
   });
 
@@ -461,11 +539,17 @@ describe('decideTransition', () => {
     expect(decision.action).toBe('ask_currently_marketed');
   });
 
-  it('qualifies once both answers are in, none disqualifies, and intent is confirmed', () => {
+  it('qualifies once both answers are in, none disqualifies, and discovery is done', () => {
     const decision = decideTransition(
       'assessing_intent',
-      analysis({ extracted: { currentlyMarketed: 'no', seriousSeller: true } }),
-      { neighborhood: 'נווה זאב' },
+      analysis({
+        extracted: {
+          currentlyMarketed: 'no',
+          seriousSeller: true,
+          additionalNotes: '4 חדרים',
+        },
+      }),
+      { neighborhood: 'נווה זאב', sellMotivation: 'עוברים דירה', discoveryCount: 2 },
     );
     expect(decision.nextStage).toBe('qualified');
     expect(decision.action).toBe('proceed_qualified');
@@ -964,8 +1048,14 @@ describe('a high-priority lead is offered a meeting without asking', () => {
     currentlyMarketed: 'no',
     ...over,
   });
+  // A discovery answer that completes the picture (motivation + property), so
+  // the flow proceeds past discovery to the offer-or-handoff decision.
   const intentAnswer = analysis({
-    extracted: { seriousSeller: true, sellMotivation: 'עוברים דירה' },
+    extracted: {
+      seriousSeller: true,
+      sellMotivation: 'עוברים דירה',
+      additionalNotes: '4 חדרים, קומה 2',
+    },
   });
 
   it('ready + within a month clears the bar; a price-check in no hurry does not', () => {

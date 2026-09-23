@@ -742,9 +742,11 @@ describe('conversationTurn', () => {
     expect(step1.action).toBe('ask_intent');
     expect(step1.stage).toBe('assessing_intent');
 
-    // Turn 2: a genuine motivation → qualified with the canned handoff.
+    // Turn 2: a genuine motivation — but nothing yet about the property, so
+    // discovery continues with a second, context-aware question.
     const llm2 = new FakeLlmClient([
       '{"intent":"ANSWER","confidence":0.9,"extracted":{"seriousSeller":true,"sellMotivation":"עוברים דירה"}}',
+      'מבין, מעבר דירה זה תמיד תקופה עמוסה. כמה חדרים ובאיזו קומה הדירה?',
     ]);
     await recordInboundMessage(db, {
       conversationId,
@@ -756,11 +758,39 @@ describe('conversationTurn', () => {
       conversationId,
       config(conversationId),
     );
+    expect(step2.action).toBe('ask_intent');
+    expect(step2.stage).toBe('assessing_intent');
+    expect(step2.text).toContain('חדרים');
+    // The question-writer was told what is known and what is still missing.
+    const askRequest = llm2.requests[1]!;
+    expect(askRequest.messages.at(-1)!.content).toContain(
+      'Discovery question 2 of at most 3',
+    );
+    expect(askRequest.messages.at(-1)!.content).toContain(
+      'reason for selling: עוברים דירה',
+    );
 
-    expect(step2.stage).toBe('qualified');
-    expect(step2.text).toBe(QUALIFIED_HANDOFF_MESSAGE);
+    // Turn 3: the property details — the picture is complete → qualified with
+    // the canned handoff, and no fourth question.
+    const llm3 = new FakeLlmClient([
+      '{"intent":"ANSWER","confidence":0.9,"extracted":{"additionalNotes":"4 חדרים, קומה 3, משופצת"}}',
+    ]);
+    await recordInboundMessage(db, {
+      conversationId,
+      providerMessageId: `in3-${conversationId}`,
+      body: '4 חדרים, קומה 3, משופצת',
+      createdAt: new Date(),
+    });
+    const step3 = await workflow({ db, llm: llm3, channel: new FakeChannel() }).invoke(
+      conversationId,
+      config(conversationId),
+    );
+
+    expect(step3.stage).toBe('qualified');
+    expect(step3.text).toBe(QUALIFIED_HANDOFF_MESSAGE);
     const conversation = await getConversationById(db, conversationId);
     expect(conversation?.qualified).toBe(true);
+    expect((conversation?.extracted as KnownFacts).discoveryCount).toBe(2);
   });
 
   it('does not forward a lead who is only price-checking', async () => {

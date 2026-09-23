@@ -70,6 +70,8 @@ import {
   CONFIDENCE_THRESHOLD,
   offerStrategyFor,
   POST_SCREENING_STAGES,
+  discoveryContext,
+  isTerseAnswer,
   decideMainMenu,
   decideTransition,
   screensAllQuestions,
@@ -1611,6 +1613,7 @@ export function createConversationWorkflow(
           ctx.known,
           ctx.screenAll,
           Boolean(deps.appointments),
+          isTerseAnswer(ctx.currentText),
         );
       }
 
@@ -1971,6 +1974,11 @@ export function createConversationWorkflow(
           action: decision.action,
           escalate: decision.escalate,
           history: ctx.turns,
+          // The discovery question-writer is told what is known and missing,
+          // so it asks for the most useful gap rather than a fixed script.
+          ...(decision.action === 'ask_intent'
+            ? { context: discoveryContext({ ...ctx.known, ...validated.extracted }) }
+            : {}),
         });
         regenerated = reply.regenerated;
         fellBack = reply.fellBack;
@@ -2083,8 +2091,12 @@ export function createConversationWorkflow(
           ...(decision.pendingChange
             ? { pendingFactChange: decision.pendingChange }
             : {}),
-          // The intent check, once passed, stays passed (see nextScreeningStep).
+          // Discovery, once done, stays done (see nextScreeningStep); each
+          // question asked is counted so it is bounded.
           ...(decision.qualified === true ? { intentAssessed: true } : {}),
+          ...(decision.action === 'ask_intent'
+            ? { discoveryCount: (ctx.known.discoveryCount ?? 0) + 1 }
+            : {}),
           // Photos sent alongside text in this burst.
           ...(ctx.batchPhotoCount > 0
             ? { photoCount: (ctx.known.photoCount ?? 0) + ctx.batchPhotoCount }

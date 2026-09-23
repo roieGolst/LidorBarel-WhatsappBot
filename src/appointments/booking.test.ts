@@ -47,11 +47,6 @@ class FakeMonday {
     this.created.push({ board, name, values });
     return Promise.resolve(`activity-${++this.counter}`);
   }
-  updates: { itemId: string; body: string }[] = [];
-  createUpdate(itemId: string, body: string) {
-    this.updates.push({ itemId, body });
-    return Promise.resolve();
-  }
   updated: { itemId: string; values: Record<string, unknown> }[] = [];
   updateItem(_board: string, itemId: string, values: Record<string, unknown>) {
     this.updated.push({ itemId, values });
@@ -218,7 +213,7 @@ describe('bookSlot', () => {
     expect(fake.created[0]!.name).toBe('פגישת ייעוץ');
   });
 
-  it('posts a meeting note on the item with what the bot learned', async () => {
+  it('writes the meeting note into the description column — the calendar event', async () => {
     const fake = new FakeMonday();
     const conversationId = await seedLead('555');
     await db
@@ -232,25 +227,13 @@ describe('bookSlot', () => {
 
     await bookSlot(deps(fake), conversationId, slot, NOW);
 
-    expect(fake.updates).toHaveLength(1);
-    expect(fake.updates[0]!.itemId).toBe('activity-1');
-    expect(fake.updates[0]!.body).toContain('רועי גולסט');
-    expect(fake.updates[0]!.body).toContain('שכונה: רמות');
-    expect(fake.updates[0]!.body).toContain('ציון רצינות: 70');
-  });
-
-  it('still books when the note cannot be posted', async () => {
-    // The booking is already written on both sides; a failed note must not
-    // fail the turn that confirms the meeting to the person.
-    const fake = new FakeMonday();
-    fake.createUpdate = () => Promise.reject(new Error('updates down'));
-    const conversationId = await seedLead('555');
-    const slot = await offerAndPick(fake, conversationId);
-
-    const outcome = await bookSlot(deps(fake), conversationId, slot, NOW);
-
-    expect(outcome.booked).toBe(true);
-    expect(fake.created).toHaveLength(1);
+    const note = fake.created[0]!.values[ACTIVITY_COLUMNS.description];
+    expect(typeof note).toBe('string');
+    expect(note).toContain('רועי גולסט');
+    expect(note).toContain('שכונה: רמות');
+    expect(note).toContain('ציון רצינות: 70');
+    // A `text` column: one line.
+    expect(note).not.toContain('\n');
   });
 
   it('moving a meeting updates the same item, and re-names it', async () => {
@@ -276,7 +259,7 @@ describe('bookSlot', () => {
     expect(fake.updated).toHaveLength(1);
     expect(fake.updated[0]!.itemId).toBe('activity-1');
     expect(fake.updated[0]!.values['name']).toBe('פגישת ייעוץ עם רועי גולסט');
-    expect(fake.updates.at(-1)!.body).toContain('הועברה');
+    expect(fake.updated[0]!.values[ACTIVITY_COLUMNS.description]).toContain('הועברה');
   });
 
   it('books without a link when the lead has no board item yet', async () => {

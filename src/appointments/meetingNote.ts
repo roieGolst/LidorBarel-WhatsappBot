@@ -37,30 +37,25 @@ const MARKETED: Record<string, string> = {
   with_agent: 'משווק דרך מתווך אחר',
 };
 
-export interface MeetingNoteInput {
+export interface ActivityNoteInput {
   contact: Pick<Contact, 'name' | 'phone'>;
   facts: KnownFacts;
   /** The lead's priority score as last projected, if scored. */
   priorityScore: number | null;
-  slot: Slot;
-  timeZone: string;
-  /** True when an existing consultation was moved to this time. */
-  rescheduled: boolean;
 }
 
 /**
- * The note posted on the activity item when a consultation is booked: who,
- * how to reach them, what they answered, what they said about the property.
- * Everything the bot knows that Lidor would otherwise open the lead to find.
+ * The body of `תיאור חופשי` on an activity item: who, how to reach them, what
+ * they answered, what they said about the property — everything the bot knows
+ * that Lidor would otherwise open the lead to find. The column is mapped into
+ * the calendar event's description, so this is what he reads before the call.
+ * A `text` column holds one line, hence " | " rather than line breaks.
  * Deterministic — assembled from the stored answers, no model call.
  */
-export function meetingNote(input: MeetingNoteInput): string {
-  const { contact, facts, slot, timeZone } = input;
-  const when = `${formatSlot(slot, timeZone)} (${formatDate(slot, timeZone)})`;
-  const lines: string[] = [
-    input.rescheduled
-      ? `הפגישה הועברה דרך הבוט ל${when}`
-      : `פגישת ייעוץ נקבעה דרך הבוט ל${when}`,
+export function activityNote(headline: string, input: ActivityNoteInput): string {
+  const { contact, facts } = input;
+  const parts: string[] = [
+    headline,
     `${contact.name?.trim() ? `${contact.name.trim()} · ` : ''}${contact.phone}`,
   ];
 
@@ -74,11 +69,39 @@ export function meetingNote(input: MeetingNoteInput): string {
       ? `שיווק: ${MARKETED[facts.currentlyMarketed] ?? facts.currentlyMarketed}`
       : undefined,
   ].filter((line): line is string => line !== undefined);
-  if (answers.length > 0) lines.push(answers.join(' · '));
+  if (answers.length > 0) parts.push(answers.join(' · '));
 
-  if (input.priorityScore !== null) lines.push(`ציון רצינות: ${input.priorityScore}`);
-  if (facts.additionalNotes) lines.push(`פרטי הנכס: ${facts.additionalNotes}`);
-  if (facts.bookingIntent) lines.push('ביקש/ה פגישה ביוזמתו/ה');
+  if (input.priorityScore !== null) parts.push(`ציון רצינות: ${input.priorityScore}`);
+  if (facts.additionalNotes) parts.push(`פרטי הנכס: ${facts.additionalNotes}`);
+  if (facts.bookingIntent) parts.push('ביקש/ה פגישה ביוזמתו/ה');
 
-  return lines.join('\n');
+  return parts.join(' | ');
+}
+
+export interface MeetingNoteInput extends ActivityNoteInput {
+  slot: Slot;
+  timeZone: string;
+  /** True when an existing consultation was moved to this time. */
+  rescheduled: boolean;
+}
+
+/** The note on a booked (or moved) consultation. */
+export function meetingNote(input: MeetingNoteInput): string {
+  const when = `${formatSlot(input.slot, input.timeZone)} (${formatDate(input.slot, input.timeZone)})`;
+  return activityNote(
+    input.rescheduled
+      ? `הפגישה הועברה דרך הבוט ל${when}`
+      : `פגישת ייעוץ נקבעה דרך הבוט ל${when}`,
+    input,
+  );
+}
+
+/** The note on the exclusivity-callback reminder. */
+export function callbackNote(
+  input: ActivityNoteInput & { exclusivityEndsOn: string },
+): string {
+  return activityNote(
+    `תזכורת מהבוט: הבלעדיות אצל המתווך הנוכחי מסתיימת ב-${input.exclusivityEndsOn} — לחזור ללקוח`,
+    input,
+  );
 }

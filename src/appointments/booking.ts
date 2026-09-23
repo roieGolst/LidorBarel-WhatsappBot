@@ -298,6 +298,16 @@ export async function bookSlot(
       item_ids: [Number(conversation.mondayItemId)],
     };
   }
+  // The meeting note goes out with the item, in the column mapped into the
+  // calendar event's description — so it is in the event from the first sync.
+  columnValues[ACTIVITY_COLUMNS.description] = meetingNote({
+    contact,
+    facts: conversation.extracted ?? {},
+    priorityScore: conversation.priorityScore,
+    slot: chosen,
+    timeZone: deps.slotOptions.timeZone,
+    rescheduled: Boolean(existing),
+  });
 
   // The item's name is the calendar event's title, so it carries the person's
   // name. Set on a move too: an item made before the name was known is fixed.
@@ -345,25 +355,6 @@ export async function bookSlot(
     // is queued in the same transaction as the state change (NN-4).
     await enqueueOutboxEvent(tx, conversationId);
   });
-
-  // The meeting note: everything Lidor would otherwise open the lead to find.
-  // Best effort — the booking is already written on both sides, and a failed
-  // note must not fail the turn that confirms it to the person.
-  try {
-    await deps.monday.createUpdate(
-      activityItemId,
-      meetingNote({
-        contact,
-        facts: conversation.extracted ?? {},
-        priorityScore: conversation.priorityScore,
-        slot: chosen,
-        timeZone: deps.slotOptions.timeZone,
-        rescheduled: Boolean(existing),
-      }),
-    );
-  } catch (error) {
-    logger.warn({ conversationId, activityItemId, error }, 'meeting note not posted');
-  }
 
   logger.info(
     { conversationId, activityItemId, rescheduled: Boolean(existing) },

@@ -46,9 +46,6 @@ class FakeMonday {
     this.existing.add(id);
     return Promise.resolve(id);
   }
-  createUpdate() {
-    return Promise.resolve();
-  }
   updateItem(_board: string, itemId: string, values: Record<string, unknown>) {
     if (this.failWith) return Promise.reject(this.failWith);
     this.updates.push({ itemId, values });

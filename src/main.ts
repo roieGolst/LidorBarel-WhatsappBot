@@ -25,6 +25,7 @@ import {
   createConversationWorker,
   type ConversationWorker,
 } from './queue/conversationWorker.js';
+import { startRetentionSweeper } from './privacy/retentionSweeper.js';
 import { buildServer } from './server.js';
 import { createDeliveryGate, type DeliveryGate } from './whatsapp/deliveryGate.js';
 import { createCheckpointer } from './workflow/checkpointer.js';
@@ -135,6 +136,8 @@ async function buildConversationPipeline(
         channel,
         deliveryGate,
         ...(appointments ? { appointments } : {}),
+        // For a deletion request (NN-8) to reach the board.
+        ...(mondayForBooking ? { monday: mondayForBooking } : {}),
         // Scheduling is gated on outreach being enabled: the sweeper is what
         // sends these, so scheduling without it would only accumulate due rows
         // that nothing ever picks up.
@@ -294,6 +297,16 @@ async function main(): Promise<void> {
     );
   }
 
+  // Retention (NN-9): a lead silent for DATA_RETENTION_MONTHS is erased from the
+  // bot's store. Daily, first pass a minute after start; the CRM is untouched.
+  const retention = startRetentionSweeper({
+    db,
+    retentionMs: config.dataRetentionMonths * 30 * 24 * 60 * 60 * 1000,
+    intervalMs: 24 * 60 * 60 * 1000,
+    ...(pipeline ? { checkpointer: pipeline.checkpointer } : {}),
+  });
+  log.info({ months: config.dataRetentionMonths }, 'retention purge scheduled');
+
   // Monday projection. Runs independently of everything else: without a token
   // the outbox simply accumulates, and nothing is lost because Postgres is the
   // source of truth and the board is rebuilt from it (NN-4).
@@ -350,6 +363,7 @@ async function main(): Promise<void> {
         // Stopped before the worker and the database: a sweep in flight would
         // otherwise try to send through a closing channel.
         outreach?.stop();
+        retention.stop();
         outboxWorker?.stop();
         if (pipeline) {
           await pipeline.worker.close();

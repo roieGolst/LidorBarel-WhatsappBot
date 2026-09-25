@@ -20,6 +20,29 @@ describe('parseConfig', () => {
     expect(config.timezone).toBe('Asia/Jerusalem');
   });
 
+  it('clamps the follow-up caps to five, the rule the privacy page states', () => {
+    const config = parseConfig(
+      validEnv({ FOLLOWUP_MAX_COUNT: '10', FOLLOWUP_MAX_DAYS: '30' }),
+    );
+    expect(config.followUpMaxCount).toBe(5);
+    expect(config.followUpMaxDays).toBe(5);
+    expect(parseConfig(validEnv({ FOLLOWUP_MAX_COUNT: '3' })).followUpMaxCount).toBe(3);
+  });
+
+  it('defaults retention to 24 months and leaves the privacy e-mail optional', () => {
+    const config = parseConfig(validEnv());
+    expect(config.dataRetentionMonths).toBe(24);
+    expect(config.privacyContactEmail).toBeUndefined();
+    expect(
+      parseConfig(
+        validEnv({ DATA_RETENTION_MONTHS: '12', PRIVACY_CONTACT_EMAIL: 'p@x.co' }),
+      ),
+    ).toMatchObject({ dataRetentionMonths: 12, privacyContactEmail: 'p@x.co' });
+    expect(() =>
+      parseConfig(validEnv({ PRIVACY_CONTACT_EMAIL: 'not-an-email' })),
+    ).toThrow(ConfigError);
+  });
+
   it('coerces PORT to a number', () => {
     expect(parseConfig(validEnv({ PORT: '8080' })).port).toBe(8080);
   });

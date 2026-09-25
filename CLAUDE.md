@@ -143,6 +143,11 @@ Full list in [docs/PRODUCT-REQUIREMENTS.md](docs/PRODUCT-REQUIREMENTS.md) §3.
   Israeli Amendment 40 exposure is up to ₪1,000 per message.
 - **Follow-ups stop at five days**, and immediately on any stop condition.
 - **Transcripts and phone numbers never reach logs.**
+- **A deletion request erases the person everywhere the bot wrote them** (Postgres,
+  checkpoints, Monday lead item, activity-item details), keeping only the number on the
+  do-not-contact list; conversation data is purged after `DATA_RETENTION_MONTHS`.
+  Both are promised on `/privacy`, which is rendered from the config so the page and
+  the code cannot disagree (`src/privacy/`, `src/site/privacyPage.ts`).
 
 ### Data & conventions worth knowing before editing
 

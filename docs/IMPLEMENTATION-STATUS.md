@@ -152,6 +152,20 @@ Calendar event written by Monday's sync, lead status projected — the same
 standard every earlier phase was closed to. The e2e test proves the flow against
 a fake Monday only.
 
+#### The privacy page, made true — 2026-09-25
+
+`/privacy` is rendered from the configuration, and every statement on it has a
+production caller and a test:
+
+| Promise | Implementation | Test |
+|---|---|---|
+| Deletion on request, executed at once, even for an opted-out contact (NN-8) | `workflow/dataRequests.ts` · `privacy/erase.ts` · `conversationTurn.ts` (`eraseOnRequest`, thread deleted after the run) | `dataRequests.test.ts` · `erase.test.ts` · `privacyRequests.test.ts` |
+| Conversation data purged after `DATA_RETENTION_MONTHS` (NN-9); CRM untouched | `privacy/retentionSweeper.ts`, started in `main.ts` | `retentionSweeper.test.ts` |
+| A person on request, at any stage (NN-10) | `workflow/gate.ts` (4b) · `dataRequests.ts` | `dataRequests.test.ts` · `privacyRequests.test.ts` |
+| ≤ 5 follow-ups over ≤ 5 days | `config.ts` clamps `FOLLOWUP_MAX_*` to five; the page prints the effective value | `config.test.ts` · `privacyPage.test.ts` |
+| The three opt-out phrases printed | `workflow/optOutKeywords.ts` | `optOutKeywords.test.ts` |
+| Transcripts and numbers never in logs | `logger.ts` redaction | `logger.test.ts` |
+
 #### Discovery after screening — 2026-09-23
 
 The single intent check after the four questions is now a short **discovery
@@ -513,7 +527,7 @@ onward, so start them early.
 
 | # | Item | Gates |
 |---|---|---|
-| E-1 | Meta Business verification. **Prerequisite now in place:** the Privacy Policy and Data Deletion URLs Meta asks for are served at `/privacy` and `/data-deletion` (GO-LIVE §5a) — fill the placeholders on the page before submitting. | Template sending |
+| E-1 | Meta Business verification. **Prerequisites in place:** the Privacy Policy and Data Deletion URLs Meta asks for are served at `/privacy` and `/data-deletion` (GO-LIVE §5a), filled with the business details and made true in code. | Template sending |
 | E-2 | ✅ Done — the seller form has a required consent checkbox | — |
 | E-9 | **Consent wording scope.** The checkbox says *הודעת אישור* (a confirmation message); the bot runs a qualification conversation plus five days of follow-ups. Under Amendment 40 those are commercial messages. Worth a privacy review, and worth broadening on the next form. | Volume send |
 | E-3 | Decision on leads already collected under the old form (re-consent or treat as inbound-only) | Phase 3 |

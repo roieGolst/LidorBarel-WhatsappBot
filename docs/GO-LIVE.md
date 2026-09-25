@@ -175,12 +175,18 @@ itself, so they are up whenever the webhook is:
 | Privacy Policy URL | `https://<DOMAIN>/privacy` |
 | Data Deletion Instructions URL | `https://<DOMAIN>/data-deletion` (→ the deletion section of the same page) |
 
-The page is `public/privacy.html`. **Before submitting it to Meta, fill the
-bracketed placeholders** — the legal name and registration number, address,
-contact e-mail, the WhatsApp number, and the retention period — and have a lawyer
-read it once: it was drafted from what the system actually does (see
-`docs/PRODUCT-REQUIREMENTS.md` §3 and the processors listed on the page), not by
-a lawyer.
+The page is `public/privacy.html`, rendered with the values the code enforces
+(`src/site/privacyPage.ts`): the follow-up caps, `DATA_RETENTION_MONTHS`, and
+`PRIVACY_CONTACT_EMAIL` when set (without it the page offers WhatsApp only). The
+business details on it come from the עוסק מורשה certificate. Every promise on it
+is implemented and tested — NN-8 (deletion on request), NN-9 (retention), NN-10
+(a person on request), NN-1/NN-6 (opt-out words, log redaction) — so **changing a
+rule means changing the code, not the page**. Two statements are operational and
+yours to keep true: backups live in Israel (`BACKUP_AWS_REGION=il-central-1`) with
+the 90-day lifecycle rule from step 2, and a calendar event of a person who asked
+for deletion is removed by hand within 30 days (the scrubbed פעילות item says so).
+Have a lawyer read the page once: it was drafted from what the system does, not
+by a lawyer.
 
 ## 6. Switch outreach on
 

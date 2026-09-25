@@ -1,9 +1,12 @@
 import type { ConversationStage } from '../db/repositories/conversations.js';
+import { isHumanRequest } from './dataRequests.js';
 import { undoLastAnswer, type KnownFacts } from './decide.js';
+import { isOptOutKeyword } from './optOutKeywords.js';
 import {
   ABUSE_BAN_MESSAGE,
   ABUSE_WARNING_MESSAGE,
   EXPIRED_MESSAGE,
+  HANDOFF_TO_HUMAN_MESSAGE,
   QUOTA_HANDOFF_MESSAGE,
   STOP_MESSAGE,
   THROTTLE_MESSAGE,
@@ -175,6 +178,23 @@ export function evaluateGate(input: GateInput): GateResult {
       action: 'stop_conversation',
       text: STOP_MESSAGE,
       nextStage: 'closed_no_response',
+    };
+  }
+
+  // 4b. Asking for a person. The privacy page promises it "at any time", so it
+  //     is read here, without a model, and answered with the handoff. A lead
+  //     with times on the table or a meeting booked keeps that stage — Lidor
+  //     is already theirs; everyone else is handed to him. An opt-out in the
+  //     same breath ("תפסיקו, אני רוצה לדבר עם בן אדם") is an opt-out.
+  if (isHumanRequest(input.currentText) && !isOptOutKeyword(input.currentText)) {
+    return {
+      kind: 'send',
+      action: 'handoff_to_human',
+      text: HANDOFF_TO_HUMAN_MESSAGE,
+      nextStage:
+        input.stage === 'appointment_confirmed' || input.stage === 'appointment_proposed'
+          ? input.stage
+          : 'handed_off',
     };
   }
 

@@ -26,6 +26,9 @@ import type {
 } from '../whatsapp/channel.js';
 import type { DeliveryGate, DeliveryOutcome } from '../whatsapp/deliveryGate.js';
 import { guardedSend } from '../whatsapp/guardedSend.js';
+import type { MondayClient } from '../monday/client.js';
+import { eraseContact } from '../privacy/erase.js';
+import { isDeletionRequest } from './dataRequests.js';
 import {
   bookSlot,
   bookedAppointment,
@@ -101,6 +104,7 @@ import {
   MAIN_MENU,
   mainMenuChoiceFor,
   OFF_TOPIC_REDIRECT_MESSAGE,
+  DELETION_ACK_MESSAGE,
   RESTART_CONFIRM_BOOKED_MESSAGE,
   RESTART_CONFIRM_MESSAGE,
   RESTART_DECLINED_MESSAGE,
@@ -169,6 +173,12 @@ export interface ConversationDeps {
    * for tests and the fake harness, where nothing is delivered at all.
    */
   deliveryGate?: DeliveryGate | undefined;
+  /**
+   * The CRM, for a deletion request (NN-8): the lead item is deleted and the
+   * details on activity items scrubbed. Absent, the erase still happens in the
+   * database and the board items are logged for a person to remove.
+   */
+  monday?: MondayClient | undefined;
 }
 
 /**
@@ -698,6 +708,42 @@ export function createConversationWorkflow(
   };
 
   /**
+   * A deletion request (NN-8): acknowledge, then erase. In that order — after
+   * the erase there is no one on file to send to. Someone already opted out
+   * cannot be answered at all and is erased in silence. The checkpoint thread
+   * of this very turn is deleted by the workflow wrapper once the run is over.
+   */
+  const eraseOnRequest = async (
+    ctx: TurnContext,
+    conversationId: string,
+  ): Promise<TurnResult> => {
+    let sent = false;
+    if (!ctx.optedOut) {
+      await send({
+        to: ctx.contactPhone,
+        conversation: ctx,
+        part: { kind: 'text', text: DELETION_ACK_MESSAGE },
+      });
+      sent = true;
+    }
+    const report = await eraseContact(
+      { db: deps.db, monday: deps.monday },
+      { contactId: ctx.contactId, phone: ctx.contactPhone },
+      'deletion_request',
+    );
+    logger.info(
+      { conversationId, boardFailures: report.boardFailures.length },
+      'deletion request honoured',
+    );
+    return {
+      stage: ctx.stage,
+      action: 'data_deleted',
+      text: sent ? DELETION_ACK_MESSAGE : '',
+      sent,
+    };
+  };
+
+  /**
    * Handles a fired guard rail deterministically: sends the canned reply (or
    * nothing), applies any reset/ban, and records the turn — no model call.
    */
@@ -795,7 +841,7 @@ export function createConversationWorkflow(
     return { stage: reset.toStage, text: reset.storeBody, action, sent: true };
   };
 
-  return entrypoint(
+  const graph = entrypoint(
     { name: 'conversationTurn', checkpointer },
     async (conversationId: string): Promise<TurnResult> => {
       const ctx = await load(conversationId);
@@ -835,6 +881,12 @@ export function createConversationWorkflow(
           text: DEV_RESET_CONFIRMATION,
           sent: true,
         };
+      }
+
+      // A request to delete their data is honoured before anything else — even
+      // from someone who has opted out and can no longer be answered (NN-8).
+      if (isDeletionRequest(ctx.currentText)) {
+        return eraseOnRequest(ctx, conversationId);
       }
 
       // A contact who already opted out is left in silence — no reply is
@@ -2182,4 +2234,21 @@ export function createConversationWorkflow(
       };
     },
   );
+
+  return {
+    /**
+     * Runs one turn. A deletion request's own checkpoint holds the transcript it
+     * asked to erase, and LangGraph writes it as the run ends — so the thread is
+     * deleted here, after the run, not inside it.
+     */
+    async invoke(
+      conversationId: string,
+      config: Parameters<typeof graph.invoke>[1],
+    ): Promise<TurnResult> {
+      const result = await graph.invoke(conversationId, config);
+      if (result.action === 'data_deleted')
+        await checkpointer.deleteThread(conversationId);
+      return result;
+    },
+  };
 }

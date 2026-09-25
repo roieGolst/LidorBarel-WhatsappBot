@@ -1,4 +1,3 @@
-import { readFileSync } from 'node:fs';
 import Fastify, { type FastifyInstance } from 'fastify';
 import type { Config } from './config.js';
 import type { Database } from './db/client.js';
@@ -6,6 +5,7 @@ import type { LeadIngestDeps } from './leads/ingestLead.js';
 import type { TurnProducer } from './queue/conversationQueue.js';
 import { buildLoggerOptions } from './logger.js';
 import { registerDebugRoutes } from './admin/debugRoutes.js';
+import { renderPrivacyPage } from './site/privacyPage.js';
 import type { DeliveryGate } from './whatsapp/deliveryGate.js';
 import { registerWhatsAppRoutes } from './whatsapp/routes.js';
 
@@ -29,16 +29,6 @@ export interface ServerOptions {
    */
   deliveryGate?: DeliveryGate;
 }
-
-/**
- * `public/privacy.html`, read once at startup. Next to `dist/` in the image
- * (see the Dockerfile) and next to `src/` in development — the same relative
- * path from this module either way.
- */
-const PRIVACY_PAGE = readFileSync(
-  new URL('../public/privacy.html', import.meta.url),
-  'utf8',
-);
 
 /**
  * Builds the HTTP server.
@@ -84,11 +74,12 @@ export function buildServer({
   );
 
   // The privacy policy and data-deletion instructions Meta requires of a Live
-  // app (App Dashboard → Settings → Basic). Static, public, no database: they
-  // must stay up even when nothing else does, and they are read by people, so
-  // they live in `public/` as plain HTML rather than in code.
+  // app (App Dashboard → Settings → Basic). Public, no database: they must stay
+  // up even when nothing else does. The page is `public/privacy.html`, rendered
+  // with the caps and periods the code actually enforces (site/privacyPage.ts).
+  const privacyPage = renderPrivacyPage(config);
   app.get('/privacy', (_request, reply) =>
-    reply.type('text/html; charset=utf-8').send(PRIVACY_PAGE),
+    reply.type('text/html; charset=utf-8').send(privacyPage),
   );
   app.get('/privacy-policy', (_request, reply) => reply.redirect('/privacy', 301));
   app.get('/data-deletion', (_request, reply) =>

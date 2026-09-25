@@ -115,6 +115,19 @@ explicit decision recorded in this file.
   by application code, so a hallucinated transition is structurally impossible.
 - **NN-6 — Personal data stays out of logs.** Transcripts and phone numbers are
   never logged.
+- **NN-8 — A deletion request is honoured on the spot.** A person who asks for
+  their data to be deleted (in words the bot recognises without a model, e.g.
+  "מחקו את המידע שלי") is acknowledged, and everything the bot wrote about them is
+  erased: their records in Postgres, their conversation checkpoints, their lead
+  item in Monday, and the personal details on any activity item. Only the phone
+  number is kept, on the do-not-contact list, so they are never messaged again.
+  Works even for a contact who has already opted out.
+- **NN-9 — Data is not kept forever.** A lead's conversation data is purged
+  `DATA_RETENTION_MONTHS` (default 24) after their last contact. The CRM record
+  is Lidor's business record and is deleted only on request (NN-8).
+- **NN-10 — A person can always reach a person.** Asking to talk to Lidor or to a
+  human, in words the bot recognises without a model, ends the automated flow
+  with the handoff message; a booked lead keeps their meeting.
 - **NN-7 — Monday's native Lead Ads integration stays disabled.** Otherwise every
   form submission creates duplicate items.
 

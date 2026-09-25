@@ -74,6 +74,14 @@ export const QUALIFIED_HANDOFF_MESSAGE =
   'תודה על הפרטים! אני מעביר אותם ללידור עכשיו — הוא יחזור אליך בהקדם לשיחת הערכה ולבניית תוכנית מכירה מותאמת. 👍 בינתיים, אפשר להשאיר כאן פרטים נוספים על הנכס שיעזרו למקד את השיחה עם לידור, ואני אעביר לו גם אותם.';
 
 /** Talk-to-a-human / book-a-meeting handoff — canned, no callback-time promise. */
+/**
+ * Sent when a person asks for their data to be deleted (NN-8) — before the
+ * erase, since afterwards there is no one on file to send to. States what is
+ * done and the one thing kept, so nothing on the privacy page is a surprise.
+ */
+export const DELETION_ACK_MESSAGE =
+  'קיבלתי. המידע שלך נמחק עכשיו מהמערכת ומכרטיס הליד — נשאר רק מספר הטלפון ברשימת ״לא לפנות״, כדי שלא נפנה אליך שוב. אם נקבעה פגישה, לידור יסיר אותה מהיומן. תודה 🙏';
+
 export const HANDOFF_TO_HUMAN_MESSAGE =
   'מעולה, אני מעביר אותך ללידור עם כל הפרטים. הוא יחזור אליך בהקדם.';
 

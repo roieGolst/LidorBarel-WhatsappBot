@@ -20,6 +20,10 @@ import { z } from 'zod';
  * Absent and empty both yield `[]`, so a variable that is present-but-blank
  * behaves identically to one that is unset — the safe reading for an allowlist.
  */
+/** NN-3: five follow-ups, five days — the caps the privacy page states. */
+export const FOLLOWUP_HARD_MAX_COUNT = 5;
+export const FOLLOWUP_HARD_MAX_DAYS = 5;
+
 const commaSeparated = z
   .string()
   .optional()
@@ -174,11 +178,36 @@ const configSchema = z.object({
    */
   followUpIntervalHours: z.coerce.number().min(0.01).max(168).default(24),
 
-  /** Most follow-ups ever sent to one lead (NN-3). */
-  followUpMaxCount: z.coerce.number().int().min(0).max(10).default(5),
+  /**
+   * Most follow-ups ever sent to one lead (NN-3). Five is the product rule and
+   * what the privacy page promises; a larger value in the environment is
+   * clamped rather than refused, so a stray setting cannot take the app down,
+   * and the page prints the effective number.
+   */
+  followUpMaxCount: z.coerce
+    .number()
+    .int()
+    .min(0)
+    .max(10)
+    .default(5)
+    .transform((count) => Math.min(count, FOLLOWUP_HARD_MAX_COUNT)),
 
-  /** Longest a follow-up sequence may run, from first contact (NN-3). */
-  followUpMaxDays: z.coerce.number().min(0.01).max(30).default(5),
+  /** Longest a follow-up sequence may run, from first contact (NN-3). Same clamp. */
+  followUpMaxDays: z.coerce
+    .number()
+    .min(0.01)
+    .max(30)
+    .default(5)
+    .transform((days) => Math.min(days, FOLLOWUP_HARD_MAX_DAYS)),
+
+  // --- Privacy commitments (the /privacy page prints these) ---------------------
+  /**
+   * How long a person's conversation data is kept after their last contact
+   * before the nightly purge erases it (NN-9). The CRM record is separate.
+   */
+  dataRetentionMonths: z.coerce.number().int().min(1).max(120).default(24),
+  /** Where privacy requests may be e-mailed. Optional: WhatsApp is always open. */
+  privacyContactEmail: z.string().email().optional(),
 
   /**
    * Approved template for nudging **outside** the 24-hour window.
@@ -274,6 +303,8 @@ function readEnv(env: NodeJS.ProcessEnv): Record<string, unknown> {
     followUpTemplateName: env.FOLLOWUP_TEMPLATE_NAME,
     followUpIncompleteTemplateName: env.FOLLOWUP_INCOMPLETE_TEMPLATE_NAME,
     followUpTemplateLanguage: env.FOLLOWUP_TEMPLATE_LANGUAGE,
+    dataRetentionMonths: env.DATA_RETENTION_MONTHS,
+    privacyContactEmail: env.PRIVACY_CONTACT_EMAIL,
     mondayApiToken: env.MONDAY_API_TOKEN,
     mondayApiVersion: env.MONDAY_API_VERSION,
     outboxIntervalSeconds: env.OUTBOX_INTERVAL_SECONDS,
@@ -314,6 +345,8 @@ const ENV_VAR_NAMES: Record<keyof Config, string> = {
   followUpTemplateName: 'FOLLOWUP_TEMPLATE_NAME',
   followUpIncompleteTemplateName: 'FOLLOWUP_INCOMPLETE_TEMPLATE_NAME',
   followUpTemplateLanguage: 'FOLLOWUP_TEMPLATE_LANGUAGE',
+  dataRetentionMonths: 'DATA_RETENTION_MONTHS',
+  privacyContactEmail: 'PRIVACY_CONTACT_EMAIL',
   mondayApiToken: 'MONDAY_API_TOKEN',
   mondayApiVersion: 'MONDAY_API_VERSION',
   outboxIntervalSeconds: 'OUTBOX_INTERVAL_SECONDS',

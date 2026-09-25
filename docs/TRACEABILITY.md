@@ -91,6 +91,11 @@ Last updated: 2026-09-08
 | A turn's messages arrive in the order sent, even behind a video | `whatsapp/deliveryGate.ts` · `workflow/conversationTurn.ts` (`ct_awaitDelivery`) · `whatsapp/routes.ts` | `deliveryGate.test.ts` · `conversationTurn.test.ts` · `routes.test.ts` |
 | A typed restart, and a "back" after qualification, ask before discarding anything | `workflow/conversationTurn.ts` (`handleGate` → `confirm_restart`) | `stageMatrix.test.ts` · `conversationTurn.test.ts` |
 | Every live stage × every deterministic input holds the four structural rules (no throw, no fact loss post-qualification, booking survives, booked lead never regressed) | `workflow/stageMatrix.test.ts` | itself — 110 cells |
+| NN-8 — a deletion request erases the person everywhere the bot wrote them, keeps only the number on the do-not-contact list, works for an opted-out contact | `workflow/dataRequests.ts` · `privacy/erase.ts` · `workflow/conversationTurn.ts` (`eraseOnRequest`; thread deleted after the run) | `dataRequests.test.ts` · `erase.test.ts` · `privacyRequests.test.ts` |
+| NN-9 — conversation data purged after `DATA_RETENTION_MONTHS`; the CRM untouched | `privacy/retentionSweeper.ts` · `main.ts` | `retentionSweeper.test.ts` · `erase.test.ts` (retention reason) |
+| NN-10 — asking for a person ends the automated flow; a booked lead keeps their meeting | `workflow/gate.ts` (4b) · `workflow/dataRequests.ts` | `dataRequests.test.ts` · `privacyRequests.test.ts` |
+| NN-6 — log redaction of body/text/phone/to | `logger.ts` | `logger.test.ts` |
+| The privacy page prints the caps and periods the code enforces; `FOLLOWUP_MAX_*` clamped to five | `site/privacyPage.ts` · `config.ts` | `privacyPage.test.ts` · `config.test.ts` · `routes.test.ts` |
 | Banned words never reach the customer | `workflow/validate.ts` | `validate.test.ts` |
 
 ---

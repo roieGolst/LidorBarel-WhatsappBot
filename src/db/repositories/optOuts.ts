@@ -14,7 +14,12 @@ export type OptOutSource =
   /** A person marked it in the admin panel. */
   | 'staff'
   /** Meta reported the user blocked the business. */
-  | 'provider';
+  | 'provider'
+  /**
+   * The person asked for their data to be deleted. Everything else about them
+   * is gone; the number stays here only so they are never messaged again.
+   */
+  | 'deletion';
 
 /**
  * Records an opt-out.

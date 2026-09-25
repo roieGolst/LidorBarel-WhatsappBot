@@ -411,3 +411,23 @@ describe('missing configuration', () => {
     await unconfigured.close();
   });
 });
+
+describe('public pages for the Meta app listing', () => {
+  it('serves the privacy policy as public HTML', async () => {
+    const response = await app.inject({ method: 'GET', url: '/privacy' });
+    expect(response.statusCode).toBe(200);
+    expect(response.headers['content-type']).toContain('text/html');
+    expect(response.body).toContain('מדיניות פרטיות');
+    // Deletion instructions live on the same page, under a stable anchor.
+    expect(response.body).toContain('id="deletion"');
+  });
+
+  it('redirects the aliases Meta and people may type', async () => {
+    const alias = await app.inject({ method: 'GET', url: '/privacy-policy' });
+    expect(alias.statusCode).toBe(301);
+    expect(alias.headers.location).toBe('/privacy');
+    const deletion = await app.inject({ method: 'GET', url: '/data-deletion' });
+    expect(deletion.statusCode).toBe(302);
+    expect(deletion.headers.location).toBe('/privacy#deletion');
+  });
+});

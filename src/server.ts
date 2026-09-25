@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import Fastify, { type FastifyInstance } from 'fastify';
 import type { Config } from './config.js';
 import type { Database } from './db/client.js';
@@ -28,6 +29,16 @@ export interface ServerOptions {
    */
   deliveryGate?: DeliveryGate;
 }
+
+/**
+ * `public/privacy.html`, read once at startup. Next to `dist/` in the image
+ * (see the Dockerfile) and next to `src/` in development — the same relative
+ * path from this module either way.
+ */
+const PRIVACY_PAGE = readFileSync(
+  new URL('../public/privacy.html', import.meta.url),
+  'utf8',
+);
 
 /**
  * Builds the HTTP server.
@@ -70,6 +81,18 @@ export function buildServer({
         done(new Error('invalid JSON'), undefined);
       }
     },
+  );
+
+  // The privacy policy and data-deletion instructions Meta requires of a Live
+  // app (App Dashboard → Settings → Basic). Static, public, no database: they
+  // must stay up even when nothing else does, and they are read by people, so
+  // they live in `public/` as plain HTML rather than in code.
+  app.get('/privacy', (_request, reply) =>
+    reply.type('text/html; charset=utf-8').send(PRIVACY_PAGE),
+  );
+  app.get('/privacy-policy', (_request, reply) => reply.redirect('/privacy', 301));
+  app.get('/data-deletion', (_request, reply) =>
+    reply.redirect('/privacy#deletion', 302),
   );
 
   app.get('/health', async () => {

@@ -513,7 +513,7 @@ onward, so start them early.
 
 | # | Item | Gates |
 |---|---|---|
-| E-1 | Meta Business verification | Template sending |
+| E-1 | Meta Business verification. **Prerequisite now in place:** the Privacy Policy and Data Deletion URLs Meta asks for are served at `/privacy` and `/data-deletion` (GO-LIVE §5a) — fill the placeholders on the page before submitting. | Template sending |
 | E-2 | ✅ Done — the seller form has a required consent checkbox | — |
 | E-9 | **Consent wording scope.** The checkbox says *הודעת אישור* (a confirmation message); the bot runs a qualification conversation plus five days of follow-ups. Under Amendment 40 those are commercial messages. Worth a privacy review, and worth broadening on the next form. | Volume send |
 | E-3 | Decision on leads already collected under the old form (re-consent or treat as inbound-only) | Phase 3 |

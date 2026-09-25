@@ -164,6 +164,24 @@ Ads Testing Tool. Expect a contact and conversation in Postgres
 and a board item. Delivery stays `Pending` while the app is in Development
 mode — that is E-1, not the server.
 
+### 5a. The public pages Meta requires
+
+The app cannot go Live without a **Privacy Policy URL** and **Data Deletion
+Instructions URL** (App Dashboard → Settings → Basic). Both are served by the bot
+itself, so they are up whenever the webhook is:
+
+| Setting | URL |
+|---|---|
+| Privacy Policy URL | `https://<DOMAIN>/privacy` |
+| Data Deletion Instructions URL | `https://<DOMAIN>/data-deletion` (→ the deletion section of the same page) |
+
+The page is `public/privacy.html`. **Before submitting it to Meta, fill the
+bracketed placeholders** — the legal name and registration number, address,
+contact e-mail, the WhatsApp number, and the retention period — and have a lawyer
+read it once: it was drafted from what the system actually does (see
+`docs/PRODUCT-REQUIREMENTS.md` §3 and the processors listed on the page), not by
+a lawyer.
+
 ## 6. Switch outreach on
 
 Only when all of these are true:

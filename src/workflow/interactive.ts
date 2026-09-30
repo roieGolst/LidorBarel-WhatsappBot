@@ -73,6 +73,37 @@ export const STOP_MESSAGE =
 export const QUALIFIED_HANDOFF_MESSAGE =
   'תודה על הפרטים! אני מעביר אותם ללידור עכשיו — הוא יחזור אליך בהקדם לשיחת הערכה ולבניית תוכנית מכירה מותאמת. 👍 בינתיים, אפשר להשאיר כאן פרטים נוספים על הנכס שיעזרו למקד את השיחה עם לידור, ואני אעביר לו גם אותם.';
 
+/**
+ * Sent when a person asks for their data to be deleted (NN-8), just before the
+ * erase runs — afterwards there is no conversation to send through. Neutral on
+ * purpose: it does not say the deletion is done.
+ */
+export const DELETION_ACK_MESSAGE = 'בקשתך התקבלה ותטופל בהקדם.';
+
+/**
+ * Asked — once — when someone who opted out writes to us again. Never sent on
+ * our own initiative. The body names the messages a yes agrees to, and it is
+ * what is stored as the consent text (`reverseOptOut`), so the record says
+ * exactly what was agreed.
+ */
+export const RECONSENT_QUESTION = {
+  body: 'ביקשת בעבר שלא נשלח לך הודעות, ולכן לא פנינו אליך מאז. האם את/ה מסכים/ה לקבל שוב הודעות וואטסאפ מלידור בראל, יועץ נדל״ן, בנוגע למכירת הנכס שלך — המשך השיחה, תיאום שיחה ותזכורות אם השיחה נעצרת?',
+  buttons: [
+    { id: 'reconsent:yes', title: 'כן, אפשר להמשיך' },
+    { id: 'reconsent:no', title: 'לא, תודה' },
+  ],
+} as const;
+
+/** Sent when they decline: they stay opted out. */
+export const RECONSENT_DECLINED_MESSAGE = 'בסדר, לא נשלח לך הודעות. תודה.';
+
+/**
+ * The answer to "I want to speak with Lidor" (NN-10): his nearest free times,
+ * straight away — no screening first, at any stage, for any lead.
+ */
+export const SPEAK_WITH_LIDOR_BODY =
+  'בשמחה 🙂 אפשר לקבוע שיחה קצרה עם לידור. אלה הזמנים הפנויים הקרובים שלו — מה מתאים לך?';
+
 /** Talk-to-a-human / book-a-meeting handoff — canned, no callback-time promise. */
 export const HANDOFF_TO_HUMAN_MESSAGE =
   'מעולה, אני מעביר אותך ללידור עם כל הפרטים. הוא יחזור אליך בהקדם.';

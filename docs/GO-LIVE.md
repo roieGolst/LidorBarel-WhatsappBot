@@ -164,6 +164,28 @@ Ads Testing Tool. Expect a contact and conversation in Postgres
 and a board item. Delivery stays `Pending` while the app is in Development
 mode — that is E-1, not the server.
 
+### 5a. The public pages Meta requires
+
+The app cannot go Live without a **Privacy Policy URL** and **Data Deletion
+Instructions URL** (App Dashboard → Settings → Basic). Both are served by the bot
+itself, so they are up whenever the webhook is:
+
+| Setting | URL |
+|---|---|
+| Privacy Policy URL | `https://<DOMAIN>/privacy` |
+| Data Deletion Instructions URL | `https://<DOMAIN>/data-deletion` (→ the deletion section of the same page) |
+
+The page is `public/privacy.html`, static. It describes what the system does and
+carries only the obligations Meta and WhatsApp impose; the business details come
+from the עוסק מורשה certificate. If the behaviour changes, change the page. The
+decisions still open (IMPLEMENTATION-STATUS E-16) are deliberately not on it. Have
+a lawyer read it once: it was drafted from the system, not by a lawyer.
+
+**Deletion requests are carried out by the bot** (NN-8): the person is erased
+from Postgres, the checkpoints and the לידים board. פעילות items and calendar
+events are left as they are. A lead item the API could not reach is logged as
+`deletion request: lead items to remove by hand`, with its id.
+
 ## 6. Switch outreach on
 
 Only when all of these are true:

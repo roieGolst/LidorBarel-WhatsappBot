@@ -30,6 +30,7 @@ import { POST_SCREENING_STAGES, type KnownFacts } from './decide.js';
 import {
   RESTART_CONFIRM_BOOKED_MESSAGE,
   RESTART_CONFIRM_MESSAGE,
+  SPEAK_WITH_LIDOR_BODY,
 } from './interactive.js';
 
 /**
@@ -152,6 +153,7 @@ const INPUTS: { label: string; text: string }[] = [
   { label: 'yes', text: 'כן' },
   { label: 'no', text: 'לא' },
   { label: 'free text (UNCLEAR)', text: 'שלום, מה נשמע?' },
+  { label: 'asks to speak with Lidor', text: 'אני רוצה לדבר עם לידור' },
 ];
 
 const UNCLEAR = '{"intent":"UNCLEAR","confidence":0.2,"extracted":{}}';
@@ -424,5 +426,106 @@ describe('the paths that went wrong live, replayed', () => {
     expect(kept.stage).toBe('appointment_confirmed');
     expect(kept.text).toContain('נשארת');
     expect(calendar.updated).toHaveLength(0);
+  });
+});
+
+describe('"I want to speak with Lidor" opens a call-scheduling path at once (NN-10)', () => {
+  // Every stage a person can be in when they ask, including the ends where the
+  // normal booking flow is closed to them (disqualified) or that come before
+  // any screening (new, engaged).
+  const STAGES: ConversationStage[] = [
+    'new',
+    ...LIVE_STAGES.filter((stage) => stage !== 'appointment_confirmed'),
+    'disqualified',
+    'closed_no_response',
+  ];
+
+  for (const stage of STAGES) {
+    it(`${stage}: offers Lidor's earliest times without a model`, async () => {
+      const calendar = new FakeCalendar();
+      const { conversationId, deps } = await seed(
+        stage,
+        'אני רוצה לדבר עם לידור',
+        calendar,
+      );
+      const channel = new FakeChannel();
+
+      const result = await createConversationWorkflow(
+        { db, llm: new FakeLlmClient([]), channel, appointments: deps },
+        checkpointer,
+      ).invoke(conversationId, { configurable: { thread_id: conversationId } });
+
+      expect(result).toMatchObject({
+        action: 'offer_call_with_lidor',
+        stage: 'appointment_proposed',
+        text: SPEAK_WITH_LIDOR_BODY,
+      });
+      expect(channel.sent).toEqual([
+        expect.objectContaining({ kind: 'list', body: SPEAK_WITH_LIDOR_BODY }),
+      ]);
+      const offer = await latestOffer(db, conversationId);
+      expect(parseStoredSlots(offer!.proposedSlots).length).toBeGreaterThan(0);
+    });
+  }
+
+  it('a tapped time books a פעילות item — how the request reaches Lidor', async () => {
+    const calendar = new FakeCalendar();
+    const { conversationId, deps } = await seed(
+      'disqualified',
+      'אני רוצה לדבר עם לידור',
+      calendar,
+    );
+    const workflow = createConversationWorkflow(
+      { db, llm: new FakeLlmClient([]), channel: new FakeChannel(), appointments: deps },
+      checkpointer,
+    );
+    await workflow.invoke(conversationId, {
+      configurable: { thread_id: conversationId },
+    });
+
+    const [first] = parseStoredSlots(
+      (await latestOffer(db, conversationId))!.proposedSlots,
+    );
+    await recordInboundMessage(db, {
+      conversationId,
+      providerMessageId: `tap-${conversationId}`,
+      body: formatSlot(first!, TZ),
+      createdAt: new Date(Date.now() + 1000),
+    });
+    await recordInboundActivity(db, conversationId, new Date());
+    // The meeting brief is model-written; the fake returns nothing usable, and
+    // the booking goes ahead without it.
+    const booked = await createConversationWorkflow(
+      {
+        db,
+        llm: new FakeLlmClient(['{}']),
+        channel: new FakeChannel(),
+        appointments: deps,
+      },
+      checkpointer,
+    ).invoke(conversationId, { configurable: { thread_id: `${conversationId}-2` } });
+
+    expect(booked).toMatchObject({
+      action: 'confirm_booking',
+      stage: 'appointment_confirmed',
+    });
+    expect(calendar.created).toHaveLength(1);
+    expect(calendar.created[0]!.name).toContain('פגישת ייעוץ');
+  });
+
+  it('a booked lead is reminded of the meeting they already have', async () => {
+    const calendar = new FakeCalendar();
+    const { conversationId, deps } = await seed(
+      'appointment_confirmed',
+      'אני רוצה לדבר עם לידור',
+      calendar,
+    );
+    const result = await createConversationWorkflow(
+      { db, llm: new FakeLlmClient([]), channel: new FakeChannel(), appointments: deps },
+      checkpointer,
+    ).invoke(conversationId, { configurable: { thread_id: conversationId } });
+
+    expect(result.action).toBe('already_booked');
+    expect(calendar.created).toHaveLength(1); // the seeded one, no second
   });
 });

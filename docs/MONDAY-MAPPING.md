@@ -184,6 +184,13 @@ event title) and the details in an update. **Logging the meeting in E&A as well
 would double-create** through that automation; do not add it without disabling
 the automation.
 
+### On a deletion request the bot deletes the lead item only
+
+A person who asks for their data to be deleted (NN-8) has their לידים item
+**deleted** (`delete_item`). פעילות items are **not touched**: the board syncs
+them to Lidor's Google Calendar, and an existing meeting may stay there. An item
+the API could not reach is logged with its id for a person to finish.
+
 ### ⚠️ Deleting a `פעילות` item does NOT remove its Calendar event
 
 Verified 2026-09-08: two test items were deleted through the API (confirmed

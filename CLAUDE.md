@@ -143,6 +143,18 @@ Full list in [docs/PRODUCT-REQUIREMENTS.md](docs/PRODUCT-REQUIREMENTS.md) §3.
   Israeli Amendment 40 exposure is up to ₪1,000 per message.
 - **Follow-ups stop at five days**, and immediately on any stop condition.
 - **Transcripts and phone numbers never reach logs.**
+- **A deletion request erases the person automatically and blocks nothing** (NN-8,
+  `workflow/dataRequests.ts`, `privacy/erase.ts`): contact row and its cascade,
+  events/outbox, checkpoints, the לידים item — never פעילות items or the calendar.
+  An earlier opt-out in `opt_outs` survives it; deletion itself never opts out.
+- **An opted-out person who writes again is asked once whether they agree to messages
+  again** (NN-1 exception, `optedOutReply`); the bot never writes first to ask, and
+  nothing else reaches them.
+- **"I want to speak with Lidor" offers his earliest times at once**, any stage, any
+  lead (NN-10, `offerCallWithLidor`). `/privacy`
+  (`public/privacy.html`) states only what the code does — change the page when
+  the behaviour changes, and do not add promises (deadlines, retention periods)
+  that nothing enforces.
 
 ### Data & conventions worth knowing before editing
 

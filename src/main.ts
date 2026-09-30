@@ -135,6 +135,8 @@ async function buildConversationPipeline(
         channel,
         deliveryGate,
         ...(appointments ? { appointments } : {}),
+        // For a deletion request (NN-8) to reach the board.
+        ...(mondayForBooking ? { monday: mondayForBooking } : {}),
         // Scheduling is gated on outreach being enabled: the sweeper is what
         // sends these, so scheduling without it would only accumulate due rows
         // that nothing ever picks up.

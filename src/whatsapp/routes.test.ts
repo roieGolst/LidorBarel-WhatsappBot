@@ -419,7 +419,6 @@ describe('public pages for the Meta app listing', () => {
     expect(response.headers['content-type']).toContain('text/html');
     expect(response.body).toContain('מדיניות פרטיות');
     expect(response.body).toContain('211343660');
-    expect(response.body).not.toContain('{{');
     // Deletion instructions live on the same page, under a stable anchor.
     expect(response.body).toContain('id="deletion"');
   });

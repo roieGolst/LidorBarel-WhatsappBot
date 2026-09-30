@@ -163,3 +163,25 @@ function shouldAdvance(
   if (!current) return true;
   return (STATUS_RANK[incoming] ?? 0) > (STATUS_RANK[current] ?? 0);
 }
+
+/** Whether the bot sent exactly this text in the conversation since `since`. */
+export async function sentSince(
+  db: DbClient,
+  conversationId: string,
+  body: string,
+  since: Date,
+): Promise<boolean> {
+  const [found] = await db
+    .select({ id: messages.id })
+    .from(messages)
+    .where(
+      and(
+        eq(messages.conversationId, conversationId),
+        eq(messages.direction, 'outbound'),
+        eq(messages.body, body),
+        gte(messages.createdAt, since),
+      ),
+    )
+    .limit(1);
+  return found !== undefined;
+}

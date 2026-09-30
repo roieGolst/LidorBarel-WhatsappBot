@@ -1,38 +1,47 @@
 /**
- * The two requests the privacy policy promises to honour on the spot, detected
- * deterministically — like the opt-out words — so they can never be missed by a
- * model or answered with small talk.
+ * Two requests answered without a model, so neither can be missed or met with
+ * small talk: deleting one's data (NN-8), and asking to speak with Lidor or a
+ * person (NN-10).
  *
- * Both run in the gate, before any classification: a person asking for their
- * data to be deleted, or to speak to a human, has stopped talking to the bot.
+ * Deletion is high precision on purpose: the request erases the person at
+ * once, so it must name their *own* data ("המידע שלי", "my data"). A seller correcting what
+ * they sent ("תמחק את המידע ששלחתי") or talking about a listing ("למחוק את
+ * הפרטים של הנכס") is not asking for this, and is left to the normal turn.
  */
 
+/** Delete / erase, as people write it: מחקו, תמחק, תמחקי, למחוק, מחיקת… */
+const DELETE_VERB = String.raw`(?:(?:^|\s)[וש]?(?:ת?מחק(?:ו|י)?|למחוק|מחיקת))`;
+/** The data, optionally "all" and "personal", and always "mine". */
+const MY_DATA = String.raw`\s+(?:את\s+)?(?:כל\s+)?(?:ה?מידע|ה?פרטים|ה?נתונים)(?:\s+ה?אישי(?:ים)?)?\s+שלי(?=$|[\s.,!?])`;
+
 const DELETION_PATTERNS: RegExp[] = [
-  // "מחקו את המידע שלי", "תמחק את הפרטים שלי", "אני רוצה למחוק את הנתונים שלי"
-  /(?:^|\s)(?:ת?מחק(?:ו|י)?|למחוק|תמחקו|מחיקת)\s+(?:את\s+)?(?:כל\s+)?(?:ה?מידע|ה?פרטים|ה?נתונים)(?:\s+ה?אישי(?:ים)?)?(?:\s+שלי)?/u,
-  /בקשת מחיקה/u,
-  /למחוק אותי/u,
-  /\bdelete my (?:data|information|details|account)\b/i,
-  /\b(?:erase|remove) my (?:data|information|details)\b/i,
+  new RegExp(DELETE_VERB + MY_DATA, 'u'),
+  /(?:^|\s)(?:ת?מחק(?:ו|י)?|למחוק)\s+אותי(?=$|[\s.,!?])/u,
+  /\b(?:delete|erase|remove) my (?:personal )?(?:data|information|details)\b/i,
   /\bright to be forgotten\b/i,
 ];
 
-const HUMAN_PATTERNS: RegExp[] = [
-  // "אפשר לדבר עם לידור?", "רוצה לדבר עם נציג", "לדבר עם בן אדם"
-  /לדבר\s+עם\s+(?:לידור|נציג(?:ה)?|בן\s?אדם|אדם|מישהו|אנוש)/u,
-  /נציג\s+אנושי/u,
-  /בן\s?אדם\s+אמיתי/u,
-  /(?:תעביר(?:ו)?|העבר(?:ו)?|תחבר(?:ו)?)\s+(?:אותי\s+)?ל?לידור/u,
-  /\btalk to a (?:human|person|real person|representative)\b/i,
-  /\bhuman agent\b/i,
-];
-
-/** "Delete my data" — in any of the ways people actually write it. */
+/** "Delete my data" — in the ways people actually write it. */
 export function isDeletionRequest(text: string): boolean {
   return DELETION_PATTERNS.some((pattern) => pattern.test(text));
 }
 
-/** "Let me talk to a person" — the promise on the privacy page, kept in code. */
-export function isHumanRequest(text: string): boolean {
-  return HUMAN_PATTERNS.some((pattern) => pattern.test(text));
+/**
+ * "I want to speak with Lidor" — or with a person, a representative. Explicit
+ * wording only: "לדבר עם מישהו" (someone in the family, say) is not one, and a
+ * negation ("לא צריך לדבר עם לידור") is not one.
+ */
+const SPEAK_PATTERNS: RegExp[] = [
+  /(?:לדבר|לשוחח|לדבר\s+ישירות)\s+(?:עם|אל)\s+לידור/u,
+  /(?:לדבר|לשוחח)\s+עם\s+(?:בן\s?אדם|נציג(?:ה)?|אדם\s+אמיתי|מישהו\s+אמיתי)/u,
+  /(?:תעביר(?:ו|י)?|תחבר(?:ו|י)?)\s+(?:אותי\s+)?ל(?:לידור|נציג|בן\s?אדם)/u,
+  /\b(?:talk|speak)\s+(?:to|with)\s+(?:lidor|a\s+(?:human|person|real\s+person|representative))\b/i,
+];
+const NEGATED =
+  /(?:לא|אין\s+צורך)\s+(?:צריך\s+|רוצה\s+|מעוניי?נ(?:ת)?\s+)?ל(?:דבר|שוחח)/u;
+
+/** An explicit request to speak with Lidor or a person. */
+export function isSpeakWithLidorRequest(text: string): boolean {
+  if (NEGATED.test(text)) return false;
+  return SPEAK_PATTERNS.some((pattern) => pattern.test(text));
 }

@@ -13,9 +13,10 @@ import { getConfig } from '../config.js';
 import {
   countInboundMessages,
   recentMessages,
+  sentSince,
   type Message,
 } from '../db/repositories/messages.js';
-import { isOptedOut } from '../db/repositories/optOuts.js';
+import { findOptOut, reverseOptOut } from '../db/repositories/optOuts.js';
 import { getLogger } from '../logger.js';
 import type { LlmClient, LlmMessage, LlmUsage } from '../llm/client.js';
 import type {
@@ -28,7 +29,7 @@ import type { DeliveryGate, DeliveryOutcome } from '../whatsapp/deliveryGate.js'
 import { guardedSend } from '../whatsapp/guardedSend.js';
 import type { MondayClient } from '../monday/client.js';
 import { eraseContact } from '../privacy/erase.js';
-import { isDeletionRequest } from './dataRequests.js';
+import { isDeletionRequest, isSpeakWithLidorRequest } from './dataRequests.js';
 import {
   bookSlot,
   bookedAppointment,
@@ -102,6 +103,9 @@ import {
   retryQuestion,
   INTRO_VIDEO_PATH,
   MAIN_MENU,
+  RECONSENT_DECLINED_MESSAGE,
+  RECONSENT_QUESTION,
+  SPEAK_WITH_LIDOR_BODY,
   mainMenuChoiceFor,
   OFF_TOPIC_REDIRECT_MESSAGE,
   DELETION_ACK_MESSAGE,
@@ -175,8 +179,8 @@ export interface ConversationDeps {
   deliveryGate?: DeliveryGate | undefined;
   /**
    * The CRM, for a deletion request (NN-8): the lead item is deleted and the
-   * details on activity items scrubbed. Absent, the erase still happens in the
-   * database and the board items are logged for a person to remove.
+   * details on activity items scrubbed. Absent, the database is still erased
+   * and the board items are logged for a person to remove.
    */
   monday?: MondayClient | undefined;
 }
@@ -241,8 +245,12 @@ export interface TurnContext {
    * opens with the welcome + intro video (spec §2).
    */
   isFirstResponse: boolean;
-  /** True when this contact already opted out — the turn does nothing. */
+  /** True when this number opted out — the turn only asks about re-consent. */
   optedOut: boolean;
+  /** True when that opt-out is an abuse ban — the turn stays silent. */
+  optOutIsBan: boolean;
+  /** When the number opted out — the re-consent question is asked once since. */
+  optedOutAt?: Date;
   /** The latest inbound message — the turn we are responding to. */
   currentText: string;
   /** Meta's id for the latest inbound, used to show a typing indicator against it. */
@@ -382,6 +390,7 @@ export async function loadContext(
   const lastOutboundText = turns
     .filter((turn) => turn.role === 'assistant')
     .at(-1)?.content;
+  const optOut = await findOptOut(db, contact.phone);
 
   return {
     stage: conversation.stage,
@@ -392,7 +401,9 @@ export async function loadContext(
     screenAll: screensAllQuestions(contact.entryPoint),
     // No prior outbound message means the bot has not spoken yet.
     isFirstResponse: !turns.some((turn) => turn.role === 'assistant'),
-    optedOut: await isOptedOut(db, contact.phone),
+    optedOut: optOut !== undefined,
+    optOutIsBan: optOut?.reason === 'abuse',
+    ...(optOut ? { optedOutAt: optOut.createdAt } : {}),
     ...(bookedSlot ? { bookedSlot } : {}),
     currentText,
     currentMessageId: latest.providerMessageId ?? '',
@@ -583,10 +594,20 @@ export function createConversationWorkflow(
   // to answer outside it, which Meta rejects.
   const send = task(
     'ct_send',
-    (args: { to: string; part: OutboundPart; conversation: WindowState }) =>
+    (args: {
+      to: string;
+      part: OutboundPart;
+      conversation: WindowState;
+      /** The narrow reply an opted-out number may get (re-consent, deletion ack). */
+      toOptedOut?: boolean;
+    }) =>
       guardedSend(
         deps.db,
-        { kind: 'reply', to: args.to, conversation: args.conversation },
+        {
+          kind: args.toOptedOut === true ? 'optedOutReply' : 'reply',
+          to: args.to,
+          conversation: args.conversation,
+        },
         () => sendOutbound(deps.channel, args.to, args.part),
       ),
   );
@@ -709,38 +730,192 @@ export function createConversationWorkflow(
 
   /**
    * A deletion request (NN-8): acknowledge, then erase. In that order — after
-   * the erase there is no one on file to send to. Someone already opted out
-   * cannot be answered at all and is erased in silence. The checkpoint thread
-   * of this very turn is deleted by the workflow wrapper once the run is over.
+   * the erase there is no conversation to send through. The acknowledgement is
+   * neutral and goes to an opted-out person too, as the narrow reply they may
+   * get. The checkpoint thread of this very turn is deleted by the wrapper
+   * below once the run is over.
    */
   const eraseOnRequest = async (
     ctx: TurnContext,
     conversationId: string,
   ): Promise<TurnResult> => {
-    let sent = false;
-    if (!ctx.optedOut) {
+    if (!ctx.optOutIsBan) {
       await send({
         to: ctx.contactPhone,
         conversation: ctx,
         part: { kind: 'text', text: DELETION_ACK_MESSAGE },
+        toOptedOut: ctx.optedOut,
       });
-      sent = true;
     }
     const report = await eraseContact(
       { db: deps.db, monday: deps.monday },
-      { contactId: ctx.contactId, phone: ctx.contactPhone },
-      'deletion_request',
+      ctx.contactId,
     );
     logger.info(
       { conversationId, boardFailures: report.boardFailures.length },
-      'deletion request honoured',
+      'deletion request carried out',
     );
     return {
       stage: ctx.stage,
       action: 'data_deleted',
-      text: sent ? DELETION_ACK_MESSAGE : '',
-      sent,
+      text: ctx.optOutIsBan ? '' : DELETION_ACK_MESSAGE,
+      sent: !ctx.optOutIsBan,
     };
+  };
+
+  /**
+   * Someone who opted out has written to us again (NN-1). Writing is not
+   * consent, so nothing resumes on its own: they are asked — once since the
+   * opt-out — whether they agree to our messages again, and only an explicit yes
+   * reverses the opt-out and continues with the menu. A ban is not an opt-out
+   * and stays silent; so does a repeated stop request, anything that is not an
+   * answer to the question, and everything after it was asked.
+   */
+  const reconsent = async (
+    ctx: TurnContext,
+    conversationId: string,
+  ): Promise<TurnResult> => {
+    // The answer is the latest line: messages since the bot last spoke arrive
+    // joined, and "מה זה?" then "לא" is a no.
+    const text = ctx.currentText.split('\n').at(-1)?.trim() ?? '';
+    const [yesButton, noButton] = RECONSENT_QUESTION.buttons;
+    const pending = ctx.lastOutboundText === RECONSENT_QUESTION.body;
+    const yes = pending && (text === yesButton.title || isAffirmative(text));
+    const no = pending && (text === noButton.title || isNegative(text));
+    const askedBefore =
+      ctx.optedOutAt !== undefined &&
+      (await sentSince(deps.db, conversationId, RECONSENT_QUESTION.body, ctx.optedOutAt));
+    if (
+      ctx.optOutIsBan ||
+      isOptOutKeyword(ctx.currentText) ||
+      (!yes && !no && askedBefore)
+    ) {
+      return { stage: ctx.stage, action: 'skipped_opted_out', text: '', sent: false };
+    }
+    const base = {
+      conversationId,
+      contactId: ctx.contactId,
+      contactPhone: ctx.contactPhone,
+      fromStage: ctx.stage,
+      extracted: ctx.known,
+    };
+
+    if (yes) {
+      await reverseOptOut(
+        deps.db,
+        ctx.contactPhone,
+        'whatsapp_reconsent',
+        RECONSENT_QUESTION.body,
+      );
+      const { providerMessageId } = await send({
+        to: ctx.contactPhone,
+        conversation: ctx,
+        part: {
+          kind: 'list',
+          body: MAIN_MENU.body,
+          buttonLabel: MAIN_MENU.buttonLabel,
+          rows: [...MAIN_MENU.rows],
+        },
+      });
+      await persist({
+        ...base,
+        toStage: 'engaged',
+        action: 'reconsent_accepted',
+        outbound: [{ body: MAIN_MENU.body, providerMessageId }],
+      });
+      return {
+        stage: 'engaged',
+        action: 'reconsent_accepted',
+        text: MAIN_MENU.body,
+        sent: true,
+      };
+    }
+
+    const body = no ? RECONSENT_DECLINED_MESSAGE : RECONSENT_QUESTION.body;
+    const { providerMessageId } = await send({
+      to: ctx.contactPhone,
+      conversation: ctx,
+      part: no
+        ? { kind: 'text', text: body }
+        : { kind: 'buttons', body, buttons: [...RECONSENT_QUESTION.buttons] },
+      toOptedOut: true,
+    });
+    const action = no ? 'reconsent_declined' : 'reconsent_asked';
+    await persist({
+      ...base,
+      toStage: 'opted_out',
+      action,
+      outbound: [{ body, providerMessageId }],
+    });
+    return { stage: 'opted_out', action, text: body, sent: true };
+  };
+
+  /**
+   * The escalation path (NN-10). A booked lead is reminded of the meeting they
+   * have. Anyone else is offered Lidor's earliest free times as a list; a tap
+   * books it through the usual `appointment_proposed` handling, which writes a
+   * פעילות item that the board syncs to his calendar. With no free time in the
+   * horizon the lead is handed off, which shows on his לידים board as awaiting
+   * a call.
+   */
+  const offerCallWithLidor = async (
+    ctx: TurnContext,
+    conversationId: string,
+    appointments: BookingDeps,
+  ): Promise<TurnResult> => {
+    const base = {
+      conversationId,
+      contactId: ctx.contactId,
+      contactPhone: ctx.contactPhone,
+      fromStage: ctx.stage,
+      extracted: ctx.known,
+    };
+    if (ctx.stage === 'appointment_confirmed' && ctx.bookedSlot) {
+      const text = alreadyBookedMessage(ctx.bookedSlot, timeZone);
+      const { providerMessageId } = await send({
+        to: ctx.contactPhone,
+        conversation: ctx,
+        part: { kind: 'text', text },
+      });
+      await persist({
+        ...base,
+        toStage: ctx.stage,
+        action: 'already_booked',
+        outbound: [{ body: text, providerMessageId }],
+      });
+      return { stage: ctx.stage, action: 'already_booked', text, sent: true };
+    }
+
+    const slots = await findSlotsToOffer(appointments, undefined, undefined, 'earliest');
+    if (slots.length > 0) {
+      await recordOffer(appointments, conversationId, slots, OFFER_HOLD_MS);
+    }
+    const { part, body, toStage, action } =
+      slots.length > 0
+        ? {
+            part: {
+              kind: 'list' as const,
+              body: SPEAK_WITH_LIDOR_BODY,
+              buttonLabel: SLOT_OFFER_BUTTON,
+              rows: slotListRows(slots, timeZone),
+            },
+            body: SPEAK_WITH_LIDOR_BODY,
+            toStage: 'appointment_proposed' as const,
+            action: 'offer_call_with_lidor',
+          }
+        : {
+            part: { kind: 'text' as const, text: NO_SLOTS_MESSAGE },
+            body: NO_SLOTS_MESSAGE,
+            toStage: 'handed_off' as const,
+            action: 'handoff_to_human',
+          };
+    const { providerMessageId } = await send({
+      to: ctx.contactPhone,
+      conversation: ctx,
+      part,
+    });
+    await persist({ ...base, toStage, action, outbound: [{ body, providerMessageId }] });
+    return { stage: toStage, action, text: body, sent: true };
   };
 
   /**
@@ -883,17 +1058,16 @@ export function createConversationWorkflow(
         };
       }
 
-      // A request to delete their data is honoured before anything else — even
-      // from someone who has opted out and can no longer be answered (NN-8).
+      // A request to delete their data (NN-8) is carried out before anything
+      // else — even for someone who opted out and can no longer be answered.
       if (isDeletionRequest(ctx.currentText)) {
         return eraseOnRequest(ctx, conversationId);
       }
 
-      // A contact who already opted out is left in silence — no reply is
-      // generated and nothing is sent. The acknowledgement of the opt-out itself
-      // went out on the turn that recorded it, before this became true.
+      // A contact who opted out gets no ordinary reply — only the question
+      // whether they want our messages again (NN-1), with no model call.
       if (ctx.optedOut) {
-        return { stage: ctx.stage, action: 'skipped_opted_out', text: '', sent: false };
+        return reconsent(ctx, conversationId);
       }
 
       // Deterministic guard rails run before any model call: abuse, rate/quota
@@ -914,6 +1088,17 @@ export function createConversationWorkflow(
       });
       if (gate.kind !== 'proceed') {
         return handleGate(gate, ctx, conversationId);
+      }
+
+      // "I want to speak with Lidor" (NN-10): his nearest times, now — before
+      // any screening, at any stage, for any lead. A stop request in the same
+      // breath is left to the opt-out handling.
+      if (
+        deps.appointments &&
+        isSpeakWithLidorRequest(ctx.currentText) &&
+        !isOptOutKeyword(ctx.currentText)
+      ) {
+        return offerCallWithLidor(ctx, conversationId, deps.appointments);
       }
 
       // Slot selection: the lead answered an offer of meeting times. Handled
@@ -2239,12 +2424,22 @@ export function createConversationWorkflow(
     /**
      * Runs one turn. A deletion request's own checkpoint holds the transcript it
      * asked to erase, and LangGraph writes it as the run ends — so the thread is
-     * deleted here, after the run, not inside it.
+     * deleted here, after the run, not inside it. A turn still queued for a
+     * conversation erased meanwhile has nothing to answer and is dropped, rather
+     * than failing and leaving a checkpoint behind.
      */
     async invoke(
       conversationId: string,
       config: Parameters<typeof graph.invoke>[1],
     ): Promise<TurnResult> {
+      if (!(await getConversationById(deps.db, conversationId))) {
+        return {
+          stage: 'closed_no_response',
+          action: 'skipped_erased',
+          text: '',
+          sent: false,
+        };
+      }
       const result = await graph.invoke(conversationId, config);
       if (result.action === 'data_deleted')
         await checkpointer.deleteThread(conversationId);

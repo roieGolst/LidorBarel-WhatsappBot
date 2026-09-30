@@ -1,44 +1,36 @@
 import { eq, inArray } from 'drizzle-orm';
 import type { Database } from '../db/client.js';
-import { recordOptOut } from '../db/repositories/optOuts.js';
-import {
-  appointmentRequests,
-  contacts,
-  conversations,
-  events,
-  outbox,
-} from '../db/schema.js';
+import { contacts, conversations, events, outbox } from '../db/schema.js';
 import { getLogger } from '../logger.js';
 import type { MondayClient } from '../monday/client.js';
-import {
-  ACTIVITY_BOARD_ID,
-  ACTIVITY_COLUMNS,
-  ACTIVITY_STATUS,
-} from '../monday/leadMapping.js';
 
 /**
- * Erasing one person — what the privacy page promises, in code (NN-8, NN-9).
+ * Erasing one person on request (NN-8).
  *
- * Two reasons call it. A **deletion request** erases everything the bot wrote
- * anywhere: the contact and, by cascade, their conversations, messages, form
- * referrals, property and appointment records; the event and outbox rows keyed
- * by those conversations; the lead item on the לידים board; and the personal
- * details on any פעילות item, which is scrubbed rather than deleted because
- * deleting one does not remove its calendar event (docs/MONDAY-MAPPING.md). The
- * one thing kept is the phone number, on the do-not-contact list, so the person
- * is never messaged again. **Retention** erases the same bot-side data once a
- * lead has been silent for the configured period, and leaves the CRM alone: the
- * board is Lidor's business record and is deleted only on request.
+ * Deletes what the bot holds about them: the contact row and, by cascade,
+ * their conversations, messages, form referrals (the consent record included)
+ * and appointment records; the event and outbox rows keyed by the contact or
+ * its conversations; and the lead item on the לידים board, which is the
+ * projection of those rows (NN-4).
  *
- * The LangGraph checkpoint thread is the caller's to delete — a turn cannot
+ * Deliberately left alone: פעילות items, because the board syncs them to
+ * Lidor's Google Calendar and an existing meeting may stay there (Lidor's
+ * decision, 2026-09-29) — changing one would change his calendar.
+ *
+ * Nothing new is kept, and the request does **not** opt the number out: a
+ * person who later messages again or submits the form again starts over. An
+ * opt-out they gave *earlier* lives in `opt_outs`, keyed by phone, and is left
+ * as it is — the one thing the bot needs to recognise and honour that refusal
+ * (Communications Law §30A(ד); §30A(י)(5)(א) leaves no defence for sending after
+ * one).
+ *
+ * The LangGraph checkpoint threads are the caller's to delete — a turn cannot
  * delete its own thread while it is still running (see conversationTurn.ts).
  */
 
-export type EraseReason = 'deletion_request' | 'retention';
-
 export interface EraseDeps {
   db: Database;
-  /** Needed for a deletion request to reach the board; absent, it is logged. */
+  /** Needed to reach the board; absent, the lead items are reported instead. */
   monday?: MondayClient | undefined;
 }
 
@@ -46,121 +38,69 @@ export interface EraseReport {
   /** The conversations that were erased — their checkpoint threads go next. */
   conversationIds: string[];
   leadItemsDeleted: number;
-  activityItemsScrubbed: number;
-  /** Board items that could not be reached and must be handled by hand. */
+  /** Lead items that could not be deleted and must be removed by hand. */
   boardFailures: string[];
 }
 
-/** What a scrubbed פעילות item is left saying. No name, no number, a reason. */
-export const SCRUBBED_ACTIVITY_NAME = 'פגישה — הליד ביקש מחיקת מידע';
-export const SCRUBBED_ACTIVITY_NOTE =
-  'הליד ביקש למחוק את המידע שלו. הפרטים הוסרו מהכרטיס; יש להסיר את האירוע מהיומן ידנית.';
-
 export async function eraseContact(
   deps: EraseDeps,
-  target: { contactId: string; phone: string },
-  reason: EraseReason,
+  contactId: string,
 ): Promise<EraseReport> {
   const logger = getLogger();
   const report: EraseReport = {
     conversationIds: [],
     leadItemsDeleted: 0,
-    activityItemsScrubbed: 0,
     boardFailures: [],
   };
 
   const rows = await deps.db
-    .select({
-      id: conversations.id,
-      mondayItemId: conversations.mondayItemId,
-      exclusivityCallbackItemId: conversations.exclusivityCallbackItemId,
-    })
+    .select({ id: conversations.id, mondayItemId: conversations.mondayItemId })
     .from(conversations)
-    .where(eq(conversations.contactId, target.contactId));
+    .where(eq(conversations.contactId, contactId));
   report.conversationIds = rows.map((row) => row.id);
 
-  const activityItemIds = new Set<string>();
+  // 1. The lead item. Best effort: a Monday outage must not stop the database
+  //    erase, and an item that could not be reached is reported by id so a
+  //    person finishes the job.
   for (const row of rows) {
-    if (row.exclusivityCallbackItemId) activityItemIds.add(row.exclusivityCallbackItemId);
-  }
-  if (rows.length > 0) {
-    const booked = await deps.db
-      .select({ itemId: appointmentRequests.mondayActivityItemId })
-      .from(appointmentRequests)
-      .where(inArray(appointmentRequests.conversationId, report.conversationIds));
-    for (const row of booked) if (row.itemId) activityItemIds.add(row.itemId);
-  }
-
-  // 1. The do-not-contact record, before anything else: if the erase below
-  //    fails halfway, the one guarantee that must hold is silence.
-  if (reason === 'deletion_request') {
-    await recordOptOut(deps.db, target.phone, 'deletion', 'data_deletion_request');
-  }
-
-  // 2. The board — only on request (retention leaves the CRM alone). Best effort
-  //    item by item: a Monday outage must not stop the database erase, and every
-  //    item that could not be reached is reported so a person finishes the job.
-  if (reason === 'deletion_request') {
-    for (const row of rows) {
-      if (!row.mondayItemId) continue;
-      if (!deps.monday) {
-        report.boardFailures.push(row.mondayItemId);
-        continue;
-      }
-      try {
-        await deps.monday.deleteItem(row.mondayItemId);
-        report.leadItemsDeleted += 1;
-      } catch (error) {
-        logger.error(
-          { error, itemId: row.mondayItemId },
-          'lead item not deleted on request',
-        );
-        report.boardFailures.push(row.mondayItemId);
-      }
+    if (!row.mondayItemId) continue;
+    if (!deps.monday) {
+      report.boardFailures.push(row.mondayItemId);
+      continue;
     }
-    for (const itemId of activityItemIds) {
-      if (!deps.monday) {
-        report.boardFailures.push(itemId);
-        continue;
-      }
-      try {
-        await deps.monday.updateItem(ACTIVITY_BOARD_ID, itemId, {
-          name: SCRUBBED_ACTIVITY_NAME,
-          [ACTIVITY_COLUMNS.description]: SCRUBBED_ACTIVITY_NOTE,
-          [ACTIVITY_COLUMNS.status]: { index: ACTIVITY_STATUS.done },
-        });
-        report.activityItemsScrubbed += 1;
-      } catch (error) {
-        logger.error({ error, itemId }, 'activity item not scrubbed on request');
-        report.boardFailures.push(itemId);
-      }
-    }
-    if (report.boardFailures.length > 0) {
-      logger.warn(
-        { itemIds: report.boardFailures },
-        'deletion request: board items to remove by hand',
+    try {
+      await deps.monday.deleteItem(row.mondayItemId);
+      report.leadItemsDeleted += 1;
+    } catch (error) {
+      logger.error(
+        { error, itemId: row.mondayItemId },
+        'lead item not deleted on request',
       );
+      report.boardFailures.push(row.mondayItemId);
     }
   }
+  if (report.boardFailures.length > 0) {
+    logger.warn(
+      { itemIds: report.boardFailures },
+      'deletion request: lead items to remove by hand',
+    );
+  }
 
-  // 3. The database, as one unit. Contacts cascade to conversations, messages,
-  //    referrals, properties, listings and appointment requests; events and
-  //    outbox rows are keyed by conversation without a foreign key, so they are
-  //    deleted explicitly.
+  // 2. The database, as one unit. Contacts cascade to conversations, messages,
+  //    referrals, listings and appointment requests; events and outbox rows
+  //    carry only an aggregate id, with no foreign key, so they are deleted
+  //    explicitly — by conversation, and by contact in case any is keyed so.
+  const aggregateIds = [contactId, ...report.conversationIds];
   await deps.db.transaction(async (tx) => {
-    if (report.conversationIds.length > 0) {
-      await tx.delete(events).where(inArray(events.aggregateId, report.conversationIds));
-      await tx.delete(outbox).where(inArray(outbox.aggregateId, report.conversationIds));
-    }
-    await tx.delete(contacts).where(eq(contacts.id, target.contactId));
+    await tx.delete(events).where(inArray(events.aggregateId, aggregateIds));
+    await tx.delete(outbox).where(inArray(outbox.aggregateId, aggregateIds));
+    await tx.delete(contacts).where(eq(contacts.id, contactId));
   });
 
   logger.info(
     {
-      reason,
       conversations: report.conversationIds.length,
       leadItemsDeleted: report.leadItemsDeleted,
-      activityItemsScrubbed: report.activityItemsScrubbed,
       boardFailures: report.boardFailures.length,
     },
     'personal data erased',

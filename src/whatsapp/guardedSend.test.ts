@@ -109,6 +109,40 @@ describe('guardedSend — replies', () => {
  * production caller, so nothing stopped a free-form send outside the window —
  * Meta would simply reject it, with an opaque error far from the cause.
  */
+describe('guardedSend — the narrow reply to an opted-out number', () => {
+  it('lets the re-consent question or a deletion acknowledgement through', async () => {
+    await recordOptOut(db, PHONE, 'keyword');
+    const channel = new FakeChannel();
+
+    await guardedSend(db, { kind: 'optedOutReply', to: PHONE, conversation: OPEN }, () =>
+      channel.sendText(PHONE, 'בקשתך התקבלה ותטופל בהקדם.'),
+    );
+
+    expect(channel.sent).toHaveLength(1);
+  });
+
+  it('still needs the window the person opened', async () => {
+    await recordOptOut(db, PHONE, 'keyword');
+    const channel = new FakeChannel();
+
+    await expect(
+      guardedSend(db, { kind: 'optedOutReply', to: PHONE, conversation: CLOSED }, () =>
+        channel.sendText(PHONE, 'x'),
+      ),
+    ).rejects.toBeInstanceOf(WindowClosedError);
+    expect(channel.sent).toHaveLength(0);
+  });
+
+  it('leaves an ordinary reply to that number refused', async () => {
+    await recordOptOut(db, PHONE, 'keyword');
+    await expect(
+      guardedSend(db, { kind: 'reply', to: PHONE, conversation: OPEN }, () =>
+        new FakeChannel().sendText(PHONE, 'x'),
+      ),
+    ).rejects.toBeInstanceOf(OptedOutError);
+  });
+});
+
 describe('guardedSend — messaging window', () => {
   it('refuses free-form text after the window closes', async () => {
     const channel = new FakeChannel();

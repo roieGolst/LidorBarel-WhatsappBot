@@ -14,18 +14,23 @@ import { isOptedOut, recordOptOut } from '../db/repositories/optOuts.js';
 import { contacts, conversations, messages } from '../db/schema.js';
 import { setupTestDatabase, testDatabaseUrl, truncateAll } from '../db/testing.js';
 import { FakeLlmClient } from '../llm/fake.js';
-import type { MondayClient } from '../monday/client.js';
 import { FakeChannel } from '../whatsapp/fakeChannel.js';
 import { createCheckpointer } from './checkpointer.js';
 import { createConversationWorkflow, type ConversationDeps } from './conversationTurn.js';
 import type { KnownFacts } from './decide.js';
-import { DELETION_ACK_MESSAGE, HANDOFF_TO_HUMAN_MESSAGE } from './interactive.js';
+import type { MondayClient } from '../monday/client.js';
+import {
+  DELETION_ACK_MESSAGE,
+  MAIN_MENU,
+  RECONSENT_DECLINED_MESSAGE,
+  RECONSENT_QUESTION,
+} from './interactive.js';
 
 /**
- * The two promises on /privacy that are answered in the conversation itself:
- * "write 'מחקו את המידע שלי' and it is erased at once" (NN-8) and "you can ask
- * for a person at any time" (NN-10). Both must work without a model — the fake
- * has nothing queued, so a model call would fail the test loudly.
+ * The deletion request /privacy tells people to send (NN-8). It must work
+ * without a model — the fake has nothing queued, so a model call would fail the
+ * test loudly — erase the person everywhere, and block nothing: the person may
+ * come back.
  */
 
 let db: Database;
@@ -46,13 +51,11 @@ beforeEach(async () => {
 
 class FakeMonday {
   deleted: string[] = [];
-  updated: string[] = [];
   deleteItem(itemId: string) {
     this.deleted.push(itemId);
     return Promise.resolve();
   }
-  updateItem(_board: string, itemId: string) {
-    this.updated.push(itemId);
+  updateItem() {
     return Promise.resolve();
   }
 }
@@ -64,6 +67,8 @@ async function seed(options: {
   inbound: string;
   known?: KnownFacts;
   mondayItemId?: string;
+  /** The bot's last message before the inbound. */
+  lastBotMessage?: string;
 }): Promise<{ conversationId: string; contactId: string }> {
   const contact = await upsertContactByPhone(db, {
     phone: PHONE,
@@ -83,7 +88,7 @@ async function seed(options: {
   await db.insert(messages).values({
     conversationId: conversation.id,
     direction: 'outbound',
-    body: 'באיזו שכונה נמצא הנכס?',
+    body: options.lastBotMessage ?? 'באיזו שכונה נמצא הנכס?',
     providerMessageId: `prior-${conversation.id}`,
     createdAt: new Date(Date.now() - 1000),
   });
@@ -104,7 +109,7 @@ function run(deps: ConversationDeps, conversationId: string) {
 }
 
 describe('a deletion request (NN-8)', () => {
-  it('acknowledges, erases everything, deletes the lead item, drops the thread, keeps the number', async () => {
+  it('acknowledges, erases everything, deletes the lead item and the thread, blocks nothing', async () => {
     const { conversationId } = await seed({
       stage: 'screening_neighborhood',
       inbound: 'מחקו את המידע שלי',
@@ -124,8 +129,7 @@ describe('a deletion request (NN-8)', () => {
       conversationId,
     );
 
-    expect(result.action).toBe('data_deleted');
-    expect(result.sent).toBe(true);
+    expect(result).toMatchObject({ action: 'data_deleted', sent: true });
     expect(channel.sent).toEqual([
       expect.objectContaining({ kind: 'text', text: DELETION_ACK_MESSAGE }),
     ]);
@@ -138,13 +142,39 @@ describe('a deletion request (NN-8)', () => {
     expect(
       await checkpointer.getTuple({ configurable: { thread_id: conversationId } }),
     ).toBeUndefined();
-    // The one thing kept.
-    expect(await isOptedOut(db, PHONE)).toBe(true);
+    // Nothing is kept, so nothing is blocked.
+    expect(await isOptedOut(db, PHONE)).toBe(false);
   });
 
-  it('works for a contact who already opted out — in silence', async () => {
+  it('lets the person come back: a new form submission starts over, eligible for outreach', async () => {
     const { conversationId } = await seed({
       stage: 'engaged',
+      inbound: 'delete my data',
+    });
+    await run(
+      { db, llm: new FakeLlmClient([]), channel: new FakeChannel() },
+      conversationId,
+    );
+
+    const again = await upsertContactByPhone(db, {
+      phone: PHONE,
+      name: 'רועי גולסט',
+      entryPoint: 'meta_lead_form',
+      consentStatus: 'whatsapp_opt_in',
+    });
+    const { conversation } = await findOrCreateConversation(db, again.id);
+
+    expect(again).toMatchObject({
+      consentStatus: 'whatsapp_opt_in',
+      doNotContact: false,
+    });
+    expect(conversation.id).not.toBe(conversationId);
+    expect(await isOptedOut(db, PHONE)).toBe(false);
+  });
+
+  it('erases a contact who already opted out, acknowledges, and their opt-out stays', async () => {
+    const { conversationId } = await seed({
+      stage: 'opted_out',
       inbound: 'delete my data',
     });
     await recordOptOut(db, PHONE, 'keyword');
@@ -152,67 +182,149 @@ describe('a deletion request (NN-8)', () => {
 
     const result = await run({ db, llm: new FakeLlmClient([]), channel }, conversationId);
 
-    expect(result.action).toBe('data_deleted');
-    expect(result.sent).toBe(false);
-    expect(channel.sent).toEqual([]);
+    expect(result).toMatchObject({ action: 'data_deleted', sent: true });
+    expect(channel.sent).toEqual([
+      expect.objectContaining({ kind: 'text', text: DELETION_ACK_MESSAGE }),
+    ]);
     expect(await db.select().from(contacts)).toEqual([]);
-  });
-});
-
-describe('asking for a person (NN-10)', () => {
-  it('ends the automated flow with the handoff, without a model', async () => {
-    const { conversationId } = await seed({
-      stage: 'screening_neighborhood',
-      inbound: 'אני רוצה לדבר עם לידור',
-      known: { sellIntent: 'ready' },
-    });
-    const channel = new FakeChannel();
-
-    const result = await run({ db, llm: new FakeLlmClient([]), channel }, conversationId);
-
-    expect(result.action).toBe('handoff_to_human');
-    expect(result.stage).toBe('handed_off');
-    expect(result.text).toBe(HANDOFF_TO_HUMAN_MESSAGE);
-    // The answers already given stay with the lead.
-    expect((await getConversationById(db, conversationId))!.extracted).toMatchObject({
-      sellIntent: 'ready',
-    });
+    expect(await isOptedOut(db, PHONE)).toBe(true);
   });
 
-  it('keeps a booked lead in their booked stage', async () => {
+  it('drops a turn still queued for the erased conversation', async () => {
     const { conversationId } = await seed({
-      stage: 'appointment_confirmed',
-      inbound: 'אפשר לדבר עם בן אדם?',
+      stage: 'engaged',
+      inbound: 'delete my data',
     });
-
-    const result = await run(
+    await run(
       { db, llm: new FakeLlmClient([]), channel: new FakeChannel() },
       conversationId,
     );
 
-    expect(result.action).toBe('handoff_to_human');
-    expect(result.stage).toBe('appointment_confirmed');
+    const channel = new FakeChannel();
+    const late = await run({ db, llm: new FakeLlmClient([]), channel }, conversationId);
+
+    expect(late).toMatchObject({ action: 'skipped_erased', sent: false });
+    expect(channel.sent).toEqual([]);
+    expect(
+      await checkpointer.getTuple({ configurable: { thread_id: conversationId } }),
+    ).toBeUndefined();
+  });
+});
+
+describe('someone who opted out writes again (NN-1)', () => {
+  const noModel = () => new FakeLlmClient([]);
+
+  it('is asked whether they want messages again — nothing resumes on its own', async () => {
+    const { conversationId } = await seed({
+      stage: 'opted_out',
+      inbound: 'היי, יש לי שאלה',
+    });
+    await recordOptOut(db, PHONE, 'keyword');
+    const channel = new FakeChannel();
+
+    const result = await run({ db, llm: noModel(), channel }, conversationId);
+
+    expect(result).toMatchObject({ action: 'reconsent_asked', stage: 'opted_out' });
+    expect(channel.sent).toEqual([
+      expect.objectContaining({ kind: 'buttons', body: RECONSENT_QUESTION.body }),
+    ]);
+    expect(await isOptedOut(db, PHONE)).toBe(true);
   });
 
-  it('an opt-out in the same breath is an opt-out', async () => {
+  it('a yes reverses the opt-out, records the consent and continues with the menu', async () => {
     const { conversationId } = await seed({
-      stage: 'engaged',
-      inbound: 'תפסיקו, אני רוצה לדבר עם בן אדם',
+      stage: 'opted_out',
+      inbound: 'כן, אפשר להמשיך',
+      lastBotMessage: RECONSENT_QUESTION.body,
     });
+    await recordOptOut(db, PHONE, 'keyword');
+    const channel = new FakeChannel();
 
-    const result = await run(
-      {
-        db,
-        llm: new FakeLlmClient([
-          '{"intent":"OPT_OUT","confidence":0.95,"extracted":{}}',
-          'קיבלתי, לא נפנה אליך יותר. תודה.',
-        ]),
-        channel: new FakeChannel(),
-      },
-      conversationId,
-    );
+    const result = await run({ db, llm: noModel(), channel }, conversationId);
 
-    expect(result.action).toBe('acknowledge_opt_out');
+    expect(result).toMatchObject({ action: 'reconsent_accepted', stage: 'engaged' });
+    expect(channel.sent).toEqual([
+      expect.objectContaining({ kind: 'list', body: MAIN_MENU.body }),
+    ]);
+    expect(await isOptedOut(db, PHONE)).toBe(false);
+    const [contact] = await db.select().from(contacts);
+    expect(contact).toMatchObject({
+      consentStatus: 'whatsapp_opt_in',
+      consentSource: 'whatsapp_reconsent',
+      // The consent recorded is the question they said yes to, word for word.
+      consentText: RECONSENT_QUESTION.body,
+      doNotContact: false,
+    });
+  });
+
+  it('a no keeps them opted out', async () => {
+    const { conversationId } = await seed({
+      stage: 'opted_out',
+      inbound: 'לא, תודה',
+      lastBotMessage: RECONSENT_QUESTION.body,
+    });
+    await recordOptOut(db, PHONE, 'keyword');
+    const channel = new FakeChannel();
+
+    const result = await run({ db, llm: noModel(), channel }, conversationId);
+
+    expect(result).toMatchObject({
+      action: 'reconsent_declined',
+      text: RECONSENT_DECLINED_MESSAGE,
+    });
     expect(await isOptedOut(db, PHONE)).toBe(true);
+  });
+
+  it('is asked once: after the question, and after a no, further messages get silence', async () => {
+    const { conversationId } = await seed({ stage: 'opted_out', inbound: 'היי' });
+    await recordOptOut(db, PHONE, 'keyword');
+    const writes = async (text: string, n: number) => {
+      await recordInboundMessage(db, {
+        conversationId,
+        providerMessageId: `in-${conversationId}-${n}`,
+        body: text,
+        createdAt: new Date(Date.now() + n * 1000),
+      });
+      await recordInboundActivity(db, conversationId, new Date());
+    };
+    const turn = async () => {
+      const channel = new FakeChannel();
+      const result = await run({ db, llm: noModel(), channel }, conversationId);
+      return { result, sent: channel.sent.length };
+    };
+
+    expect((await turn()).result.action).toBe('reconsent_asked');
+    await writes('מה זה?', 1); // not an answer: silence, not a second question
+    expect(await turn()).toMatchObject({
+      result: { action: 'skipped_opted_out' },
+      sent: 0,
+    });
+    await writes('לא, תודה', 2); // …but the question is still open to a no
+    expect((await turn()).result.action).toBe('reconsent_declined');
+    await writes('היי שוב', 3);
+    expect(await turn()).toMatchObject({
+      result: { action: 'skipped_opted_out' },
+      sent: 0,
+    });
+    expect(await isOptedOut(db, PHONE)).toBe(true);
+  });
+
+  it('a repeated stop request, or a ban, gets silence', async () => {
+    const { conversationId } = await seed({ stage: 'opted_out', inbound: 'תפסיקו' });
+    await recordOptOut(db, PHONE, 'keyword');
+    const stopChannel = new FakeChannel();
+    expect(
+      await run({ db, llm: noModel(), channel: stopChannel }, conversationId),
+    ).toMatchObject({ action: 'skipped_opted_out' });
+    expect(stopChannel.sent).toEqual([]);
+
+    await truncateAll(db);
+    const banned = await seed({ stage: 'blocked', inbound: 'היי' });
+    await recordOptOut(db, PHONE, 'classifier', 'abuse');
+    const banChannel = new FakeChannel();
+    expect(
+      await run({ db, llm: noModel(), channel: banChannel }, banned.conversationId),
+    ).toMatchObject({ action: 'skipped_opted_out' });
+    expect(banChannel.sent).toEqual([]);
   });
 });

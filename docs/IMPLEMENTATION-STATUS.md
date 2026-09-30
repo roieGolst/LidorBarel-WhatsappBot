@@ -152,19 +152,24 @@ Calendar event written by Monday's sync, lead status projected — the same
 standard every earlier phase was closed to. The e2e test proves the flow against
 a fake Monday only.
 
-#### The privacy page, made true — 2026-09-25
+#### The privacy page — 2026-09-29
 
-`/privacy` is rendered from the configuration, and every statement on it has a
-production caller and a test:
+`/privacy` (with `/data-deletion` pointing at its deletion section) is the
+Privacy Policy and Data Deletion Instructions URL Meta requires (Platform Terms
+§4.a, §3.d.i). It states only what the system does, and carries only the
+obligations the platforms impose plus Lidor's decisions of 2026-09-29 —
+automatic deletion that blocks nothing. No retention period and no deletion
+deadline are stated; what is still open is E-16.
 
-| Promise | Implementation | Test |
-|---|---|---|
-| Deletion on request, executed at once, even for an opted-out contact (NN-8) | `workflow/dataRequests.ts` · `privacy/erase.ts` · `conversationTurn.ts` (`eraseOnRequest`, thread deleted after the run) | `dataRequests.test.ts` · `erase.test.ts` · `privacyRequests.test.ts` |
-| Conversation data purged after `DATA_RETENTION_MONTHS` (NN-9); CRM untouched | `privacy/retentionSweeper.ts`, started in `main.ts` | `retentionSweeper.test.ts` |
-| A person on request, at any stage (NN-10) | `workflow/gate.ts` (4b) · `dataRequests.ts` | `dataRequests.test.ts` · `privacyRequests.test.ts` |
-| ≤ 5 follow-ups over ≤ 5 days | `config.ts` clamps `FOLLOWUP_MAX_*` to five; the page prints the effective value | `config.test.ts` · `privacyPage.test.ts` |
-| The three opt-out phrases printed | `workflow/optOutKeywords.ts` | `optOutKeywords.test.ts` |
-| Transcripts and numbers never in logs | `logger.ts` redaction | `logger.test.ts` |
+| Statement | Source of the obligation | Implementation | Test |
+|---|---|---|---|
+| Controller, data collected, purposes, processors | Meta Platform Terms §4.b; Privacy Protection Law §11 | `public/privacy.html` | `routes.test.ts` |
+| Proactive messages only to those who ticked the consent box | NN-2 | consent gate | existing |
+| Opt-out phrases on the page opt out | WhatsApp Business Policy (opt-outs) · NN-1 | `workflow/optOutKeywords.ts` | `optOutKeywords.test.ts` |
+| "מחקו את המידע שלי" gets a neutral acknowledgement and the person is erased from the bot and the לידים board; nothing kept, nothing blocked; an earlier opt-out survives (NN-8) | Meta Platform Terms §3.d.i, §4.b · Lidor's decision | `workflow/dataRequests.ts` · `privacy/erase.ts` · `conversationTurn.ts` | `dataRequests.test.ts` · `erase.test.ts` · `privacyRequests.test.ts` |
+| An opted-out person who writes again is asked once, with wording that names the messages, before anything resumes (NN-1) | Communications Law §30A(ד) · WhatsApp Business Policy (opt-outs) · Lidor's decision | `conversationTurn.ts` (`reconsent`) · `guardedSend.ts` (`optedOutReply`) | `privacyRequests.test.ts` · `guardedSend.test.ts` |
+| "I want to speak with Lidor" offers his earliest times at once, any stage, any lead (NN-10) | WhatsApp Business Policy (escalation paths) · Lidor's decision | `dataRequests.ts` · `conversationTurn.ts` (`offerCallWithLidor`) | `dataRequests.test.ts` · `stageMatrix.test.ts` |
+| Access and correction on request | Privacy Protection Law §13–14 | a person | — |
 
 #### Discovery after screening — 2026-09-23
 
@@ -527,7 +532,8 @@ onward, so start them early.
 
 | # | Item | Gates |
 |---|---|---|
-| E-1 | Meta Business verification. **Prerequisites in place:** the Privacy Policy and Data Deletion URLs Meta asks for are served at `/privacy` and `/data-deletion` (GO-LIVE §5a), filled with the business details and made true in code. | Template sending |
+| E-1 | Meta Business verification. **Prerequisites in place:** the Privacy Policy and Data Deletion URLs Meta asks for are served at `/privacy` and `/data-deletion` (GO-LIVE §5a), with the business details. | Template sending |
+| E-16 | **Privacy — still open.** (a) **Escalation, assessed 2026-09-30.** WhatsApp Business Policy: automation "must also have available prompt, clear, and direct escalation paths" — the policy lists examples (in-chat transfer, phone, e-mail, web support, support forms), not one required form. The path now built (NN-10): an explicit request gets Lidor's earliest times at once, at any stage, for any lead, and a tap books a call that lands in his calendar. Our reading: prompt and direct for anyone who asks in words the bot recognises; not proven "clear" — it is not offered in the menu (whose "קביעת פגישה" still runs the screening first), and it is advertised only on `/privacy`. Remaining gaps: phrasings the detector misses fall to the classifier's booking intent (screening first); it needs the Monday booking dependency configured; with no free time soon, the request reaches Lidor only as `ממתין לשיחה` on his board, with no notification. Meta has not reviewed this design. (b) **Retention** — an operational decision is still needed (NN-9); none is stated on `/privacy`. (c) **Lawyer:** whether §17ו applies (if so, a written deletion notice within 30 days is required — the acknowledgement does not replace it); whether the re-consent reply is sound under §30A. | Going Live |
 | E-2 | ✅ Done — the seller form has a required consent checkbox | — |
 | E-9 | **Consent wording scope.** The checkbox says *הודעת אישור* (a confirmation message); the bot runs a qualification conversation plus five days of follow-ups. Under Amendment 40 those are commercial messages. Worth a privacy review, and worth broadening on the next form. | Volume send |
 | E-3 | Decision on leads already collected under the old form (re-consent or treat as inbound-only) | Phase 3 |

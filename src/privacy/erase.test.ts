@@ -4,22 +4,21 @@ import type { Database } from '../db/client.js';
 import { upsertContactByPhone } from '../db/repositories/contacts.js';
 import { findOrCreateConversation } from '../db/repositories/conversations.js';
 import { recordInboundMessage } from '../db/repositories/messages.js';
-import { isOptedOut } from '../db/repositories/optOuts.js';
+import { isOptedOut, recordOptOut } from '../db/repositories/optOuts.js';
 import {
   appointmentRequests,
+  optOuts,
   campaignReferrals,
   contacts,
   conversations,
   events,
   messages,
-  optOuts,
   outbox,
 } from '../db/schema.js';
 import { setupTestDatabase, truncateAll } from '../db/testing.js';
 import type { MondayClient } from '../monday/client.js';
-import { ACTIVITY_COLUMNS } from '../monday/leadMapping.js';
 import { enqueueOutboxEvent } from '../outbox/outbox.js';
-import { eraseContact, SCRUBBED_ACTIVITY_NAME } from './erase.js';
+import { eraseContact } from './erase.js';
 
 let db: Database;
 
@@ -95,6 +94,7 @@ async function seedPerson(phone: string) {
 }
 
 const rowCount = async (): Promise<Record<string, number>> => ({
+  optOuts: (await db.select().from(optOuts)).length,
   contacts: (await db.select().from(contacts)).length,
   conversations: (await db.select().from(conversations)).length,
   messages: (await db.select().from(messages)).length,
@@ -105,7 +105,7 @@ const rowCount = async (): Promise<Record<string, number>> => ({
 });
 
 describe('eraseContact — a deletion request (NN-8)', () => {
-  it('erases every record, deletes the lead item, scrubs activity items, keeps only the number', async () => {
+  it('erases every record and the lead item, leaves meeting items alone, keeps nothing', async () => {
     const { contactId, conversationId } = await seedPerson('+972501234567');
     // A second person is untouched.
     await seedPerson('+972507654321');
@@ -113,21 +113,18 @@ describe('eraseContact — a deletion request (NN-8)', () => {
 
     const report = await eraseContact(
       { db, monday: monday as unknown as MondayClient },
-      { contactId, phone: '+972501234567' },
-      'deletion_request',
+      contactId,
     );
 
     expect(report.conversationIds).toEqual([conversationId]);
     expect(report.leadItemsDeleted).toBe(1);
-    expect(report.activityItemsScrubbed).toBe(2); // the booking and the callback
     expect(report.boardFailures).toEqual([]);
     expect(monday.deleted).toEqual(['lead-1']);
-    for (const update of monday.updated) {
-      expect(update.values['name']).toBe(SCRUBBED_ACTIVITY_NAME);
-      expect(String(update.values[ACTIVITY_COLUMNS.description])).not.toContain('רועי');
-    }
-    // Only the other person remains, everywhere.
+    // Meeting items sync to Lidor's calendar and are not touched.
+    expect(monday.updated).toEqual([]);
+    // Only the other person remains, everywhere — the consent record included.
     expect(await rowCount()).toEqual({
+      optOuts: 0,
       contacts: 1,
       conversations: 1,
       messages: 1,
@@ -136,13 +133,19 @@ describe('eraseContact — a deletion request (NN-8)', () => {
       events: 1,
       outbox: 1,
     });
-    // The one thing kept: the number, on the do-not-contact list.
+    // Nothing is kept, so the number is not blocked: they may come back.
+    expect(await isOptedOut(db, '+972501234567')).toBe(false);
+  });
+
+  it('leaves an opt-out the person gave earlier in force', async () => {
+    const { contactId } = await seedPerson('+972501234567');
+    await recordOptOut(db, '+972501234567', 'keyword');
+
+    await eraseContact({ db }, contactId);
+
+    expect((await rowCount()).contacts).toBe(0);
+    // The refusal is the one thing kept: phone, reason, source, time.
     expect(await isOptedOut(db, '+972501234567')).toBe(true);
-    const [row] = await db
-      .select()
-      .from(optOuts)
-      .where(eq(optOuts.phone, '+972501234567'));
-    expect(row?.source).toBe('deletion');
   });
 
   it('still erases the database when the board cannot be reached, and reports the items', async () => {
@@ -152,44 +155,19 @@ describe('eraseContact — a deletion request (NN-8)', () => {
 
     const report = await eraseContact(
       { db, monday: monday as unknown as MondayClient },
-      { contactId, phone: '+972501234567' },
-      'deletion_request',
+      contactId,
     );
 
     expect(report.boardFailures).toEqual(['lead-1']);
     expect((await rowCount()).contacts).toBe(0);
-    expect(await isOptedOut(db, '+972501234567')).toBe(true);
   });
 
-  it('without a board client, reports every item for a person to remove', async () => {
+  it('without a board client, reports the lead item for a person to remove', async () => {
     const { contactId } = await seedPerson('+972501234567');
 
-    const report = await eraseContact(
-      { db },
-      { contactId, phone: '+972501234567' },
-      'deletion_request',
-    );
+    const report = await eraseContact({ db }, contactId);
 
-    expect(report.boardFailures.sort()).toEqual(['activity-1', 'callback-1', 'lead-1']);
+    expect(report.boardFailures).toEqual(['lead-1']);
     expect((await rowCount()).contacts).toBe(0);
-  });
-});
-
-describe('eraseContact — retention (NN-9)', () => {
-  it('erases the bot-side data only: no board writes, no do-not-contact record', async () => {
-    const { contactId } = await seedPerson('+972501234567');
-    const monday = new FakeMonday();
-
-    const report = await eraseContact(
-      { db, monday: monday as unknown as MondayClient },
-      { contactId, phone: '+972501234567' },
-      'retention',
-    );
-
-    expect(monday.deleted).toEqual([]);
-    expect(monday.updated).toEqual([]);
-    expect(report.leadItemsDeleted).toBe(0);
-    expect((await rowCount()).contacts).toBe(0);
-    expect(await isOptedOut(db, '+972501234567')).toBe(false);
   });
 });

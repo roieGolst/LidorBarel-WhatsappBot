@@ -120,6 +120,19 @@ export type SendRequest =
       isTemplate?: boolean;
     }
   | {
+      /**
+       * The only thing that may reach a number that opted out: a reply to that
+       * person's own message which asks whether they want our messages again,
+       * acknowledges their answer, or acknowledges a deletion request. Never
+       * marketing, never business-initiated — they wrote first, and the open
+       * window is still required.
+       */
+      kind: 'optedOutReply';
+      to: string;
+      conversation: WindowState;
+      isTemplate?: undefined;
+    }
+  | {
       /** Business-initiated. Requires consent, and a template unless a window is open. */
       kind: 'proactive';
       to: string;
@@ -149,8 +162,9 @@ export async function guardedSend(
   send: () => Promise<OutboundResult>,
 ): Promise<OutboundResult> {
   // Consulted from the durable `opt_outs` record rather than a cached flag, and
-  // checked first: an opt-out overrides every other consideration.
-  if (await isOptedOut(db, request.to)) {
+  // checked first: an opt-out overrides every other consideration — except the
+  // one narrow reply `optedOutReply` names.
+  if (request.kind !== 'optedOutReply' && (await isOptedOut(db, request.to))) {
     throw new OptedOutError(request.to);
   }
 

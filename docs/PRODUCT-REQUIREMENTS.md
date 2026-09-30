@@ -102,7 +102,16 @@ explicit decision recorded in this file.
 
 - **NN-1 — No message after opt-out.** No automated message of any kind may be
   sent to a contact who has opted out. Enforced at a single choke point, not by
-  convention. Irreversible without an explicit, recorded re-opt-in.
+  convention. Irreversible without an explicit, recorded re-opt-in. **One
+  exception (Lidor, 2026-09-29/30):** the bot never writes first to ask, but when
+  the person writes to us again, the reply to their own message may ask — once
+  since the opt-out — whether they agree to receive our messages again, acknowledge
+  their answer, or acknowledge a deletion request (`optedOutReply` in
+  `guardedSend`). The question names the messages agreed to (WhatsApp messages
+  from Lidor Barel about selling their property: the conversation, arranging a
+  call, reminders when it stalls); only an explicit yes reverses the opt-out, and
+  that exact wording is stored as the consent text (`reverseOptOut`,
+  `whatsapp_reconsent`). Writing to us is not consent.
 - **NN-2 — Consent gates every proactive send.** A business-initiated message may
   only be sent to a contact whose consent status is `whatsapp_opt_in`. A
   privacy-policy-only checkbox is **not** sufficient. This must be **enforced in
@@ -115,19 +124,36 @@ explicit decision recorded in this file.
   by application code, so a hallucinated transition is structurally impossible.
 - **NN-6 — Personal data stays out of logs.** Transcripts and phone numbers are
   never logged.
-- **NN-8 — A deletion request is honoured on the spot.** A person who asks for
-  their data to be deleted (in words the bot recognises without a model, e.g.
-  "מחקו את המידע שלי") is acknowledged, and everything the bot wrote about them is
-  erased: their records in Postgres, their conversation checkpoints, their lead
-  item in Monday, and the personal details on any activity item. Only the phone
-  number is kept, on the do-not-contact list, so they are never messaged again.
-  Works even for a contact who has already opted out.
-- **NN-9 — Data is not kept forever.** A lead's conversation data is purged
-  `DATA_RETENTION_MONTHS` (default 24) after their last contact. The CRM record
-  is Lidor's business record and is deleted only on request (NN-8).
-- **NN-10 — A person can always reach a person.** Asking to talk to Lidor or to a
-  human, in words the bot recognises without a model, ends the automated flow
-  with the handoff message; a booked lead keeps their meeting.
+- **NN-8 — A deletion request is carried out automatically.** Meta's Platform
+  Terms §3.d.i oblige an easily accessible way to request deletion, and deletion
+  of the data obtained through Meta "as soon as reasonably possible" once asked;
+  §4.b requires the privacy policy to say how to ask. A person who writes that
+  they want their data deleted (in words recognised without a model, e.g.
+  "מחקו את המידע שלי") gets a neutral acknowledgement ("בקשתך התקבלה ותטופל
+  בהקדם.") and is erased from the bot: their contact row with everything that
+  cascades from it (conversations, messages, the form referral and its consent
+  record, appointment records), the event and outbox rows, the conversation
+  checkpoints, and the לידים item that projects them. **What remains:** פעילות
+  items and their calendar events (name, phone, meeting and property details) —
+  Lidor, 2026-09-29; and, only for someone who had opted out before, their
+  `opt_outs` row (phone, reason, source, time), so the refusal keeps being honoured
+  (Lidor, 2026-09-30). Nothing else is kept and nothing is blocked. **Open legal
+  question:** whether Privacy Protection Law §17ו (direct mailing) applies. If it
+  does, §17ו(ד) requires a written notice that the deletion was carried out, within
+  30 days (§17ו(ה)), and the "request received" acknowledgement does not replace
+  it. No deletion deadline is promised.
+- **NN-9 — Data retention needs a decision.** No retention period has been
+  decided, and none is stated. Lead data is not meant to be kept indefinitely:
+  Meta §3.d.i requires deleting Platform Data once no longer needed for a
+  legitimate business purpose. An operational retention decision is still needed
+  (IMPLEMENTATION-STATUS E-16).
+- **NN-10 — A person can ask for Lidor.** An explicit request to speak with Lidor
+  or a person (recognised without a model) is answered at once, at any stage and
+  for any lead, with Lidor's earliest free times for a short call; a chosen time
+  is booked like any consultation (a פעילות item, synced to his calendar). With no
+  free time soon, the lead is handed off (`ממתין לשיחה` on the לידים board). The
+  path to escalation that WhatsApp's Business Policy requires alongside
+  automation; see E-16 for the assessment.
 - **NN-7 — Monday's native Lead Ads integration stays disabled.** Otherwise every
   form submission creates duplicate items.
 

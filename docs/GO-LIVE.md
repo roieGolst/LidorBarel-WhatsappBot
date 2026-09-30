@@ -175,18 +175,16 @@ itself, so they are up whenever the webhook is:
 | Privacy Policy URL | `https://<DOMAIN>/privacy` |
 | Data Deletion Instructions URL | `https://<DOMAIN>/data-deletion` (→ the deletion section of the same page) |
 
-The page is `public/privacy.html`, rendered with the values the code enforces
-(`src/site/privacyPage.ts`): the follow-up caps, `DATA_RETENTION_MONTHS`, and
-`PRIVACY_CONTACT_EMAIL` when set (without it the page offers WhatsApp only). The
-business details on it come from the עוסק מורשה certificate. Every promise on it
-is implemented and tested — NN-8 (deletion on request), NN-9 (retention), NN-10
-(a person on request), NN-1/NN-6 (opt-out words, log redaction) — so **changing a
-rule means changing the code, not the page**. Two statements are operational and
-yours to keep true: backups live in Israel (`BACKUP_AWS_REGION=il-central-1`) with
-the 90-day lifecycle rule from step 2, and a calendar event of a person who asked
-for deletion is removed by hand within 30 days (the scrubbed פעילות item says so).
-Have a lawyer read the page once: it was drafted from what the system does, not
-by a lawyer.
+The page is `public/privacy.html`, static. It describes what the system does and
+carries only the obligations Meta and WhatsApp impose; the business details come
+from the עוסק מורשה certificate. If the behaviour changes, change the page. The
+decisions still open (IMPLEMENTATION-STATUS E-16) are deliberately not on it. Have
+a lawyer read it once: it was drafted from the system, not by a lawyer.
+
+**Deletion requests are carried out by the bot** (NN-8): the person is erased
+from Postgres, the checkpoints and the לידים board. פעילות items and calendar
+events are left as they are. A lead item the API could not reach is logged as
+`deletion request: lead items to remove by hand`, with its id.
 
 ## 6. Switch outreach on
 

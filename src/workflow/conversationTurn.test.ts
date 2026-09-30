@@ -15,7 +15,7 @@ import {
 } from '../db/repositories/conversations.js';
 import { recentMessages, recordInboundMessage } from '../db/repositories/messages.js';
 import { upsertMediaAsset } from '../db/repositories/mediaAssets.js';
-import { recordOptOut } from '../db/repositories/optOuts.js';
+import { isOptedOut, recordOptOut } from '../db/repositories/optOuts.js';
 import { conversations, messages, optOuts } from '../db/schema.js';
 import { setupTestDatabase, truncateAll } from '../db/testing.js';
 import { FakeLlmClient } from '../llm/fake.js';
@@ -37,6 +37,7 @@ import {
   RESTART_CONFIRM_MESSAGE,
   UNSUPPORTED_MEDIA_MESSAGE,
   WELCOME_MESSAGE,
+  RECONSENT_QUESTION,
 } from './interactive.js';
 import { persistTurn, type PersistTurnInput } from './persist.js';
 import { testDatabaseUrl } from '../db/testing.js';
@@ -1033,7 +1034,7 @@ describe('conversationTurn', () => {
     expect(contact?.consentStatus).toBe('opted_out');
   });
 
-  it('leaves an already opted-out contact in silence', async () => {
+  it('answers an already opted-out contact only with the re-consent question', async () => {
     const llm = new FakeLlmClient([]); // must never be called
     const channel = new FakeChannel();
     const { conversationId, phone } = await seed({ inbound: 'עוד הודעה' });
@@ -1046,15 +1047,13 @@ describe('conversationTurn', () => {
       config(conversationId),
     );
 
-    expect(result.sent).toBe(false);
-    expect(result.action).toBe('skipped_opted_out');
+    expect(result.action).toBe('reconsent_asked');
     expect(llm.requests).toHaveLength(0); // no classification, no cost
-    expect(channel.sent).toHaveLength(0);
-
-    const outbound = (await recentMessages(db, conversationId)).filter(
-      (m) => m.direction === 'outbound',
-    );
-    expect(outbound).toHaveLength(0);
+    expect(channel.sent).toEqual([
+      expect.objectContaining({ kind: 'buttons', body: RECONSENT_QUESTION.body }),
+    ]);
+    // Still opted out: writing to us is not consent (NN-1).
+    expect(await isOptedOut(db, phone)).toBe(true);
   });
 
   it('sends the regenerated reply, never the one that failed validation', async () => {

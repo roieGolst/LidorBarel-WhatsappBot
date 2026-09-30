@@ -14,12 +14,7 @@ export type OptOutSource =
   /** A person marked it in the admin panel. */
   | 'staff'
   /** Meta reported the user blocked the business. */
-  | 'provider'
-  /**
-   * The person asked for their data to be deleted. Everything else about them
-   * is gone; the number stays here only so they are never messaged again.
-   */
-  | 'deletion';
+  | 'provider';
 
 /**
  * Records an opt-out.
@@ -78,12 +73,26 @@ export async function isOptedOut(db: DbClient, phone: string): Promise<boolean> 
   return found !== undefined;
 }
 
+/** The opt-out on record for this number, if any — its reason tells a ban apart. */
+export async function findOptOut(
+  db: DbClient,
+  phone: string,
+): Promise<OptOut | undefined> {
+  const [found] = await db
+    .select()
+    .from(optOuts)
+    .where(eq(optOuts.phone, normalizePhone(phone)))
+    .limit(1);
+  return found;
+}
+
 /**
  * Reverses an opt-out after explicit re-consent.
  *
- * Separate and deliberately explicit: nothing in the normal message flow calls
- * this. Consent is set to `whatsapp_opt_in` only because re-opting-in requires
- * the person to have actively agreed again.
+ * Called only when the person, having written to us again, answers "yes" to
+ * the question whether they want our messages again (conversationTurn,
+ * `reconsent`). Consent is set to `whatsapp_opt_in` only because re-opting-in
+ * requires the person to have actively agreed again.
  */
 export async function reverseOptOut(
   db: DbClient,

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { isDeletionRequest, isHumanRequest } from './dataRequests.js';
+import { isDeletionRequest, isSpeakWithLidorRequest } from './dataRequests.js';
 
 describe('isDeletionRequest', () => {
   it('recognises the phrase the privacy page tells people to send, and its variants', () => {
@@ -8,17 +8,21 @@ describe('isDeletionRequest', () => {
       'תמחק את הפרטים שלי בבקשה',
       'אני רוצה למחוק את הנתונים שלי',
       'מחקו את כל המידע האישי שלי',
-      'בקשת מחיקה',
-      'למחוק אותי מהמערכת',
+      'אבקש שתמחקו את המידע שלי.',
+      'בקשה: מחיקת הנתונים שלי',
+      'תמחקו אותי מהמערכת',
       'Delete my data',
-      'please erase my information',
+      'please erase my personal information',
     ]) {
       expect(isDeletionRequest(text), text).toBe(true);
     }
   });
 
-  it('is not triggered by ordinary talk about deleting or details', () => {
+  it('is not triggered by a seller correcting what they sent or talking about a listing', () => {
     for (const text of [
+      'טעיתי, תמחק את המידע ששלחתי קודם, הכתובת היא הרצל 5',
+      'איך מוחקים? למחוק את הפרטים של הנכס הישן',
+      'מחיקת הנתונים הישנים מהמודעה ביד2',
       'מחק את ההודעה הקודמת',
       'הפרטים שלי: 4 חדרים, קומה 2',
       'אפשר לשנות את הפרטים?',
@@ -30,23 +34,33 @@ describe('isDeletionRequest', () => {
   });
 });
 
-describe('isHumanRequest', () => {
-  it('recognises asking for a person', () => {
+describe('isSpeakWithLidorRequest', () => {
+  it('recognises an explicit request to speak with Lidor or a person', () => {
     for (const text of [
+      'אני רוצה לדבר עם לידור',
       'אפשר לדבר עם לידור?',
-      'אני רוצה לדבר עם נציג',
-      'לדבר עם בן אדם',
+      'מתי אפשר לדבר עם לידור על המחיר?',
+      'אני רוצה לדבר עם בן אדם',
+      'אפשר לדבר עם נציג?',
       'תעביר אותי ללידור',
-      'יש נציג אנושי?',
       'I want to talk to a human',
+      'can I speak with Lidor',
     ]) {
-      expect(isHumanRequest(text), text).toBe(true);
+      expect(isSpeakWithLidorRequest(text), text).toBe(true);
     }
   });
 
-  it('is not triggered by mentioning Lidor or a meeting', () => {
-    for (const text of ['מתי לידור יתקשר?', 'קביעת פגישה', 'לידור נשמע מקצועי', 'כן']) {
-      expect(isHumanRequest(text), text).toBe(false);
+  it('is not triggered by mentioning Lidor, someone else, or a negation', () => {
+    for (const text of [
+      'לפני שאני מחליט אני צריך לדבר עם מישהו במשפחה',
+      'לידור נשמע מקצועי',
+      'מתי לידור יתקשר?',
+      'אני לא צריך לדבר עם לידור, רק שאלה',
+      'אין צורך לדבר עם נציג',
+      'קביעת פגישה',
+      'כן',
+    ]) {
+      expect(isSpeakWithLidorRequest(text), text).toBe(false);
     }
   });
 });
